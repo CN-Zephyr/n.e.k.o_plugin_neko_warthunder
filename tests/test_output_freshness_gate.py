@@ -25,7 +25,7 @@ def test_output_freshness_gate_passes_required_contracts():
     ]
     real_push = result["cases"][0]
     assert real_push["event_age_seconds"] == 3.0
-    assert real_push["event_expires_at"] == 105.0
+    assert real_push["event_expires_at"] == 101.0
     assert real_push["target_lanlan"] == "Lanlan"
     assert real_push["reply_contract"] == "short_tts_line"
     assert real_push["replace_pending"] is True

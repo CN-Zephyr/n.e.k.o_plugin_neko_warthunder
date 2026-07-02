@@ -28,6 +28,24 @@ V2_LIVE_EVIDENCE_GATED_EVENTS = frozenset({"enemy_on_six", "tailing_risk", "grou
 FREE_TEXT_DRY_RUN_ONLY_EVENTS = frozenset({"free_text_activity"})
 BACKPRESSURE_BYPASS_EVENTS = frozenset({"you_died"})
 URGENT_REPLACE_EVENTS = frozenset({"you_died", "stall_risk", "low_alt_danger", "overspeed"})
+EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
+    # These cues are useful only while the condition is still tactically fresh.
+    "spawn": 3.0,
+    "enemy_nearby": 3.0,
+    "air_threat_nearby": 3.0,
+    "enemy_on_six": 3.0,
+    "tailing_risk": 3.0,
+    "ground_target_nearby": 4.0,
+    "low_alt_danger": 4.0,
+    "overspeed": 4.0,
+    "stall_risk": 5.0,
+    "overheat": 6.0,
+    # Kill/death/battle-end can tolerate a little more host latency, but still
+    # should not be replayed as old news.
+    "you_killed": 6.0,
+    "you_died": 8.0,
+    "battle_end": 8.0,
+}
 COPILOT_ROLE_BOUNDARY = (
     "Role boundary: speak like a fighter back-seater/WSO. Give sensor, target, "
     "navigation, threat, and checklist cues. Keep the pilot in control; avoid "
@@ -69,12 +87,18 @@ def _output_backpressure_seconds(plugin: Any) -> float:
         return 20.0
 
 
-def _output_event_max_age_seconds(plugin: Any) -> float:
+def _output_event_max_age_seconds(plugin: Any, event: BattleEvent | None = None) -> float:
     cfg = getattr(plugin, "cfg", None)
     try:
-        return max(0.0, float(getattr(cfg, "output_event_max_age_seconds", 8.0)))
+        configured = max(0.0, float(getattr(cfg, "output_event_max_age_seconds", 8.0)))
     except (TypeError, ValueError):
-        return 8.0
+        configured = 8.0
+    if event is None or configured <= 0:
+        return configured
+    override = EVENT_MAX_AGE_OVERRIDES_SECONDS.get(event.event_id)
+    if override is None:
+        return configured
+    return min(configured, override)
 
 
 def _v2_live_verified_real_output_enabled(plugin: Any) -> bool:
@@ -139,7 +163,7 @@ def _resolve_target_lanlan(plugin: Any, event: BattleEvent | None = None) -> str
 
 def _event_freshness_metadata(event: BattleEvent, now: float, plugin: Any) -> dict[str, float]:
     out: dict[str, float] = {}
-    max_age = _output_event_max_age_seconds(plugin)
+    max_age = _output_event_max_age_seconds(plugin, event)
     if event.ts > 0:
         out["event_ts"] = round(float(event.ts), 3)
         if now >= event.ts:
@@ -617,7 +641,7 @@ class NekoDispatcher:
         return event.priority <= self._last_push_priority
 
     def _is_expired(self, event: BattleEvent, now: float) -> bool:
-        max_age = _output_event_max_age_seconds(self.plugin)
+        max_age = _output_event_max_age_seconds(self.plugin, event)
         if max_age <= 0 or event.ts <= 0:
             return False
         return now >= event.ts and now - event.ts > max_age

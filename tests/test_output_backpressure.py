@@ -94,7 +94,35 @@ def test_real_output_drops_expired_battle_event_before_push():
     assert status["stage"] == "dispatcher_suppressed"
     assert status["reason"] == "event_expired"
     assert status["event_age_seconds"] == 10.0
-    assert status["event_max_age_seconds"] == 5.0
+    assert status["event_max_age_seconds"] == 4.0
+
+
+def test_tactical_awareness_events_expire_faster_than_global_default():
+    plugin = FakePlugin()
+    plugin.cfg.output_event_max_age_seconds = 8.0
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([100.0]))
+
+    result = dispatcher.push_event(BattleEvent("air_threat_nearby", level="warning", ts=96.5), dry_run=False)
+
+    assert result == "suppressed(event=air_threat_nearby/enter, reason=event_expired)"
+    assert plugin.calls == []
+    status = timeline.snapshot()["last_output_status"]
+    assert status["event_age_seconds"] == 3.5
+    assert status["event_max_age_seconds"] == 3.0
+
+
+def test_kill_events_keep_short_but_less_aggressive_freshness_window():
+    plugin = FakePlugin()
+    plugin.cfg.output_event_max_age_seconds = 8.0
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0]))
+
+    result = dispatcher.push_event(BattleEvent("you_killed", level="warning", ts=94.5), dry_run=False)
+
+    assert result.startswith("pushed(")
+    metadata = plugin.calls[0]["metadata"]
+    assert metadata["event_age_seconds"] == 5.5
+    assert metadata["event_max_age_seconds"] == 6.0
 
 
 def test_real_event_push_metadata_carries_event_age_and_expiry_for_host_queue():
@@ -109,11 +137,11 @@ def test_real_event_push_metadata_carries_event_age_and_expiry_for_host_queue():
     metadata = plugin.calls[0]["metadata"]
     assert metadata["event_id"] == "low_alt_danger"
     assert metadata["event_age_seconds"] == 3.0
-    assert metadata["event_max_age_seconds"] == 8.0
-    assert metadata["event_expires_at"] == 105.0
+    assert metadata["event_max_age_seconds"] == 4.0
+    assert metadata["event_expires_at"] == 101.0
     status = timeline.snapshot()["last_output_status"]
     assert status["event_age_seconds"] == 3.0
-    assert status["event_max_age_seconds"] == 8.0
+    assert status["event_max_age_seconds"] == 4.0
 
 
 def test_real_event_push_metadata_requests_short_tts_output_contract():
@@ -161,8 +189,8 @@ def test_real_event_push_metadata_reserves_generic_host_callback_contract():
         "replace_pending": True,
         "interrupt_pending": True,
         "priority": 9,
-        "expires_at": 107.0,
-        "max_age_seconds": 8.0,
+        "expires_at": 103.0,
+        "max_age_seconds": 4.0,
     }
     assert contract["reply"]["mode"] == "short_tts_line"
     assert contract["reply"]["style"] == "short_line"

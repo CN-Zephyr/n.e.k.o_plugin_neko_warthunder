@@ -74,6 +74,7 @@ def run_gate() -> dict[str, Any]:
         "policy": {
             "real_battle_push_requires_coalesce_key": True,
             "real_battle_push_requires_freshness_metadata": True,
+            "tactical_cues_use_shorter_freshness_windows": True,
             "real_battle_push_requires_target_lanlan_when_resolved": True,
             "real_battle_push_requires_short_tts_contract": True,
             "real_battle_push_requires_pending_replace_metadata": True,
@@ -107,7 +108,7 @@ def _case_real_push_contract(failures: list[dict[str, str]]) -> dict[str, Any]:
     _expect_required_metadata(failures, "real_push_contract", metadata)
     _expect_required_status_metadata(failures, "real_push_contract.status", status)
     _expect_equal(failures, "real_push_contract", "metadata.event_age_seconds", metadata.get("event_age_seconds"), 3.0)
-    _expect_equal(failures, "real_push_contract", "metadata.event_expires_at", metadata.get("event_expires_at"), 105.0)
+    _expect_equal(failures, "real_push_contract", "metadata.event_expires_at", metadata.get("event_expires_at"), 101.0)
     _expect_equal(failures, "real_push_contract", "metadata.target_lanlan", metadata.get("target_lanlan"), "Lanlan")
     _expect_equal(failures, "real_push_contract", "metadata.interrupt_battle_event", metadata.get("interrupt_battle_event"), True)
     _expect_equal(failures, "real_push_contract", "metadata.interrupt_pending", metadata.get("interrupt_pending"), True)
