@@ -83,3 +83,12 @@ def test_profile_candidate_diff_accepts_tolerated_values(tmp_path):
 
     assert report["vehicles"][0]["action"] == "candidate_matches_current_profile"
     assert report["vehicles"][0]["counts"] == {"match": 2, "diff": 0, "missing_current": 0}
+
+
+def test_profile_candidate_diff_loads_utf8_bom_json(tmp_path):
+    from profile_candidate_diff import _load_json
+
+    path = tmp_path / "report.json"
+    path.write_text('\ufeff{"results": []}', encoding="utf-8")
+
+    assert _load_json(path) == {"results": []}

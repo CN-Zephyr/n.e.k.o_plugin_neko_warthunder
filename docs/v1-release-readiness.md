@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 离线逻辑基线：`312/312 passed`。
+- 离线逻辑基线：`332/332 passed`。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。
 - `tools/replay_gate.py` 已作为 replay 降级发布门禁，证明 `replay=true` 帧不会产生 Detector candidate、prompt 或真实 `push_message`。
 - `tools/ownership_replay_gate.py` 已作为第三方旧样本 ownership 门禁，证明手动 identity + 显式 opt-in 推断才能把旧 `combat.feed` 标为 owned kill/death，且干扰 combat feed 保持非我方。
@@ -107,7 +107,7 @@ This output separates `sample_unproven_items`, `blocked_release_items`, `remaini
 - 真机 airport spawn / takeoff / respawn rollout 仍需要最终回归，尤其是雷达高度保护、低空抑制和贴地滑跑超速抑制。
 - `replay=true` 已有离线 gate，但真实 replay 样本仍需要补。
 - `hudmsg` / `combat.feed` / `awards` 仍保持保守策略；正式自由文本播报前必须继续走 T-Safety 与真机 dry_run 验证。
-- 油温、发动机细项、载具阈值仍依赖数据层数据库/profile 后续补齐。
+- 热门喷气/攻击机载具 profile 已按三批 Datamine 候选补入；油温、发动机细项仍只把 Datamine 热模型作为 evidence，需真机样本校准后再决定是否细分阈值。
 - recovery、复杂 HUD 播报不属于 v1 发布阻塞项；V2 proximity / objective awareness 的非真机依赖部分已完成，后方/六点钟和持续尾随风险 `tailing_risk` 已支持 `proximity.events` + `situation.enemies` 双路径验证，3000m 内任务目标点触发样本仍留到统一真机验证。
 
 ## 发布前最后一轮真机 Smoke

@@ -286,7 +286,7 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check should report 312/312 passed")
+    print("- baseline: logic self-check should report 332/332 passed")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
     print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and short-reply constrained")
     print("- host contract gate must prove the local host consumes short-reply metadata and quiets ordinary battle cues during user chat")

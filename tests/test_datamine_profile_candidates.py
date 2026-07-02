@@ -83,3 +83,37 @@ def test_extracts_fm_candidates_when_unit_file_is_absent():
     assert report["datamine"] == {}
     assert report["stall"]["stall_critical_kmh"] == 142.1
     assert report["aoa"]["aoa_critical_deg"] == 17
+
+
+def test_fetch_timeout_is_reported_as_runtime_error():
+    import datamine_profile_candidates as candidates
+
+    def _raise_timeout(*args, **kwargs):
+        raise TimeoutError("slow network")
+
+    original_urlopen = candidates.urllib.request.urlopen
+    candidates.urllib.request.urlopen = _raise_timeout
+    try:
+        try:
+            candidates._load_json_url("https://example.invalid/file.blkx")
+        except RuntimeError as exc:
+            assert "timeout while fetching" in str(exc)
+        else:
+            raise AssertionError("timeout should become RuntimeError")
+    finally:
+        candidates.urllib.request.urlopen = original_urlopen
+
+
+def test_aoa_candidate_ignores_unbounded_autopilot_sentinel():
+    from datamine_profile_candidates import extract_candidates
+
+    fm = {
+        "Aerodynamics": {"WingPlane": {"FlapsPolar0": {"alphaCritHigh": 24.0}}},
+        "Autopilot": {"Pitch": {"AoaLimits": [-15.0, 2147440000.0]}},
+    }
+
+    report = extract_candidates("sentinel_aoa", unit=None, fm=fm)
+
+    assert report["aoa"]["autopilot_aoa_limits"] == [-15.0, 2147440000.0]
+    assert report["aoa"]["aoa_critical_deg"] == 24
+    assert report["aoa"]["aoa_warn_deg"] == 20.4

@@ -52,6 +52,8 @@ def _load_json_url(url: str, *, timeout: float = 25.0) -> dict[str, Any]:
         raise RuntimeError(f"HTTP {exc.code} while fetching {url}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"network error while fetching {url}: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError(f"timeout while fetching {url}") from exc
 
 
 def _load_json_file(path: pathlib.Path) -> dict[str, Any]:
@@ -129,6 +131,8 @@ def _candidate_aoa(fm: dict[str, Any]) -> dict[str, Any]:
     clean_alpha = alpha_values.get("FlapsPolar0")
     aoa_limits = _get_path(fm, "Autopilot", "Pitch", "AoaLimits")
     positive_limit = _second_number(aoa_limits)
+    if positive_limit is not None and not (0 < positive_limit <= 90):
+        positive_limit = None
 
     # The report chooses a conservative candidate but keeps the raw fields so
     # maintainers can decide whether this aircraft should use the limiter or the

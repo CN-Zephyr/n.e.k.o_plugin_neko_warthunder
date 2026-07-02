@@ -54,7 +54,7 @@ FIELD_RULES = [
 
 
 def _load_json(path: pathlib.Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _num(value: Any) -> float | None:
