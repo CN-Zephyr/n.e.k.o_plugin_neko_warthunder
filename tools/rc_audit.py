@@ -97,12 +97,16 @@ STALE_BASELINES = [
     "312 passed",
     "353/353 passed",
     "353 passed",
+    "357/357 passed",
+    "357 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "357/357 passed",
+    "360/360 passed",
     "vehicle profile economy metadata",
     "tools/update_vehicle_profile_economy_from_datamine.py",
+    "vehicle family coverage",
+    "tools/vehicle_family_coverage.py",
     "wpcost.blkx",
     "release defaults gate",
     "tools/release_defaults_gate.py",

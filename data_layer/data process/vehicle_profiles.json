@@ -553,7 +553,7 @@
       "class": "ww2_bomber"
     },
     {
-      "prefix": "hampden",
+      "prefix": "hp52hampden",
       "label": "Hampden",
       "class": "ww2_bomber"
     },
@@ -894,7 +894,7 @@
       "class": "ww2_prop_fighter"
     },
     {
-      "prefix": "g50",
+      "prefix": "fiatg50",
       "label": "G.50",
       "class": "ww2_prop_fighter"
     },
@@ -949,7 +949,7 @@
       "class": "ww2_prop_fighter"
     },
     {
-      "prefix": "mb150",
+      "prefix": "mb15",
       "label": "MB.150",
       "class": "ww2_prop_fighter"
     },
@@ -969,7 +969,7 @@
       "class": "biplane"
     },
     {
-      "prefix": "cr42",
+      "prefix": "fiatcr42",
       "label": "CR.42",
       "class": "biplane"
     },
@@ -1138,7 +1138,7 @@
       "class": "early_jet"
     },
     {
-      "prefix": "mystere",
+      "prefix": "md45",
       "label": "Mystere",
       "class": "early_jet"
     },
@@ -1700,7 +1700,7 @@
       "aoa_critical_deg": 22
     },
     {
-      "prefix": "gripen",
+      "prefix": "saabjas39",
       "label": "Gripen",
       "class": "modern_high_alpha_fighter",
       "stall_warn_kmh": 110,
@@ -1726,12 +1726,12 @@
       "aoa_critical_deg": 32
     },
     {
-      "prefix": "draken",
+      "prefix": "saabj35",
       "label": "Draken (J35)",
       "class": "modern_jet"
     },
     {
-      "prefix": "j35",
+      "prefix": "saabj35",
       "label": "Saab J35",
       "class": "modern_jet"
     },
