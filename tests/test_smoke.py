@@ -43,7 +43,7 @@ def test_plugin_manifest_declares_hosted_ui_surface_and_files_exist():
 def test_hosted_ui_panel_groups_operator_state_in_chinese():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 
-    for section in ["连接状态", "战场状态", "飞行诊断", "起飞保护", "接近感知", "安全控制", "最近决策", "最近输出"]:
+    for section in ["连接状态", "战场状态", "飞行诊断", "起飞保护", "接近感知", "安全控制", "最近决策", "最近输出", "玩家身份"]:
         assert section in panel
 
     for label in [
@@ -59,6 +59,7 @@ def test_hosted_ui_panel_groups_operator_state_in_chinese():
         "手动暂停",
         "自动暂停",
         "失败次数",
+        "当前玩家",
     ]:
         assert label in panel
 
@@ -69,5 +70,5 @@ def test_hosted_ui_panel_keeps_existing_actions_available():
     for action_id in ["set_dry_run", "set_identity", "pause", "resume", "test_say"]:
         assert action_id in panel
 
-    for label in ["急停", "恢复", "测试开口", "刷新状态"]:
+    for label in ["急停", "恢复", "测试开口", "刷新状态", "保存", "清除"]:
         assert label in panel

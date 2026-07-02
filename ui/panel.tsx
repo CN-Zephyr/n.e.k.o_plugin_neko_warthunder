@@ -28,6 +28,7 @@ type SafetyState = {
 
 type IdentityState = {
   player_name?: string | null
+  saved_player_name?: string | null
   self?: {
     name?: string | null
     source?: string | null
@@ -330,7 +331,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const resumeAction = actionById(actions, "resume")
   const testSayAction = actionById(actions, "test_say")
   const [dryRunError, setDryRunError] = useState("")
-  const [identityName, setIdentityName] = useState("")
+  const [identityName, setIdentityName] = useState(String(identity.player_name || identity.saved_player_name || identity.self?.name || ""))
   const [identityError, setIdentityError] = useState("")
 
   async function setDryRun(value: boolean) {
@@ -371,8 +372,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
     }
   }
 
-  const activePlayers = Array.isArray(identity.active_players) ? identity.active_players : []
-  const selectablePlayers = activePlayers.filter((player) => player?.selectable && player.name)
+  const currentPlayerName = identity.player_name || identity.saved_player_name || identity.self?.name
 
   return (
     <Page title="战雷猫娘副驾驶" subtitle="战场态势状态面板">
@@ -527,34 +527,22 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
         </Card>
       </Grid>
 
-      <Card title="身份识别">
+      <Card title="玩家身份">
         <Stack>
           <KeyValue
             items={[
-              { key: "identity.player_name", label: "手动玩家名", value: text(identity.player_name) },
-              { key: "identity.self.name", label: "当前识别", value: text(identity.self?.name) },
-              { key: "identity.self.source", label: "识别来源", value: mappedText(identity.self?.source, IDENTITY_SOURCE_LABELS) },
-              { key: "identity.self.confidence", label: "置信度", value: text(identity.self?.confidence) },
-              { key: "identity.active_players_count", label: "候选玩家数", value: text(identity.active_players_count) },
+              { key: "identity.player_name", label: "当前玩家", value: text(currentPlayerName) },
+              { key: "identity.self.source", label: "来源", value: mappedText(identity.self?.source, IDENTITY_SOURCE_LABELS) },
             ]}
           />
-          <Field label="玩家名">
-            <Input value={identityName} placeholder="输入你的游戏昵称" onChange={setIdentityName} />
-          </Field>
-          {selectablePlayers.length ? (
-            <Grid cols={3}>
-              {selectablePlayers.map((player) => (
-                <Button key={player.name} onClick={() => submitIdentityName(String(player.name))}>
-                  {text(player.display_name || player.name)}
-                </Button>
-              ))}
-            </Grid>
-          ) : null}
-          {identityError ? <Alert tone="danger">{identityError}</Alert> : null}
-          <Grid cols={2}>
-            <Button tone="primary" onClick={() => submitIdentity(false)}>设置玩家名</Button>
-            <Button tone="warning" onClick={() => submitIdentity(true)}>清除玩家名</Button>
+          <Grid cols={3}>
+            <Field label="玩家名">
+              <Input value={identityName} placeholder="输入你的游戏昵称" onChange={setIdentityName} />
+            </Field>
+            <Button tone="primary" onClick={() => submitIdentity(false)}>保存</Button>
+            <Button tone="warning" onClick={() => submitIdentity(true)}>清除</Button>
           </Grid>
+          {identityError ? <Alert tone="danger">{identityError}</Alert> : null}
         </Stack>
       </Card>
 

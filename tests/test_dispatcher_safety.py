@@ -161,6 +161,15 @@ def test_target_cue_prompt_keeps_soft_copilot_role_boundary():
     assert "back-seater/WSO" in prompt
     assert "Keep the pilot in control" in prompt
     assert "prefer what is observed and where it is" in prompt
+    assert "only use facts shown in [当前]" in prompt
+
+
+def test_spawn_prompt_forbids_invented_target_or_radar_cues():
+    prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn"))
+
+    assert "只说上机/就位/跟上" in prompt
+    assert "不要报敌情、方位、雷达目标、锁定、击杀或威胁" in prompt
+    assert "never invent contacts, headings, locks" in prompt
 
 
 def test_proximity_push_message_parts_text_excludes_unsafe_raw():

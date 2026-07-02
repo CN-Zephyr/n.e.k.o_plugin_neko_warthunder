@@ -31,7 +31,9 @@ URGENT_REPLACE_EVENTS = frozenset({"you_died", "stall_risk", "low_alt_danger", "
 COPILOT_ROLE_BOUNDARY = (
     "Role boundary: speak like a fighter back-seater/WSO. Give sensor, target, "
     "navigation, threat, and checklist cues. Keep the pilot in control; avoid "
-    "sounding like you are taking over the aircraft or weapons."
+    "sounding like you are taking over the aircraft or weapons. Fact boundary: "
+    "only use facts shown in [当前]; never invent contacts, headings, locks, "
+    "enemy maneuvers, damage, kills, or threats."
 )
 
 # 每个事件的"要求行"意图（不写最终台词，台词归角色 LLM）。
@@ -49,7 +51,10 @@ _INTENT: dict[str, str] = {
     "free_text_activity": "提醒 {MASTER_NAME} 检测到新的战场文字来源，只做安全泛化提醒，不复读原文",
     "you_killed": "为 {MASTER_NAME} 刚才的击杀庆祝/调侃一句",
     "you_died": "{MASTER_NAME} 刚才阵亡/载具损失了，按事实简短共情安慰一句",
-    "spawn": "出场跟 {MASTER_NAME} 打个招呼、就位",
+    "spawn": (
+        "出场跟 {MASTER_NAME} 打个招呼、就位；只说上机/就位/跟上，"
+        "不要报敌情、方位、雷达目标、锁定、击杀或威胁"
+    ),
     "battle_end": "这局结束了，给 {MASTER_NAME} 收个尾/小结一句",
 }
 

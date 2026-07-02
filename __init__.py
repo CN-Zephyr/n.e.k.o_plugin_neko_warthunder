@@ -130,7 +130,15 @@ class NekoWarthunderPlugin(NekoPluginBase):
             f"neko_warthunder started (dry_run={self.cfg.dry_run}, url={self.cfg.data_layer_url}, "
             f"data_layer={data_layer_status.get('mode')})"
         )
-        return Ok({"status": "running", "dry_run": self.cfg.dry_run, "data_layer": data_layer_status})
+        identity_result = self._restore_identity_to_data_layer()
+        return Ok(
+            {
+                "status": "running",
+                "dry_run": self.cfg.dry_run,
+                "data_layer": data_layer_status,
+                "identity": identity_result,
+            }
+        )
 
     @lifecycle(id="shutdown")
     def shutdown(self, **_):
@@ -148,6 +156,38 @@ class NekoWarthunderPlugin(NekoPluginBase):
     async def on_config_change(self, **_):
         await self._reload_config()
         return Ok({"status": "reloaded", "dry_run": self.cfg.dry_run})
+
+    async def _persist_identity_name(self, name: str) -> dict[str, Any]:
+        persisted_name = str(name or "").strip()
+        try:
+            await self.config.update({_CONFIG_SECTION: {"player_name": persisted_name}})
+            self._apply_config(WtConfig.from_mapping({**self.cfg.to_dict(), "player_name": persisted_name}))
+            return {"ok": True, "player_name": persisted_name}
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"identity config persist failed: {type(exc).__name__}")
+            return {"ok": False, "error": f"config persist failed: {type(exc).__name__}"}
+
+    def _restore_identity_to_data_layer(self) -> dict[str, Any]:
+        name = str(self.cfg.player_name or "").strip()
+        if not name:
+            return {"ok": True, "restored": False}
+        result = request_set_identity(
+            self.cfg.data_layer_url,
+            self.cfg.http_timeout_seconds,
+            name=name,
+            clear=False,
+        )
+        restored = bool(result.get("ok"))
+        if restored:
+            with self._state_lock:
+                combat = dict(self.state.combat or {})
+                for key in ("requested", "self", "player_name"):
+                    if key in result:
+                        combat[key] = result.get(key)
+                self.state.combat = combat
+        else:
+            self.logger.warning("identity restore to data layer failed")
+        return {"ok": restored, "restored": restored, "player_name": name if restored else ""}
 
     # ------------------------------------------------------------------ 轮询
     def _loop(self) -> None:
@@ -502,6 +542,11 @@ class NekoWarthunderPlugin(NekoPluginBase):
         }
 
     def _dashboard_payload(self, s: BattleState) -> dict[str, Any]:
+        identity = identity_summary_from_combat(s.combat)
+        saved_player_name = str(self.cfg.player_name or "").strip()
+        if saved_player_name:
+            identity["saved_player_name"] = saved_player_name
+            identity["player_name"] = identity.get("player_name") or saved_player_name
         return {
             "enabled": self.cfg.enabled,
             "dry_run": self.cfg.dry_run,
@@ -517,7 +562,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "profile_family": s.profile_family,
             "scenario": s.scenario,
             "level": s.level,
-            "identity": identity_summary_from_combat(s.combat),
+            "identity": identity,
             "data_layer": self.data_layer_manager.snapshot(),
             "telemetry": self._telemetry_snapshot(s),
             "takeoff_protection": self._takeoff_protection_snapshot(s),
@@ -643,13 +688,18 @@ class NekoWarthunderPlugin(NekoPluginBase):
         },
     )
     async def set_identity(self, name: str = "", clear: bool = False, **_):
+        requested_name = "" if clear else str(name or "").strip()
         result = request_set_identity(
             self.cfg.data_layer_url,
             self.cfg.http_timeout_seconds,
-            name=name,
+            name=requested_name,
             clear=bool(clear),
         )
         if result.get("ok"):
+            persist_result = await self._persist_identity_name(requested_name)
+            result["persisted"] = persist_result.get("ok", False)
+            if persist_result.get("error"):
+                result["persist_error"] = persist_result.get("error")
             with self._state_lock:
                 combat = dict(self.state.combat or {})
                 for key in ("requested", "self", "player_name"):

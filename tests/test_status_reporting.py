@@ -67,7 +67,10 @@ def _plugin_for_report_tests():
     plugin.cfg = WtConfig()
     plugin.safety = SafetyGuard(plugin.cfg)
     plugin.timeline = RuntimeTimeline()
-    plugin.data_layer_manager = types.SimpleNamespace(snapshot=lambda: {"mode": "external"})
+    plugin.data_layer_manager = types.SimpleNamespace(
+        configure=lambda *_args, **_kwargs: None,
+        snapshot=lambda: {"mode": "external"},
+    )
     plugin.state = BattleState(connected=True, conn_state="in_battle", in_battle=True, scenario="IN_FLIGHT")
     plugin._state_lock = threading.Lock()
     plugin._status_report_min_interval_seconds = 10.0
@@ -87,7 +90,25 @@ def _plugin_for_action_tests():
     plugin = object.__new__(Plugin)
     plugin.cfg = WtConfig()
     plugin.safety = SafetyGuard(plugin.cfg)
+    plugin.timeline = RuntimeTimeline()
+    plugin.data_layer_manager = types.SimpleNamespace(
+        configure=lambda *_args, **_kwargs: None,
+        snapshot=lambda: {"mode": "external"},
+    )
+    plugin.state = BattleState()
+    plugin._state_lock = threading.Lock()
     plugin.pushed_messages = []
+    plugin.config_updates = []
+
+    class FakeConfig:
+        async def update(self, payload):
+            plugin.config_updates.append(payload)
+
+    plugin.config = FakeConfig()
+    plugin.logger = types.SimpleNamespace(
+        info=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+    )
 
     def push_message(**kwargs):
         plugin.pushed_messages.append(kwargs)
@@ -590,3 +611,61 @@ def test_test_say_push_is_audited_when_allowed():
     assert status["kind"] == "test_say"
     assert status["ai_behavior"] == "respond"
     assert status["pushed"] is True
+
+
+def test_set_identity_persists_player_name_to_plugin_config():
+    plugin = _plugin_for_action_tests()
+    module = sys.modules[plugin.__class__.__module__]
+    original_request = module.request_set_identity
+
+    def fake_request(base_url, timeout, *, name=None, clear=False):
+        return {
+            "ok": True,
+            "requested": name,
+            "player_name": "" if clear else name,
+            "self": {"name": "" if clear else name, "source": "manual", "confidence": 1.0},
+        }
+
+    module.request_set_identity = fake_request
+    try:
+        result = asyncio.run(plugin.set_identity("CN-Zephyr"))
+    finally:
+        module.request_set_identity = original_request
+
+    identity = result["identity"]
+    assert identity["ok"] is True
+    assert identity["persisted"] is True
+    assert plugin.config_updates == [{"neko_warthunder": {"player_name": "CN-Zephyr"}}]
+    assert plugin.cfg.player_name == "CN-Zephyr"
+    assert plugin.state.combat["player_name"] == "CN-Zephyr"
+
+
+def test_dashboard_identity_uses_saved_player_name_before_combat_frame():
+    plugin = _plugin_for_action_tests()
+    plugin.cfg = WtConfig(player_name="CN-Zephyr")
+    plugin.state = BattleState(combat={})
+
+    payload = plugin._dashboard_payload(plugin.state)
+
+    assert payload["identity"]["player_name"] == "CN-Zephyr"
+    assert payload["identity"]["saved_player_name"] == "CN-Zephyr"
+
+
+def test_set_identity_clear_persists_empty_player_name():
+    plugin = _plugin_for_action_tests()
+    plugin.cfg = WtConfig(player_name="CN-Zephyr")
+    module = sys.modules[plugin.__class__.__module__]
+    original_request = module.request_set_identity
+
+    def fake_request(base_url, timeout, *, name=None, clear=False):
+        return {"ok": True, "requested": "", "player_name": "", "self": {"name": "", "source": "auto"}}
+
+    module.request_set_identity = fake_request
+    try:
+        result = asyncio.run(plugin.set_identity(clear=True))
+    finally:
+        module.request_set_identity = original_request
+
+    assert result["identity"]["persisted"] is True
+    assert plugin.config_updates == [{"neko_warthunder": {"player_name": ""}}]
+    assert plugin.cfg.player_name == ""

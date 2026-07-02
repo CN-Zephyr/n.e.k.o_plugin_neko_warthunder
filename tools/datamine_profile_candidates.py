@@ -175,6 +175,150 @@ def _candidate_overspeed(fm: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _candidate_mass(fm: dict[str, Any]) -> dict[str, Any]:
+    empty_mass = _num(_get_path(fm, "Mass", "EmptyMass"))
+    max_fuel_mass = _num(_get_path(fm, "Mass", "MaxFuelMass0"))
+    oil_mass = _num(_get_path(fm, "Mass", "OilMass"))
+    passport_mass = _num(_get_path(fm, "Passport", "mass"))
+    return _dict_without_none(
+        {
+            "source_fields": [
+                "Mass.EmptyMass",
+                "Mass.MaxFuelMass0",
+                "Mass.OilMass",
+                "Passport.mass",
+            ],
+            "empty_mass_kg": _rounded(empty_mass),
+            "max_fuel_mass_kg": _rounded(max_fuel_mass),
+            "oil_mass_kg": _rounded(oil_mass),
+            "passport_mass_kg": _rounded(passport_mass) if passport_mass and passport_mass > 0 else None,
+            "note": (
+                "mass is useful evidence for converting structural overload force into a G candidate; "
+                "payload mass is not included here"
+            )
+            if empty_mass is not None
+            else None,
+        }
+    )
+
+
+def _candidate_overload(fm: dict[str, Any]) -> dict[str, Any]:
+    strength_overload = _get_path(fm, "Aerodynamics", "WingPlane", "Strength", "CritOverload")
+    mass_overload = _get_path(fm, "Mass", "WingCritOverload")
+    raw_overload = strength_overload if isinstance(strength_overload, list) else mass_overload
+    source = (
+        "Aerodynamics.WingPlane.Strength.CritOverload"
+        if isinstance(strength_overload, list)
+        else "Mass.WingCritOverload"
+        if isinstance(mass_overload, list)
+        else None
+    )
+    negative_force = _num(raw_overload[0]) if isinstance(raw_overload, list) and len(raw_overload) >= 1 else None
+    positive_force = _num(raw_overload[1]) if isinstance(raw_overload, list) and len(raw_overload) >= 2 else None
+    empty_mass = _num(_get_path(fm, "Mass", "EmptyMass"))
+    max_fuel_mass = _num(_get_path(fm, "Mass", "MaxFuelMass0")) or 0.0
+    full_fuel_mass = empty_mass + max_fuel_mass if empty_mass is not None else None
+    instructor_limits = _get_path(fm, "Instructor", "loadFactorLimit")
+    instructor_negative = _num(instructor_limits[0]) if isinstance(instructor_limits, list) and len(instructor_limits) >= 1 else None
+    instructor_positive = _num(instructor_limits[1]) if isinstance(instructor_limits, list) and len(instructor_limits) >= 2 else None
+
+    def force_to_g(force: float | None, mass: float | None) -> float | None:
+        if force is None or mass is None or mass <= 0:
+            return None
+        return abs(force) / mass / 9.80665
+
+    return _dict_without_none(
+        {
+            "source_fields": [source] if source else None,
+            "structure_overload_negative_n": _rounded(negative_force),
+            "structure_overload_positive_n": _rounded(positive_force),
+            "g_limit_negative_empty_candidate": _rounded(force_to_g(negative_force, empty_mass), 2),
+            "g_limit_positive_empty_candidate": _rounded(force_to_g(positive_force, empty_mass), 2),
+            "g_limit_negative_full_fuel_candidate": _rounded(force_to_g(negative_force, full_fuel_mass), 2),
+            "g_limit_positive_full_fuel_candidate": _rounded(force_to_g(positive_force, full_fuel_mass), 2),
+            "instructor_g_limit_negative": _rounded(instructor_negative, 2),
+            "instructor_g_limit_positive": _rounded(instructor_positive, 2),
+            "instructor_limit_overload": _get_path(fm, "Instructor", "limitOverload"),
+            "note": (
+                "CritOverload/WingCritOverload is structural force evidence, not a direct spoken G alert; "
+                "candidate G values use empty/full-fuel mass and exclude payload"
+            )
+            if source
+            else None,
+        }
+    )
+
+
+def _engine_performance_evidence(fm: dict[str, Any]) -> dict[str, Any]:
+    engines: list[dict[str, Any]] = []
+    total_idle = 0.0
+    total_half = 0.0
+    total_full = 0.0
+    total_wep = 0.0
+    saw_idle = saw_half = saw_full = saw_wep = False
+    max_inertia: float | None = None
+    for key, value in sorted(fm.items()):
+        if not key.startswith("EngineType") or not isinstance(value, dict):
+            continue
+        main = value.get("Main") if isinstance(value.get("Main"), dict) else {}
+        idle = _num(main.get("FuelConsumptionOnIdle"))
+        half = _num(main.get("FuelConsumptionOnHalfThr"))
+        full = _num(main.get("FuelConsumptionOnFullThr"))
+        wep = _num(main.get("FuelConsumptionOnWEP"))
+        inertia = _num(main.get("EngineInertiaMoment"))
+        if idle is not None:
+            total_idle += idle
+            saw_idle = True
+        if half is not None:
+            total_half += half
+            saw_half = True
+        if full is not None:
+            total_full += full
+            saw_full = True
+        if wep is not None:
+            total_wep += wep
+            saw_wep = True
+        if inertia is not None:
+            max_inertia = max(inertia, max_inertia) if max_inertia is not None else inertia
+        row = _dict_without_none(
+            {
+                "engine": key,
+                "engine_type": main.get("Type"),
+                "fuel_consumption_idle": _rounded(idle, 4),
+                "fuel_consumption_half": _rounded(half, 4),
+                "fuel_consumption_full": _rounded(full, 4),
+                "fuel_consumption_wep": _rounded(wep, 4),
+                "engine_inertia_moment": _rounded(inertia, 4),
+            }
+        )
+        if row:
+            engines.append(row)
+    return _dict_without_none(
+        {
+            "source_fields": [
+                "EngineType*.Main.FuelConsumptionOnIdle",
+                "EngineType*.Main.FuelConsumptionOnHalfThr",
+                "EngineType*.Main.FuelConsumptionOnFullThr",
+                "EngineType*.Main.FuelConsumptionOnWEP",
+                "EngineType*.Main.EngineInertiaMoment",
+            ],
+            "engine_count": len(engines) or None,
+            "engines": engines or None,
+            "fuel_consumption_idle_total": _rounded(total_idle, 4) if saw_idle else None,
+            "fuel_consumption_half_total": _rounded(total_half, 4) if saw_half else None,
+            "fuel_consumption_full_total": _rounded(total_full, 4) if saw_full else None,
+            "fuel_consumption_wep_total": _rounded(total_wep, 4) if saw_wep else None,
+            "engine_inertia_moment_max": _rounded(max_inertia, 4),
+            "note": (
+                "fuel consumption values are Datamine engine-model units; keep as evidence until runtime "
+                "fuel-time estimates are calibrated"
+            )
+            if engines
+            else None,
+        }
+    )
+
+
 def _mode_temperatures(temp: dict[str, Any]) -> dict[str, Any]:
     max_water: float | None = None
     max_oil: float | None = None
@@ -195,6 +339,96 @@ def _mode_temperatures(temp: dict[str, Any]) -> dict[str, Any]:
             "max_mode_head_temperature_c": _rounded(max_head),
         }
     )
+
+
+def _load_rows(temp: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key, value in sorted(temp.items()):
+        if not key.startswith("Load") or not isinstance(value, dict):
+            continue
+        suffix = key.removeprefix("Load")
+        try:
+            index = int(suffix)
+        except ValueError:
+            index = len(rows)
+        rows.append(
+            _dict_without_none(
+                {
+                    "name": key,
+                    "index": index,
+                    "water_temperature_c": _rounded(_num(value.get("WaterTemperature"))),
+                    "oil_temperature_c": _rounded(_num(value.get("OilTemperature"))),
+                    "head_temperature_c": _rounded(_num(value.get("HeadTemperature"))),
+                    "work_time_sec": _rounded(_num(value.get("WorkTime"))),
+                    "recover_time_sec": _rounded(_num(value.get("RecoverTime"))),
+                }
+            )
+        )
+    return sorted(rows, key=lambda item: item.get("index", 0))
+
+
+def _first_temperature_at_or_below_work_time(
+    rows: list[dict[str, Any]],
+    field: str,
+    max_work_time_sec: float,
+) -> float | None:
+    for row in rows:
+        value = _num(row.get(field))
+        work_time = _num(row.get("work_time_sec"))
+        if value is not None and work_time is not None and work_time <= max_work_time_sec:
+            return value
+    return None
+
+
+def _max_temperature(rows: list[dict[str, Any]], field: str) -> float | None:
+    values = [_num(row.get(field)) for row in rows]
+    clean = [value for value in values if value is not None]
+    return max(clean) if clean else None
+
+
+def _load_temperature_thresholds(engine_type: str | None, is_water_cooled: bool | None, temp: dict[str, Any]) -> dict[str, Any]:
+    rows = _load_rows(temp)
+    if not rows:
+        return {}
+
+    primary_field = "water_temperature_c"
+    primary_warn = _first_temperature_at_or_below_work_time(rows, primary_field, 1800.0)
+    primary_critical = _max_temperature(rows, primary_field)
+    oil_warn = _first_temperature_at_or_below_work_time(rows, "oil_temperature_c", 900.0)
+    oil_critical = _first_temperature_at_or_below_work_time(rows, "oil_temperature_c", 300.0)
+    if oil_critical is None:
+        oil_critical = _max_temperature(rows, "oil_temperature_c")
+
+    fields: dict[str, Any] = {}
+    if engine_type == "Jet":
+        fields.update(
+            {
+                "turbine_temp_warn_c": _rounded(primary_warn),
+                "turbine_temp_critical_c": _rounded(primary_critical),
+            }
+        )
+    elif is_water_cooled:
+        fields.update(
+            {
+                "water_temp_warn_c": _rounded(primary_warn),
+                "water_temp_critical_c": _rounded(primary_critical),
+            }
+        )
+    else:
+        fields.update(
+            {
+                "head_temp_warn_c": _rounded(primary_warn),
+                "head_temp_critical_c": _rounded(primary_critical),
+            }
+        )
+
+    fields.update(
+        {
+            "oil_temp_warn_c": _rounded(oil_warn),
+            "oil_temp_critical_c": _rounded(oil_critical),
+        }
+    )
+    return _dict_without_none(fields)
 
 
 def _engine_temperature_evidence(fm: dict[str, Any]) -> list[dict[str, Any]]:
@@ -221,6 +455,14 @@ def _engine_temperature_evidence(fm: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
         row.update(_mode_temperatures(temp))
+        load_rows = _load_rows(temp)
+        if load_rows:
+            row["load_temperatures"] = load_rows
+            row["candidate_thresholds"] = _load_temperature_thresholds(
+                main.get("Type") if isinstance(main.get("Type"), str) else None,
+                main.get("IsWaterCooled") if isinstance(main.get("IsWaterCooled"), bool) else None,
+                temp,
+            )
         engines.append(row)
     return engines
 
@@ -261,6 +503,9 @@ def extract_candidates(
         "stall": _candidate_stall(fm),
         "aoa": _candidate_aoa(fm),
         "overspeed": _candidate_overspeed(fm),
+        "mass": _candidate_mass(fm),
+        "overload": _candidate_overload(fm),
+        "engine_performance": _engine_performance_evidence(fm),
         "overheat": _overheat_evidence(unit, fm),
     }
     return report

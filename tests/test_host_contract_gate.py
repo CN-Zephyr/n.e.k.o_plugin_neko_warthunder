@@ -83,6 +83,13 @@ def _write_host_fixture(root):
     return core
 
 
+def _write_runtime_sync_sentinels(root, host_contract_gate, *, marker: str):
+    for relative_path in host_contract_gate.RUNTIME_SYNC_SENTINELS:
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{relative_path.as_posix()}::{marker}\n", encoding="utf-8")
+
+
 def test_host_contract_gate_passes_complete_host(tmp_path):
     from neko_warthunder.tools import host_contract_gate
 
@@ -100,10 +107,31 @@ def test_host_contract_gate_passes_complete_host(tmp_path):
         "pending_callback_coalesce_consumed",
         "warthunder_user_input_quiet_window",
         "warthunder_quiet_window_call_sites",
-        "host_runtime_plugin_path_points_to_standalone_repo",
+        "host_runtime_plugin_is_current",
     }
     assert payload["policy"]["starts_services"] is False
     assert payload["policy"]["reads_raw_chat_or_telemetry"] is False
+
+
+def test_host_contract_gate_passes_synced_runtime_copy(tmp_path):
+    from neko_warthunder.tools import host_contract_gate
+
+    _write_host_fixture(tmp_path)
+    standalone_plugin = tmp_path / "standalone-plugin"
+    runtime_plugin = tmp_path / "N.E.K.O" / "plugin" / "plugins" / "neko_warthunder"
+    _write_runtime_sync_sentinels(standalone_plugin, host_contract_gate, marker="same")
+    _write_runtime_sync_sentinels(runtime_plugin, host_contract_gate, marker="same")
+
+    payload = host_contract_gate.run_gate(
+        tmp_path / "N.E.K.O",
+        require_host=True,
+        plugin_root=standalone_plugin,
+    )
+
+    assert payload["status"] == "pass"
+    runtime_check = payload["requirements"][-1]
+    assert runtime_check["name"] == "host_runtime_plugin_is_current"
+    assert runtime_check["mode"] == "synced_runtime_copy"
 
 
 def test_host_contract_gate_fails_when_short_tts_consumption_missing(tmp_path):
@@ -128,7 +156,9 @@ def test_host_contract_gate_fails_when_runtime_plugin_is_stale_copy(tmp_path):
 
     _write_host_fixture(tmp_path)
     standalone_plugin = tmp_path / "standalone-plugin"
-    standalone_plugin.mkdir()
+    runtime_plugin = tmp_path / "N.E.K.O" / "plugin" / "plugins" / "neko_warthunder"
+    _write_runtime_sync_sentinels(standalone_plugin, host_contract_gate, marker="new")
+    _write_runtime_sync_sentinels(runtime_plugin, host_contract_gate, marker="old")
 
     payload = host_contract_gate.run_gate(
         tmp_path / "N.E.K.O",
@@ -137,9 +167,9 @@ def test_host_contract_gate_fails_when_runtime_plugin_is_stale_copy(tmp_path):
     )
 
     assert payload["status"] == "fail"
-    assert payload["failures"][-1]["requirement"] == "host_runtime_plugin_path_points_to_standalone_repo"
-    assert "is not" in payload["failures"][-1]["missing"]
-    assert " is not " in host_contract_gate.render_text(payload)
+    assert payload["failures"][-1]["requirement"] == "host_runtime_plugin_is_current"
+    assert "differs from standalone plugin" in payload["failures"][-1]["missing"]
+    assert "differs from standalone plugin" in host_contract_gate.render_text(payload)
 
 
 def test_host_contract_gate_missing_host_is_nonblocking_by_default(tmp_path):

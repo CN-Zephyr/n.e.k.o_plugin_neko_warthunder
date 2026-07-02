@@ -95,6 +95,15 @@ REQUIREMENTS: tuple[Requirement, ...] = (
 )
 
 
+RUNTIME_SYNC_SENTINELS: tuple[pathlib.Path, ...] = (
+    pathlib.Path("plugin.toml"),
+    pathlib.Path("__init__.py"),
+    pathlib.Path("adapters") / "neko_dispatcher.py",
+    pathlib.Path("core") / "arbiter.py",
+    pathlib.Path("data_layer") / "data process" / "vehicle_profiles.json",
+)
+
+
 def run_gate(
     host_root: str | pathlib.Path | None = None,
     *,
@@ -179,17 +188,21 @@ def run_gate(
 
 
 def _check_runtime_plugin_path(runtime_plugin: pathlib.Path, plugin_root: pathlib.Path) -> dict[str, Any]:
-    reason = "host runtime plugin path must point at this standalone plugin checkout to avoid stale duplicate code"
+    reason = (
+        "host runtime plugin must either point at this standalone checkout or be a synced runtime copy "
+        "for live-test host compatibility"
+    )
+    name = "host_runtime_plugin_is_current"
     if not runtime_plugin.exists():
         return {
-            "name": "host_runtime_plugin_path_points_to_standalone_repo",
+            "name": name,
             "status": "fail",
             "reason": reason,
             "missing": str(runtime_plugin),
         }
     if not plugin_root.exists():
         return {
-            "name": "host_runtime_plugin_path_points_to_standalone_repo",
+            "name": name,
             "status": "fail",
             "reason": reason,
             "missing": str(plugin_root),
@@ -198,11 +211,35 @@ def _check_runtime_plugin_path(runtime_plugin: pathlib.Path, plugin_root: pathli
         same_path = runtime_plugin.samefile(plugin_root)
     except OSError:
         same_path = False
+    if same_path:
+        return {
+            "name": name,
+            "status": "pass",
+            "reason": reason,
+            "missing": "",
+            "mode": "linked_standalone_checkout",
+        }
+
+    stale_or_missing: list[str] = []
+    for relative_path in RUNTIME_SYNC_SENTINELS:
+        runtime_file = runtime_plugin / relative_path
+        plugin_file = plugin_root / relative_path
+        if not plugin_file.exists():
+            stale_or_missing.append(f"{relative_path}: missing in standalone plugin")
+            continue
+        if not runtime_file.exists():
+            stale_or_missing.append(f"{relative_path}: missing in host runtime copy")
+            continue
+        if runtime_file.read_bytes() != plugin_file.read_bytes():
+            stale_or_missing.append(f"{relative_path}: differs from standalone plugin")
+
+    is_current_copy = not stale_or_missing
     return {
-        "name": "host_runtime_plugin_path_points_to_standalone_repo",
-        "status": "pass" if same_path else "fail",
+        "name": name,
+        "status": "pass" if is_current_copy else "fail",
         "reason": reason,
-        "missing": "" if same_path else f"{runtime_plugin} is not {plugin_root}",
+        "missing": "" if is_current_copy else "; ".join(stale_or_missing),
+        "mode": "synced_runtime_copy" if is_current_copy else "stale_runtime_copy",
     }
 
 
