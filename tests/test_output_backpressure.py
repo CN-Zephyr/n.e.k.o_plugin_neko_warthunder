@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
+from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher, URGENT_REPLACE_EVENTS
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
-from neko_warthunder.core.contracts import BattleEvent, WtConfig
+from neko_warthunder.core.contracts import CRITICAL_EVENT_IDS, BattleEvent, WtConfig
 
 
 class FakePlugin:
@@ -74,6 +74,28 @@ def test_real_output_backpressure_never_blocks_critical_safety_event():
     assert len(plugin.calls) == 2
     assert plugin.calls[-1]["metadata"]["event_id"] == "overspeed"
     assert plugin.calls[-1]["metadata"]["interrupt_battle_event"] is True
+
+
+def test_each_critical_safety_event_bypasses_backpressure_and_interrupts_pending():
+    for event_id in sorted(CRITICAL_EVENT_IDS):
+        plugin = FakePlugin()
+        dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+
+        dispatcher.push_event(BattleEvent("you_died", level="critical", ts=99.0), dry_run=False)
+        result = dispatcher.push_event(BattleEvent(event_id, level="critical", ts=104.0), dry_run=False)
+
+        assert result.startswith(f"pushed(event={event_id}/enter)")
+        assert len(plugin.calls) == 2
+        metadata = plugin.calls[-1]["metadata"]
+        assert metadata["event_id"] == event_id
+        assert metadata["replace_pending"] is True
+        assert metadata["interrupt_battle_event"] is True
+        assert metadata["interrupt_pending"] is True
+        assert metadata["host_callback_contract"]["quiet_window"]["bypass"] is True
+
+
+def test_dispatcher_urgent_replace_events_cover_all_critical_safety_events():
+    assert CRITICAL_EVENT_IDS <= URGENT_REPLACE_EVENTS
 
 
 def test_real_event_pushes_use_battle_coalesce_key_to_replace_stale_host_queue():

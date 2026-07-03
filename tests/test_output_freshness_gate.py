@@ -8,6 +8,7 @@ import json
 
 
 def test_output_freshness_gate_passes_required_contracts():
+    from neko_warthunder.core.contracts import CRITICAL_EVENT_IDS
     from neko_warthunder.tools import output_freshness_gate
 
     result = output_freshness_gate.run_gate()
@@ -40,6 +41,8 @@ def test_output_freshness_gate_passes_required_contracts():
     assert result["policy"]["death_event_bypasses_backpressure"] is True
     assert result["policy"]["critical_safety_event_bypasses_backpressure"] is True
     assert result["policy"]["expired_events_must_not_push"] is True
+    critical_case = next(case for case in result["cases"] if case["name"] == "critical_safety_bypasses_backpressure")
+    assert critical_case["checked_events"] == sorted(CRITICAL_EVENT_IDS)
 
 
 def test_output_freshness_gate_renders_text_summary():

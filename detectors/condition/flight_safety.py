@@ -28,6 +28,14 @@ def _pl_stall(s: BattleState) -> dict[str, Any]:
     )
 
 
+def _pl_high_aoa(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"aoa_deg": s.aoa_deg, "ias_kmh": s.ias_kmh, "g_now": s.g_now})
+
+
+def _pl_over_g(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"g_now": s.g_now, "ias_kmh": s.ias_kmh, "aoa_deg": s.aoa_deg})
+
+
 def _pl_overheat(s: BattleState) -> dict[str, Any]:
     temp = next((t for t in (s.water_temp_c, s.head_temp_c, s.turbine_temp_c, s.oil_temp_c) if t is not None), None)
     return _drop_none({"temp_c": temp})
@@ -56,6 +64,8 @@ def build_condition_detectors() -> list[ConditionDetector]:
     g = CONDITION_FLAG_GROUPS
     return [
         ConditionDetector("stall_risk", g["stall_risk"], confirm_enter=2, confirm_exit=3, payload_fn=_pl_stall),
+        ConditionDetector("high_aoa", g["high_aoa"], confirm_enter=1, confirm_exit=2, payload_fn=_pl_high_aoa),
+        ConditionDetector("over_g", g["over_g"], confirm_enter=1, confirm_exit=2, payload_fn=_pl_over_g),
         ConditionDetector("low_alt_danger", g["low_alt_danger"], confirm_enter=2, confirm_exit=2, payload_fn=_pl_low_alt),
         ConditionDetector("overspeed", g["overspeed"], confirm_enter=2, confirm_exit=3, payload_fn=_pl_overspeed),
         ConditionDetector("overheat", g["overheat"], confirm_enter=3, confirm_exit=4, payload_fn=_pl_overheat),

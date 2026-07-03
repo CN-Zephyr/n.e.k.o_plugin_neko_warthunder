@@ -152,6 +152,74 @@ def test_su30_oil_threshold_uses_datamine_exact_profile():
     assert warning.flags["oil_overheat"] is True
 
 
+def test_su30_over_g_uses_datamine_load_sensitive_limit():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    warning = processor.process(
+        _vehicle(load_factor=6.5, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
+        _indicators(throttle=0.8),
+        timestamp=1000.0,
+    )
+    critical = processor.process(
+        _vehicle(load_factor=13.1, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
+        _indicators(throttle=0.8),
+        timestamp=1001.0,
+    )
+
+    assert warning.flags["over_g"] is True
+    assert "over_g_critical" not in warning.flags
+    assert critical.flags["over_g_critical"] is True
+
+
+def test_fuel_time_estimate_does_not_trigger_low_fuel_when_fraction_is_healthy():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    first = processor.process(
+        _vehicle(fuel_kg=4000, fuel_full_kg=9400, ias_kmh=1280),
+        _indicators(throttle=1.1),
+        timestamp=1000.0,
+    )
+    early = processor.process(
+        _vehicle(fuel_kg=3769, fuel_full_kg=9400, ias_kmh=1280),
+        _indicators(throttle=1.1),
+        timestamp=1015.87,
+    )
+    stable = processor.process(
+        _vehicle(fuel_kg=2980, fuel_full_kg=9400, ias_kmh=1280),
+        _indicators(throttle=1.1),
+        timestamp=1070.0,
+    )
+
+    assert first.fuel_remaining_sec is None
+    assert early.fuel_remaining_sec is not None
+    assert early.fuel_remaining_sec <= 300
+    assert "fuel_low" not in early.flags
+    assert stable.fuel_remaining_sec is not None
+    assert stable.fuel_remaining_sec <= 300
+    assert "fuel_low" not in stable.flags
+
+
+def test_low_fuel_follows_fraction_even_before_time_estimate_exists():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    result = processor.process(
+        _vehicle(fuel_kg=1300, fuel_full_kg=9400, ias_kmh=900),
+        _indicators(throttle=0.8),
+        timestamp=1000.0,
+    )
+
+    assert result.fuel_fraction == 0.1383
+    assert result.fuel_remaining_sec is None
+    assert result.flags["fuel_low"] is True
+    assert "fuel_critical" not in result.flags
+
+
 def test_non_su30_modern_jet_does_not_inherit_su30_thermal_thresholds():
     from wt_processor import TelemetryProcessor, _merge_profile
 

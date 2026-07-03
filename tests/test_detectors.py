@@ -48,6 +48,24 @@ def test_condition_critical_level():
     assert ev is not None and ev.level == "critical"
 
 
+def test_high_aoa_and_over_g_flags_emit_flight_control_events():
+    detectors = {d.id: d for d in build_condition_detectors()}
+
+    aoa = detectors["high_aoa"].feed(
+        C.BattleState(),
+        C.BattleState(flags={"aoa_critical": True}, aoa_deg=24.0, g_now=8.5),
+    )
+    over_g = detectors["over_g"].feed(
+        C.BattleState(),
+        C.BattleState(flags={"over_g_critical": True}, g_now=13.1, aoa_deg=18.0),
+    )
+
+    assert aoa is not None and aoa.event_id == "high_aoa" and aoa.level == "critical"
+    assert aoa.payload["aoa_deg"] == 24.0
+    assert over_g is not None and over_g.event_id == "over_g" and over_g.level == "critical"
+    assert over_g.payload["g_now"] == 13.1
+
+
 def test_condition_escalation_reemits_critical():
     """warning 持续中升级到 critical：应重发一条 critical enter（可抢占）。"""
     d = ConditionDetector("stall_risk", [("stall_warning", "stall_critical")], confirm_enter=1, confirm_exit=2)
@@ -212,12 +230,13 @@ def test_low_alt_payload_carries_radio_altitude_for_agl_context():
     assert events[0].payload["altitude_m"] == 1060.0
 
 
-def test_aoa_flags_do_not_emit_stall_risk():
+def test_aoa_flags_emit_high_aoa_without_reusing_stall_risk():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True)
     high_aoa = C.BattleState(in_battle=True, vehicle_valid=True, flags={"aoa_high": True}, aoa_deg=19.0)
 
-    assert engine.feed(prev, high_aoa) == []
+    events = engine.feed(prev, high_aoa)
+    assert [e.event_id for e in events] == ["high_aoa"]
     assert engine.feed(high_aoa, high_aoa) == []
 
 

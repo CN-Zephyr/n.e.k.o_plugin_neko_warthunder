@@ -32,7 +32,7 @@ from neko_warthunder.adapters.neko_dispatcher import (  # noqa: E402
     NekoDispatcher,
 )
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline  # noqa: E402
-from neko_warthunder.core.contracts import BattleEvent, WtConfig  # noqa: E402
+from neko_warthunder.core.contracts import BattleEvent, CRITICAL_EVENT_IDS, WtConfig  # noqa: E402
 
 
 class _CapturePlugin:
@@ -241,38 +241,40 @@ def _case_death_bypasses_equal_priority_backpressure(failures: list[dict[str, st
 
 
 def _case_critical_safety_bypasses_backpressure(failures: list[dict[str, str]]) -> dict[str, Any]:
-    plugin = _CapturePlugin()
-    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+    checked: list[str] = []
+    for event_id in sorted(CRITICAL_EVENT_IDS):
+        plugin = _CapturePlugin()
+        dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
 
-    first = dispatcher.push_event(BattleEvent("you_died", level="critical", ts=99.0), dry_run=False)
-    second = dispatcher.push_event(BattleEvent("overspeed", level="critical", ts=104.0), dry_run=False)
-    if not first.startswith("pushed("):
-        failures.append({"case": "critical_safety_bypasses_backpressure", "target": "first", "reason": "not_pushed"})
-    if not second.startswith("pushed("):
-        failures.append({"case": "critical_safety_bypasses_backpressure", "target": "second", "reason": "not_pushed"})
-    _expect_equal(failures, "critical_safety_bypasses_backpressure", "push_calls", len(plugin.calls), 2)
-    last_metadata = plugin.calls[-1].get("metadata") or {} if plugin.calls else {}
-    _expect_equal(failures, "critical_safety_bypasses_backpressure", "last.event_id", last_metadata.get("event_id"), "overspeed")
-    _expect_equal(
-        failures,
-        "critical_safety_bypasses_backpressure",
-        "last.interrupt_battle_event",
-        last_metadata.get("interrupt_battle_event"),
-        True,
-    )
-    _expect_equal(
-        failures,
-        "critical_safety_bypasses_backpressure",
-        "last.interrupt_pending",
-        last_metadata.get("interrupt_pending"),
-        True,
-    )
+        first = dispatcher.push_event(BattleEvent("you_died", level="critical", ts=99.0), dry_run=False)
+        second = dispatcher.push_event(BattleEvent(event_id, level="critical", ts=104.0), dry_run=False)
+        if not first.startswith("pushed("):
+            failures.append({"case": "critical_safety_bypasses_backpressure", "target": f"{event_id}.first", "reason": "not_pushed"})
+        if not second.startswith("pushed("):
+            failures.append({"case": "critical_safety_bypasses_backpressure", "target": f"{event_id}.second", "reason": "not_pushed"})
+        _expect_equal(failures, "critical_safety_bypasses_backpressure", f"{event_id}.push_calls", len(plugin.calls), 2)
+        last_metadata = plugin.calls[-1].get("metadata") or {} if plugin.calls else {}
+        _expect_equal(failures, "critical_safety_bypasses_backpressure", f"{event_id}.event_id", last_metadata.get("event_id"), event_id)
+        _expect_equal(
+            failures,
+            "critical_safety_bypasses_backpressure",
+            f"{event_id}.interrupt_battle_event",
+            last_metadata.get("interrupt_battle_event"),
+            True,
+        )
+        _expect_equal(
+            failures,
+            "critical_safety_bypasses_backpressure",
+            f"{event_id}.interrupt_pending",
+            last_metadata.get("interrupt_pending"),
+            True,
+        )
+        checked.append(event_id)
     return {
         "name": "critical_safety_bypasses_backpressure",
-        "push_calls": len(plugin.calls),
-        "last_event": last_metadata.get("event_id"),
-        "interrupt_battle_event": last_metadata.get("interrupt_battle_event"),
-        "interrupt_pending": last_metadata.get("interrupt_pending"),
+        "checked_events": checked,
+        "interrupt_battle_event": True,
+        "interrupt_pending": True,
     }
 
 

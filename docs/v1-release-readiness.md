@@ -1,10 +1,10 @@
-# v1 Release Readiness
+﻿# v1 Release Readiness
 
 > 状态：准备发布候选前的离线门禁说明。本文不替代真机 smoke，只回答“现在代码能不能进入最后一轮真机验收”。
 
 ## 当前结论
 
-- 离线逻辑基线：`369/369 passed`。
+- 离线逻辑基线：`379/379 passed`。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。
 - `tools/replay_gate.py` 已作为 replay 降级发布门禁，证明 `replay=true` 帧不会产生 Detector candidate、prompt 或真实 `push_message`。
 - `tools/ownership_replay_gate.py` 已作为第三方旧样本 ownership 门禁，证明手动 identity + 显式 opt-in 推断才能把旧 `combat.feed` 标为 owned kill/death，且干扰 combat feed 保持非我方。
@@ -119,3 +119,4 @@ This output separates `sample_unproven_items`, `blocked_release_items`, `remaini
 3. `stall_risk`、`you_died`、`low_fuel`、`overheat` 不被起飞保护误伤。
 4. `dry_run=false` 下确认 `event_expired` / output backpressure / output freshness metadata 能减少旧事件晚播，并确认 `target_lanlan` 不走 fallback session，`battle_reply_contract=short_tts_line` / `live_reply_contract=short_tts_line` / `max_reply_chars=28` / `host_callback_contract_version=neko.callback.v1` 未丢失。宿主真正执行旧队列替换、用户聊天静默和短句裁剪，需要等待后续通用 callback contract 接口。
 5. 如出现 replay/free-text 样本，确认 live monitor 显示 suppressed / blocked，且没有 unsafe raw 文本进入输出。
+

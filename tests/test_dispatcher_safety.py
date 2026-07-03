@@ -93,6 +93,22 @@ def test_low_alt_prompt_prefers_radio_altitude_over_msl_altitude():
     assert "1067" not in prompt
 
 
+def test_flight_control_prompts_keep_distinct_aoa_and_over_g_wording():
+    aoa_prompt = NekoDispatcher(None).build_prompt(
+        BattleEvent("high_aoa", level="critical", payload={"aoa_deg": 24.0, "g_now": 8.5})
+    )
+    g_prompt = NekoDispatcher(None).build_prompt(
+        BattleEvent("over_g", level="critical", payload={"g_now": 13.1, "aoa_deg": 18.0})
+    )
+
+    assert "攻角过大" in aoa_prompt
+    assert "松杆" in aoa_prompt
+    assert "过载过大" in g_prompt
+    assert "回正" in g_prompt
+    assert "濒临失速" not in aoa_prompt
+    assert "濒临失速" not in g_prompt
+
+
 def test_push_message_parts_text_excludes_unsafe_raw_name():
     plugin = FakePlugin()
     event = BattleEvent("you_killed", payload={"victim": UNSAFE_NAME})

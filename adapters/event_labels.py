@@ -5,6 +5,8 @@ from __future__ import annotations
 
 _EVENT_LABELS: dict[str, str] = {
     "stall_risk": "失速风险",
+    "high_aoa": "攻角过大",
+    "over_g": "过载过大",
     "low_alt_danger": "低空危险",
     "overspeed": "超速风险",
     "overheat": "过热风险",

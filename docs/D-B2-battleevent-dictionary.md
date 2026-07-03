@@ -60,6 +60,30 @@
 - 误判风险：高（逐机失速速度不同、AoA 抖动、降落正常低速）。
 - 提示意图：警示濒临失速，促使加速/松杆改出。
 
+#### `high_aoa` 攻角过大
+- 中文说明：飞控/Betty 类 `critical angle` 风险，迎角过大但不等同于低速失速。
+- 来源信号：数据层 flag `aoa_high` / `aoa_critical`（阈值来自 vehicle profile / datamine 候选）。
+- 触发条件摘要：AoA 高于阈值，数据层先分 warning/critical；插件按边沿触发。
+- 允许 Scenario：IN_FLIGHT、COMBAT_STRESS（critical 后入 CRITICAL_RISK）。
+- 被抑制 Scenario：SPAWNING、OUT_OF_BATTLE、DEAD、BATTLE_ENDED。
+- severity 8 / priority 9 / 抢占 是 / cooldown 10s。
+- re-arm：AoA 回落并保持退出窗口后可再触发。
+- payload：`aoa_deg`、`ias_kmh`、`g_now`。
+- 误判风险：中（各机飞控保护/可用迎角差异大，需继续真机校准）。
+- 提示意图：警示攻角过大，提示松杆/改出，避免继续硬拉。
+
+#### `over_g` 过载过大
+- 中文说明：飞控/Betty 类 `over-g` 风险，机体结构或飞控限制可能被突破。
+- 来源信号：数据层 flag `over_g` / `over_g_critical`（优先使用 profile 中 `g_limit_*_candidate`，按当前燃油比例插值）。
+- 触发条件摘要：当前 `Ny/load_factor` 超过 warning/critical 阈值；正/负过载均可触发。
+- 允许 Scenario：IN_FLIGHT、COMBAT_STRESS（critical 后入 CRITICAL_RISK）。
+- 被抑制 Scenario：SPAWNING、OUT_OF_BATTLE、DEAD、BATTLE_ENDED。
+- severity 8 / priority 9 / 抢占 是 / cooldown 10s。
+- re-arm：过载回落并保持退出窗口后可再触发。
+- payload：`g_now`、`ias_kmh`、`aoa_deg`。
+- 误判风险：中高（游戏模式、飞控保护、挂载/燃油对结构限制影响明显；先按 datamine 候选保守预警）。
+- 提示意图：警示过载过大，提示松杆/回正，避免继续硬拉。
+
 #### `low_alt_danger` 低空危险
 - 中文说明：离地过近且持续下沉，撞地风险。
 - 来源信号：`low_alt_danger` detector（`H, m` + `Vy, m/s`，辅以 `IAS`/`pitch`/`gear`）。

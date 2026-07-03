@@ -27,7 +27,7 @@ HOST_QUIET_WINDOW_POLICY = "suppress_non_urgent_during_user_input"
 V2_LIVE_EVIDENCE_GATED_EVENTS = frozenset({"enemy_on_six", "tailing_risk", "ground_target_nearby"})
 FREE_TEXT_DRY_RUN_ONLY_EVENTS = frozenset({"free_text_activity"})
 BACKPRESSURE_BYPASS_EVENTS = frozenset({"you_died"})
-URGENT_REPLACE_EVENTS = frozenset({"you_died", "stall_risk", "low_alt_danger", "overspeed"})
+URGENT_REPLACE_EVENTS = frozenset({"you_died", "stall_risk", "high_aoa", "over_g", "low_alt_danger", "overspeed"})
 EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     # These cues are useful only while the condition is still tactically fresh.
     "spawn": 3.0,
@@ -38,6 +38,8 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "ground_target_nearby": 4.0,
     "low_alt_danger": 4.0,
     "overspeed": 4.0,
+    "high_aoa": 4.0,
+    "over_g": 4.0,
     "stall_risk": 5.0,
     "overheat": 6.0,
     # Kill/death/battle-end can tolerate a little more host latency, but still
@@ -53,6 +55,8 @@ COPILOT_ROLE_BOUNDARY = (
 # 每个事件的"要求行"意图（不写最终台词，台词归角色 LLM）。
 _INTENT: dict[str, str] = {
     "stall_risk": "濒临失速，提醒 {MASTER_NAME} 加速/松杆改出",
+    "high_aoa": "攻角过大，提醒 {MASTER_NAME} 松杆改出，别继续硬拉",
+    "over_g": "过载过大，提醒 {MASTER_NAME} 松杆/回正，别继续硬拉",
     "low_alt_danger": "离地太近还在下沉，提醒 {MASTER_NAME} 立刻拉起",
     "overspeed": "速度过头，提醒 {MASTER_NAME} 收油门改出，别硬拉",
     "overheat": "发动机温度高，提醒 {MASTER_NAME} 收油门散热",

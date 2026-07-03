@@ -33,6 +33,14 @@ def test_critical_risk():
     assert r.resolve(crit, 1008.0, 6) == C.CRITICAL_RISK
 
 
+def test_flight_control_critical_flags_enter_critical_risk():
+    for code in ("aoa_critical", "over_g_critical"):
+        r = ScenarioResolver()
+        r.resolve(_alive(), 1000.0, 6)
+        r.resolve(_alive(), 1007.0, 6)
+        assert r.resolve(_alive(flags={code: True}), 1008.0, 6) == C.CRITICAL_RISK
+
+
 def test_combat_stress_high_g():
     r = ScenarioResolver()
     r.resolve(_alive(), 1000.0, 6)

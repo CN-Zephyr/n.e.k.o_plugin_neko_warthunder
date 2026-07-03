@@ -40,6 +40,8 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
     dispatcher = NekoDispatcher(None)
     payloads = {
         "stall_risk": {"ias_kmh": 180, "aoa_deg": 16},
+        "high_aoa": {"aoa_deg": 24, "g_now": 8.5},
+        "over_g": {"g_now": 13.1, "aoa_deg": 18},
         "low_alt_danger": {"altitude_m": 120, "climb_ms": -18},
         "overspeed": {"ias_kmh": 760, "mach": 0.82},
         "overheat": {"temp_c": 118},

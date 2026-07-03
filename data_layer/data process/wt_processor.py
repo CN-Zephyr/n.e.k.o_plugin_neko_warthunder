@@ -295,7 +295,7 @@ class TelemetryProcessor:
         else:
             self._process_fuel(vehicle, cfg, timestamp, result)
             self._process_afterburner(indicators, cfg, dt, result)
-            self._process_gforce(vehicle, result)
+            self._process_gforce(vehicle, cfg, result, enable_alerts=(vehicle_class == "air"))
             # 失速 / 攻角 / 高度 / 发动机温度：仅对固定翼有意义
             if vehicle_class == "air":
                 self._process_engine_temp(indicators, cfg, result)
@@ -365,26 +365,18 @@ class TelemetryProcessor:
 
         if frac is not None:
             rem = result.fuel_remaining_sec
-            warn_sec = cfg.get("fuel_time_warn_sec", 300)
-            crit_sec = cfg.get("fuel_time_critical_sec", 120)
-            if rem is not None:
-                # 能估出油耗率 -> 按剩余可飞时间告警（更直观准确）
-                if crit_sec and rem <= crit_sec:
-                    self._add(result, "fuel_critical", "critical",
-                              f"燃油告急：剩余约 {rem/60:.0f} 分 {rem%60:.0f} 秒", round(rem, 1))
-                elif warn_sec and rem <= warn_sec:
-                    self._add(result, "fuel_low", "warning",
-                              f"燃油偏低：剩余约 {rem/60:.0f} 分 {rem%60:.0f} 秒", round(rem, 1))
-            else:
-                # 尚未估出油耗率（刚起飞/油量未变）-> 回退按剩余比例
-                crit = cfg.get("fuel_critical_fraction")
-                low = cfg.get("fuel_low_fraction")
-                if crit is not None and frac <= crit:
-                    self._add(result, "fuel_critical", "critical",
-                              f"燃油告急：仅剩 {frac*100:.0f}%", round(frac, 4))
-                elif low is not None and frac <= low:
-                    self._add(result, "fuel_low", "warning",
-                              f"燃油偏低：剩余 {frac*100:.0f}%", round(frac, 4))
+            crit = cfg.get("fuel_critical_fraction")
+            low = cfg.get("fuel_low_fraction")
+            if crit is not None and frac <= crit:
+                msg = f"燃油告急：仅剩 {frac*100:.0f}%"
+                if rem is not None:
+                    msg += f"，约 {rem/60:.0f} 分 {rem%60:.0f} 秒"
+                self._add(result, "fuel_critical", "critical", msg, round(frac, 4))
+            elif low is not None and frac <= low:
+                msg = f"燃油偏低：剩余 {frac*100:.0f}%"
+                if rem is not None:
+                    msg += f"，约 {rem/60:.0f} 分 {rem%60:.0f} 秒"
+                self._add(result, "fuel_low", "warning", msg, round(frac, 4))
 
     def _process_engine_temp(self, indicators: Any, cfg: dict[str, Any], result: ProcessedData) -> None:
         """发动机过热告警（活塞机/部分早期喷气）。
@@ -551,7 +543,9 @@ class TelemetryProcessor:
             self._add(result, "laser_warning", "critical",
                       "遭激光照射（可能被锁定/测距）", lws)
 
-    def _process_gforce(self, vehicle: Any, result: ProcessedData) -> None:
+    def _process_gforce(
+        self, vehicle: Any, cfg: dict[str, Any], result: ProcessedData, *, enable_alerts: bool
+    ) -> None:
         g = getattr(vehicle, "load_factor", None)
         if g is None:
             return
@@ -560,6 +554,61 @@ class TelemetryProcessor:
         result.g_now = round(g, 2)
         result.g_max = round(self._g_max, 2)
         result.g_min = round(self._g_min, 2)
+        if not enable_alerts:
+            return
+
+        def _num(value: Any) -> float | None:
+            if value is None:
+                return None
+            try:
+                return abs(float(value))
+            except (TypeError, ValueError):
+                return None
+
+        def _load_sensitive_limit(empty_key: str, full_key: str, fallback_key: str) -> float | None:
+            empty = _num(cfg.get(empty_key))
+            full = _num(cfg.get(full_key))
+            if empty is not None and full is not None:
+                frac = result.fuel_fraction
+                if frac is None:
+                    return min(empty, full)
+                frac = max(0.0, min(1.0, frac))
+                return empty + (full - empty) * frac
+            if empty is not None:
+                return empty
+            if full is not None:
+                return full
+            return _num(cfg.get(fallback_key))
+
+        pos_limit = _load_sensitive_limit(
+            "g_limit_positive_empty_candidate",
+            "g_limit_positive_full_fuel_candidate",
+            "instructor_g_limit_positive",
+        )
+        neg_limit = _load_sensitive_limit(
+            "g_limit_negative_empty_candidate",
+            "g_limit_negative_full_fuel_candidate",
+            "instructor_g_limit_negative",
+        )
+        warn_ratio = cfg.get("g_warn_ratio", 0.85)
+        try:
+            warn_ratio = float(warn_ratio)
+        except (TypeError, ValueError):
+            warn_ratio = 0.85
+        warn_ratio = max(0.5, min(1.0, warn_ratio))
+
+        if pos_limit is not None and g >= pos_limit:
+            self._add(result, "over_g_critical", "critical",
+                      f"过载过大：{g:.1f}G，松杆别硬拉", round(g, 2))
+        elif pos_limit is not None and g >= pos_limit * warn_ratio:
+            self._add(result, "over_g", "warning",
+                      f"过载偏大：{g:.1f}G", round(g, 2))
+        elif neg_limit is not None and g <= -neg_limit:
+            self._add(result, "over_g_critical", "critical",
+                      f"负过载过大：{g:.1f}G，回正别反压", round(g, 2))
+        elif neg_limit is not None and g <= -(neg_limit * warn_ratio):
+            self._add(result, "over_g", "warning",
+                      f"负过载偏大：{g:.1f}G", round(g, 2))
 
     def _process_overspeed(self, vehicle: Any, cfg: dict[str, Any], result: ProcessedData) -> None:
         """超速告警：IAS 超过结构限速，或（喷气机）马赫超过压缩限制。

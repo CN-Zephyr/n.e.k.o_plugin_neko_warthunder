@@ -38,7 +38,7 @@ ALL_SCENARIOS = (
 # ---------------------------------------------------------------------------
 
 CAT_LIFECYCLE = "lifecycle"            # spawn / you_died / battle_end
-CAT_SAFETY_CRITICAL = "safety_critical"      # stall / low_alt / overspeed（触发 CRITICAL_RISK + 可抢占）
+CAT_SAFETY_CRITICAL = "safety_critical"      # stall / aoa / over-g / low_alt / overspeed（触发 CRITICAL_RISK + 可抢占）
 CAT_SAFETY_IMPORTANT = "safety_important"    # overheat（不触发 CRITICAL_RISK、不抢占）
 CAT_SAFETY_MINOR = "safety_minor"            # low_fuel
 CAT_COMBAT_KILL = "combat_kill"              # you_killed
@@ -51,8 +51,11 @@ SEV_CRITICAL = 8
 SEV_LIFECYCLE = 1
 
 # 危急集合：触发 CRITICAL_RISK 的安全事件 + you_died。抢占资格 = 属此集合 且 数据层报 critical。
-CRITICAL_EVENT_IDS = frozenset({"stall_risk", "low_alt_danger", "overspeed"})
+CRITICAL_EVENT_IDS = frozenset({"stall_risk", "high_aoa", "over_g", "low_alt_danger", "overspeed"})
 PREEMPT_ELIGIBLE_IDS = CRITICAL_EVENT_IDS | {"you_died"}
+CRITICAL_FLAG_CODES = frozenset(
+    {"stall_critical", "aoa_critical", "over_g_critical", "altitude_critical", "overspeed_critical"}
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,8 @@ class EventSpec:
 # 事件目录（D-B2 总览矩阵）。cooldown<0 = 一次性（spawn/battle_end/you_died/low_fuel 每局少量）。
 EVENT_CATALOG: dict[str, EventSpec] = {
     "stall_risk":     EventSpec("stall_risk", CAT_SAFETY_CRITICAL, 9, True, 15, SEV_WARNING, SEV_CRITICAL),
+    "high_aoa":       EventSpec("high_aoa", CAT_SAFETY_CRITICAL, 9, True, 10, SEV_WARNING, SEV_CRITICAL),
+    "over_g":         EventSpec("over_g", CAT_SAFETY_CRITICAL, 9, True, 10, SEV_WARNING, SEV_CRITICAL),
     "low_alt_danger": EventSpec("low_alt_danger", CAT_SAFETY_CRITICAL, 9, True, 10, 7, 9),
     "overspeed":      EventSpec("overspeed", CAT_SAFETY_CRITICAL, 8, True, 15, 6, 7),
     "overheat":       EventSpec("overheat", CAT_SAFETY_IMPORTANT, 6, False, 30, 5, SEV_IMPORTANT),
@@ -249,7 +254,7 @@ class BattleState:
 
     def any_critical_flag(self) -> bool:
         """危急集合对应的数据层 critical 级 flag 是否激活（驱动 CRITICAL_RISK）。"""
-        return self.flag("stall_critical") or self.flag("altitude_critical") or self.flag("overspeed_critical")
+        return any(self.flag(code) for code in CRITICAL_FLAG_CODES)
 
 
 @dataclass

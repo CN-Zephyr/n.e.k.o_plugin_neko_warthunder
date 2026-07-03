@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
-from neko_warthunder.core.contracts import EVENT_CATALOG, WtConfig
+from neko_warthunder.core.contracts import (
+    CAT_SAFETY_CRITICAL,
+    CRITICAL_EVENT_IDS,
+    CRITICAL_FLAG_CODES,
+    EVENT_CATALOG,
+    WtConfig,
+)
+from neko_warthunder.core.flag_codes import CONDITION_FLAG_GROUPS
 
 
 def _sample() -> dict:
@@ -49,6 +56,28 @@ def test_critical_flag():
     payload["processed"]["flags"] = {"stall_critical": True}
     s = parse_telemetry(payload)
     assert s.any_critical_flag() is True
+
+
+def test_flight_control_critical_flags_drive_critical_risk_contract():
+    for code in ("aoa_critical", "over_g_critical"):
+        payload = _sample()
+        payload["processed"]["flags"] = {code: True}
+        s = parse_telemetry(payload)
+        assert s.any_critical_flag() is True
+
+
+def test_critical_event_flag_groups_stay_in_sync_with_critical_risk_flags():
+    assert CRITICAL_EVENT_IDS == {
+        event_id
+        for event_id, spec in EVENT_CATALOG.items()
+        if spec.category == CAT_SAFETY_CRITICAL
+    }
+    expected_flag_codes = {
+        critical_flag
+        for event_id in CRITICAL_EVENT_IDS
+        for _, critical_flag in CONDITION_FLAG_GROUPS[event_id]
+    }
+    assert CRITICAL_FLAG_CODES == expected_flag_codes
 
 
 def test_parse_replay_flag():

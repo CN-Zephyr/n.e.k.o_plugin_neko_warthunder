@@ -15,6 +15,8 @@ from __future__ import annotations
 # mapping it to stall caused high-G/loss-of-control cases to be spoken as stall.
 CONDITION_FLAG_GROUPS: dict[str, list[tuple[str, str]]] = {
     "stall_risk": [("stall_warning", "stall_critical")],
+    "high_aoa": [("aoa_high", "aoa_critical")],
+    "over_g": [("over_g", "over_g_critical")],
     "overheat": [("engine_overheat", "engine_overheat_critical"), ("oil_overheat", "oil_overheat_critical")],
     "low_fuel": [("fuel_low", "fuel_critical")],
     "low_alt_danger": [("altitude_low", "altitude_critical")],

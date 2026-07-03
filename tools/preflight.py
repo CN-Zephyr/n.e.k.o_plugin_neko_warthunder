@@ -292,7 +292,7 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check should report 369/369 passed")
+    print("- baseline: logic self-check should report 379/379 passed")
     print("- vehicle profile id audit must keep Wiki gameId / runtime vehicle_type identity policy intact")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
     print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and short-reply constrained")
@@ -368,3 +368,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
