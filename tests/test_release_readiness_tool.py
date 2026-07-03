@@ -25,6 +25,7 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "logic self-check",
             "pytest",
             "rc docs audit",
+            "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
             "host contract gate",
@@ -44,23 +45,24 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "final smoke packet",
         ]
         assert checks[2].cmd == ["uv", "run", "python", "tools/rc_audit.py"]
-        assert checks[3].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
-        assert checks[4].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
-        assert checks[5].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
-        assert checks[5].cmd[-2] == "--host-root"
-        assert checks[6].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
-        assert checks[7].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
-        assert checks[8].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
-        assert checks[9].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
-        assert checks[10].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
-        assert checks[11].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
-        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
-        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
-        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
-        assert checks[15].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
-        assert checks[16].cmd == ["uv", "run", "python", "tools/replay.py"]
-        assert checks[17].cwd == host.resolve()
-        assert checks[17].cmd == [
+        assert checks[3].cmd == ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"]
+        assert checks[4].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
+        assert checks[5].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
+        assert checks[6].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
+        assert checks[6].cmd[-2] == "--host-root"
+        assert checks[7].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
+        assert checks[8].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
+        assert checks[9].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
+        assert checks[10].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
+        assert checks[11].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
+        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
+        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
+        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
+        assert checks[15].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
+        assert checks[16].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
+        assert checks[17].cmd == ["uv", "run", "python", "tools/replay.py"]
+        assert checks[18].cwd == host.resolve()
+        assert checks[18].cmd == [
             "uv",
             "run",
             "pytest",
@@ -137,6 +139,7 @@ def test_release_readiness_plan_does_not_require_running_services():
             "logic self-check",
             "pytest",
             "rc docs audit",
+            "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
             "host contract gate",
@@ -248,6 +251,7 @@ def test_release_readiness_cli_json_is_machine_readable():
     assert payload["verdict"] == "not_run"
     assert payload["release_scope"]["ship_status"] == "not_run"
     assert "rc docs audit" in [check["name"] for check in payload["checks"]]
+    assert "vehicle profile id audit" in [check["name"] for check in payload["checks"]]
     assert "release defaults gate" in [check["name"] for check in payload["checks"]]
     assert "output freshness gate" in [check["name"] for check in payload["checks"]]
     assert "replay degrade gate" in [check["name"] for check in payload["checks"]]
@@ -297,6 +301,7 @@ def test_release_readiness_cli_text_names_next_step():
 
     assert rc == 0
     assert "# neko_warthunder v1 release readiness" in text
+    assert "vehicle profile id audit" in text
     assert "release defaults gate" in text
     assert "output freshness gate" in text
     assert "replay degrade gate" in text

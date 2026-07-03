@@ -20,6 +20,7 @@ def test_output_freshness_gate_passes_required_contracts():
         "backpressure_lower_priority",
         "higher_priority_preempts",
         "death_bypasses_backpressure",
+        "critical_safety_bypasses_backpressure",
         "dry_run_side_effect_free",
         "context_target_session",
     ]
@@ -37,6 +38,7 @@ def test_output_freshness_gate_passes_required_contracts():
     assert result["policy"]["real_battle_push_requires_pending_replace_metadata"] is True
     assert result["policy"]["real_battle_push_requires_generic_host_callback_contract"] is True
     assert result["policy"]["death_event_bypasses_backpressure"] is True
+    assert result["policy"]["critical_safety_event_bypasses_backpressure"] is True
     assert result["policy"]["expired_events_must_not_push"] is True
 
 

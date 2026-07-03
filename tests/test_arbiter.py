@@ -72,7 +72,7 @@ def test_rate_limit_buffer_then_flush():
     assert c is not None and c.event_id == "low_fuel"               # 窗口到点 flush
 
 
-def test_window_flush_refreshes_continuous_warning_timestamp():
+def test_window_flush_preserves_latest_observation_timestamp():
     arb = _arb()
     a, _ = arb.decide([BattleEvent("low_fuel", level="warning", ts=1000.0)], IN_FLIGHT, 1000.0)
     b, _ = arb.decide([BattleEvent("overheat", level="warning", ts=1003.0)], IN_FLIGHT, 1003.0)
@@ -81,7 +81,7 @@ def test_window_flush_refreshes_continuous_warning_timestamp():
     assert a is not None and a.event_id == "low_fuel"
     assert b is None
     assert c is not None and c.event_id == "overheat"
-    assert c.ts == 1013.0
+    assert c.ts == 1003.0
     assert any(item["result"] == "spoken" and item["reason"] == "window_flush" for item in chain)
 
 

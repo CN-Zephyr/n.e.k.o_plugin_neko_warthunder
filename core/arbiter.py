@@ -11,22 +11,6 @@ from typing import Any
 from .contracts import CRITICAL_RISK, DEAD, BattleEvent, category_allowed
 from .safety_guard import SafetyGuard
 
-CONTINUOUS_WINDOW_EVENTS = frozenset(
-    {
-        "stall_risk",
-        "low_alt_danger",
-        "overspeed",
-        "overheat",
-        "low_fuel",
-        "ground_target_nearby",
-        "enemy_nearby",
-        "air_threat_nearby",
-        "enemy_on_six",
-        "tailing_risk",
-    }
-)
-
-
 class Arbiter:
     def __init__(self, safety: SafetyGuard) -> None:
         self.safety = safety
@@ -159,7 +143,6 @@ class Arbiter:
             if not allowed:
                 chain.append(_rec(chosen, "dropped", gate_reason.replace("scenario_gated", "scenario_gated_on_flush", 1)))
                 return None, chain
-            chosen = _refresh_window_event_ts(chosen, now)
             self._fire(chosen, now, critical=False)
             chain.append(_rec(chosen, "spoken", "window_flush"))
             return chosen, chain
@@ -209,18 +192,6 @@ def _rank(e: BattleEvent) -> tuple[int, int, float]:
 
 def _top(events: list[BattleEvent]) -> BattleEvent:
     return max(events, key=_rank)
-
-
-def _refresh_window_event_ts(event: BattleEvent, now: float) -> BattleEvent:
-    if event.event_id not in CONTINUOUS_WINDOW_EVENTS:
-        return event
-    return BattleEvent(
-        event.event_id,
-        edge=event.edge,
-        payload=dict(event.payload),
-        ts=now,
-        level=event.level,
-    )
 
 
 def _trade_kill_event(kill_event: BattleEvent, death_event: BattleEvent, now: float) -> BattleEvent:

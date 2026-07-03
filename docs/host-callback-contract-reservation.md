@@ -25,7 +25,7 @@ inside `push_message(..., metadata=...)`:
       "max_chars": 28,
       "single_turn": true,
       "drop_followup_chunks": true,
-      "style_hint": "Style: one short Chinese line; urgent copilot command; no chatty filler."
+      "style_hint": "Style: one short Chinese line; urgent command; no filler."
     },
     "quiet_window": {
       "policy": "suppress_non_urgent_during_user_input",

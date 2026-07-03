@@ -158,10 +158,11 @@ def test_target_cue_prompt_keeps_soft_copilot_role_boundary():
         BattleEvent("air_threat_nearby", payload={"distance_m": 1200, "clock": 2})
     )
 
-    assert "back-seater/WSO" in prompt
-    assert "Keep the pilot in control" in prompt
-    assert "prefer what is observed and where it is" in prompt
-    assert "only use facts shown in [当前]" in prompt
+    assert "后座/WSO" in prompt
+    assert "只报事实和动作建议" in prompt
+    assert "不接管" in prompt
+    assert "目标/威胁只报观测到的方位距离" in prompt
+    assert "禁句：交给我/我来/已锁定/开火" in prompt
 
 
 def test_spawn_prompt_forbids_invented_target_or_radar_cues():
@@ -169,7 +170,8 @@ def test_spawn_prompt_forbids_invented_target_or_radar_cues():
 
     assert "只说上机/就位/跟上" in prompt
     assert "不要报敌情、方位、雷达目标、锁定、击杀或威胁" in prompt
-    assert "never invent contacts, headings, locks" in prompt
+    assert "不编锁定/开火/击杀/损伤/威胁" in prompt
+    assert "不反问、不续聊" in prompt
 
 
 def test_proximity_push_message_parts_text_excludes_unsafe_raw():
@@ -312,6 +314,32 @@ def test_trade_kill_prompt_acknowledges_loss_but_still_praises_trade():
         BattleEvent("you_killed", payload={"domain": "air", "trade_death": True})
     )
 
-    assert "trade kill" in prompt
-    assert "vehicle was lost" in prompt
-    assert "not wasted" in prompt
+    assert "载具没了" in prompt
+    assert "换掉一个" in prompt
+    assert "不展开分析" in prompt
+
+
+def test_kill_prompt_avoids_overexcited_chatty_intent_words():
+    prompt = NekoDispatcher(None).build_prompt(BattleEvent("you_killed", payload={"domain": "air"}))
+
+    assert "一句短夸" in prompt
+    assert "庆祝" not in prompt
+    assert "调侃" not in prompt
+    assert "不反问、不续聊" in prompt
+
+
+def test_common_battle_prompts_stay_compact():
+    dispatcher = NekoDispatcher(None)
+    events = [
+        BattleEvent("spawn"),
+        BattleEvent("low_alt_danger", level="critical", payload={"radio_altitude_m": 8, "climb_ms": -3}),
+        BattleEvent("overspeed", level="critical", payload={"ias_kmh": 1400, "mach": 1.12}),
+        BattleEvent("air_threat_nearby", payload={"clock": 2, "distance_m": 1200}),
+        BattleEvent("you_killed", payload={"kill_count": 2, "domain": "air"}),
+        BattleEvent("you_died", payload={"domain": "air", "cause": "shot_down"}),
+    ]
+
+    for event in events:
+        prompt = dispatcher.build_prompt(event)
+        assert len(prompt) <= 360
+        assert len(prompt.splitlines()) <= 4

@@ -47,33 +47,29 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "battle_end": 8.0,
 }
 COPILOT_ROLE_BOUNDARY = (
-    "Role boundary: speak like a fighter back-seater/WSO. Give sensor, target, "
-    "navigation, threat, and checklist cues. Keep the pilot in control; avoid "
-    "sounding like you are taking over the aircraft or weapons. Fact boundary: "
-    "only use facts shown in [当前]; never invent contacts, headings, locks, "
-    "enemy maneuvers, damage, kills, or threats."
+    "边界：后座/WSO，只报事实和动作建议；不接管、不编锁定/开火/击杀/损伤/威胁。"
 )
 
 # 每个事件的"要求行"意图（不写最终台词，台词归角色 LLM）。
 _INTENT: dict[str, str] = {
-    "stall_risk": "濒临失速，提醒 {MASTER_NAME} 赶紧加速/松杆改出",
-    "low_alt_danger": "离地太近还在下沉，催 {MASTER_NAME} 立刻拉起",
-    "overspeed": "速度过头，提醒 {MASTER_NAME} 收油门改出、别把翼子拉掉",
-    "overheat": "发动机过热，建议 {MASTER_NAME} 收油门散热",
-    "low_fuel": "油不多了，提醒 {MASTER_NAME} 留意返航/续航",
-    "ground_target_nearby": "附近有任务目标点，提醒 {MASTER_NAME} 看方位，别飞过头",
-    "enemy_nearby": "附近有敌方目标接近，提醒 {MASTER_NAME} 保持观察、别被偷",
-    "air_threat_nearby": "有空中威胁接近，提醒 {MASTER_NAME} 抬头看方位",
-    "enemy_on_six": "后方有威胁接近，提醒 {MASTER_NAME} 不要让对面贴住",
-    "tailing_risk": "后方威胁持续接近，提醒 {MASTER_NAME} 立刻改出、别被咬住",
-    "free_text_activity": "提醒 {MASTER_NAME} 检测到新的战场文字来源，只做安全泛化提醒，不复读原文",
-    "you_killed": "为 {MASTER_NAME} 刚才的击杀庆祝/调侃一句",
-    "you_died": "{MASTER_NAME} 刚才阵亡/载具损失了，按事实简短共情安慰一句",
+    "stall_risk": "濒临失速，提醒 {MASTER_NAME} 加速/松杆改出",
+    "low_alt_danger": "离地太近还在下沉，提醒 {MASTER_NAME} 立刻拉起",
+    "overspeed": "速度过头，提醒 {MASTER_NAME} 收油门改出，别硬拉",
+    "overheat": "发动机温度高，提醒 {MASTER_NAME} 收油门散热",
+    "low_fuel": "油不多了，提醒 {MASTER_NAME} 留油返航",
+    "ground_target_nearby": "报任务目标点接近，提醒 {MASTER_NAME} 看方位",
+    "enemy_nearby": "报附近接触，提醒 {MASTER_NAME} 保持观察",
+    "air_threat_nearby": "报空中威胁方位，提醒 {MASTER_NAME} 抬头确认",
+    "enemy_on_six": "报后方威胁，提醒 {MASTER_NAME} 别让对面贴住",
+    "tailing_risk": "报后方持续贴近，提醒 {MASTER_NAME} 立刻改出",
+    "free_text_activity": "提醒 {MASTER_NAME} 检测到战场文字来源，只做安全泛化提示，不复读原文",
+    "you_killed": "确认刚才击杀，给 {MASTER_NAME} 一句短夸",
+    "you_died": "按事实安抚 {MASTER_NAME}，准备重整",
     "spawn": (
-        "出场跟 {MASTER_NAME} 打个招呼、就位；只说上机/就位/跟上，"
+        "上机就位，跟 {MASTER_NAME} 打声短招呼；只说上机/就位/跟上，"
         "不要报敌情、方位、雷达目标、锁定、击杀或威胁"
     ),
-    "battle_end": "这局结束了，给 {MASTER_NAME} 收个尾/小结一句",
+    "battle_end": "这局结束，给 {MASTER_NAME} 收尾一句，不展开战报",
 }
 
 _RECOVERY_INTENT = "刚才的危险解除了，跟 {MASTER_NAME} 说句'好险、稳住了'之类的"
@@ -180,8 +176,7 @@ def _reply_style_contract(event: BattleEvent) -> str:
     if event.event_id == "you_killed":
         if event.payload.get("trade_death"):
             return (
-                "Style: one short Chinese line; acknowledge the vehicle was lost, "
-                "but praise the trade kill as not wasted; no analysis."
+                "Style: one short Chinese line; vehicle was lost, but praise the trade kill as not wasted; no analysis."
             )
         kill_count = 1
         try:
@@ -189,24 +184,18 @@ def _reply_style_contract(event: BattleEvent) -> str:
         except (TypeError, ValueError):
             kill_count = 1
         if kill_count > 1:
-            return "Style: one short Chinese line; acknowledge the multi-kill once; no repeated praise."
-        return "Style: one short Chinese line; confirm the kill once; no follow-up hype."
+            return "Style: one short Chinese line; acknowledge multi-kill once; no repeated praise."
+        return "Style: one short Chinese line; confirm kill once; no hype."
     if event.event_id == "you_died":
-        return "Style: one short Chinese line; calm reset encouragement; no analysis."
+        return "Style: one short Chinese line; calm reset; no analysis."
     if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
-        return "Style: one short Chinese line; urgent copilot command; no chatty filler."
+        return "Style: one short Chinese line; urgent command; no filler."
     if event.event_id in {"air_threat_nearby", "enemy_nearby", "enemy_on_six", "tailing_risk"}:
-        return (
-            "Style: one short Chinese line; direct situational cue; no repeated wording; "
-            "avoid takeover wording."
-        )
+        return "Style: one short Chinese line; situational cue; no takeover."
     if event.event_id == "ground_target_nearby":
-        return (
-            "Style: one short Chinese line; target/navigation cue only; keep the pilot in control; "
-            "avoid takeover wording."
-        )
+        return "Style: one short Chinese line; target/nav cue only; no takeover."
     if event.event_id == "overheat":
-        return "Style: one short Chinese line; direct situational cue; no repeated wording."
+        return "Style: one short Chinese line; situational cue; no repeated wording."
     return "Style: one short Chinese line; concise copilot cue."
 
 
@@ -220,9 +209,34 @@ def _copilot_role_boundary(event: BattleEvent) -> str:
     }:
         return (
             COPILOT_ROLE_BOUNDARY
-            + " For target cues, prefer what is observed and where it is."
+            + " 目标/威胁只报观测到的方位距离；禁句：交给我/我来/已锁定/开火。"
         )
     return COPILOT_ROLE_BOUNDARY
+
+
+def _prompt_style_hint(event: BattleEvent) -> str:
+    if event.event_id == "you_killed":
+        if event.payload.get("trade_death"):
+            return "风格：一句中文短句；载具没了也要肯定换掉一个，不展开分析。"
+        kill_count = 1
+        try:
+            kill_count = int(event.payload.get("kill_count") or 1)
+        except (TypeError, ValueError):
+            kill_count = 1
+        if kill_count > 1:
+            return "风格：一句中文短句；只夸一次连杀，别连续刷屏。"
+        return "风格：一句中文短句；确认击杀，克制一点。"
+    if event.event_id == "you_died":
+        return "风格：一句中文短句；安抚并重整，不复盘。"
+    if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
+        return "风格：一句中文短句；急促指令，不闲聊。"
+    if event.event_id in {"air_threat_nearby", "enemy_nearby", "enemy_on_six", "tailing_risk"}:
+        return "风格：一句中文短句；只报态势，不接管武器。"
+    if event.event_id == "ground_target_nearby":
+        return "风格：一句中文短句；只做目标/航向提示。"
+    if event.event_id == "overheat":
+        return "风格：一句中文短句；直接提醒处置。"
+    return "风格：一句中文短句；干净利落。"
 
 
 def _host_interrupt_pending(event: BattleEvent) -> bool:
@@ -446,9 +460,9 @@ class NekoDispatcher:
         lines = []
         if fact:
             lines.append(f"[当前] {fact}")
-        lines.append(f"[要求] {intent}。一句话、口语化、像副驾驶喊话，别复述数据、别解释流程。")
+        lines.append(f"[要求] {intent}。一句中文短句；不反问、不续聊、别复述数字/流程。")
         lines.append(_copilot_role_boundary(event))
-        lines.append(_reply_style_contract(event))
+        lines.append(_prompt_style_hint(event))
         return "\n".join(lines)
 
     def push_event(self, event: BattleEvent, *, dry_run: bool) -> str:
@@ -631,7 +645,7 @@ class NekoDispatcher:
         return f"pushed(event={event.event_id}/{event.edge})"
 
     def _is_backpressured(self, event: BattleEvent, now: float) -> bool:
-        if event.event_id in BACKPRESSURE_BYPASS_EVENTS:
+        if event.event_id in BACKPRESSURE_BYPASS_EVENTS or event.level == "critical":
             return False
         guard = _output_backpressure_seconds(self.plugin)
         if guard <= 0 or self._last_push_at is None:

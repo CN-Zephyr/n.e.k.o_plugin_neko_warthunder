@@ -26,6 +26,7 @@ def test_preflight_plan_contains_documented_checks():
         assert names == [
             "logic self-check",
             "pytest",
+            "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
             "host contract gate",
@@ -55,34 +56,36 @@ def test_preflight_plan_contains_documented_checks():
         ]
         assert checks[0].cwd == plugin_root.resolve()
         assert checks[0].cmd == ["uv", "run", "python", "tests/run_logic_tests.py"]
-        assert checks[2].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
-        assert "dry_run-first" in checks[2].review_hint
-        assert checks[3].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
-        assert "coalesce" in checks[3].review_hint
-        assert "short-reply" in checks[3].review_hint
-        assert checks[4].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
-        assert checks[4].cmd[-2] == "--host-root"
-        assert "quieting" in checks[4].review_hint
-        assert checks[5].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
-        assert "hudmsg" in checks[5].review_hint
-        assert "push_message" in checks[5].review_hint
-        assert checks[6].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
-        assert "replay=true" in checks[6].review_hint
+        assert checks[2].cmd == ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"]
+        assert "vehicle_type" in checks[2].review_hint
+        assert checks[3].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
+        assert "dry_run-first" in checks[3].review_hint
+        assert checks[4].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
+        assert "coalesce" in checks[4].review_hint
+        assert "short-reply" in checks[4].review_hint
+        assert checks[5].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
+        assert checks[5].cmd[-2] == "--host-root"
+        assert "quieting" in checks[5].review_hint
+        assert checks[6].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
+        assert "hudmsg" in checks[6].review_hint
         assert "push_message" in checks[6].review_hint
-        assert checks[7].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
-        assert "interference unowned" in checks[7].review_hint
-        assert checks[8].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
-        assert "powertrain_failure" in checks[8].review_hint
-        assert checks[9].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
-        assert "proximity.events" in checks[9].review_hint
-        assert checks[10].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
-        assert checks[11].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
-        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
-        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
-        assert checks[14].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
-        assert checks[15].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py"]
-        assert checks[16].cwd == host_root.resolve()
-        assert checks[16].cmd == [
+        assert checks[7].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
+        assert "replay=true" in checks[7].review_hint
+        assert "push_message" in checks[7].review_hint
+        assert checks[8].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
+        assert "interference unowned" in checks[8].review_hint
+        assert checks[9].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
+        assert "powertrain_failure" in checks[9].review_hint
+        assert checks[10].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
+        assert "proximity.events" in checks[10].review_hint
+        assert checks[11].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
+        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
+        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
+        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
+        assert checks[15].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
+        assert checks[16].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py"]
+        assert checks[17].cwd == host_root.resolve()
+        assert checks[17].cmd == [
             "uv",
             "run",
             "pytest",
@@ -91,12 +94,12 @@ def test_preflight_plan_contains_documented_checks():
             "tests/unit/test_proactive_sm_integration.py",
             "-q",
         ]
-        assert checks[17].cwd == host_root.resolve()
-        assert checks[17].cmd[-1] == str(plugin_root.resolve())
-        assert checks[18].cmd == ["uv", "run", "python", "tools/live_monitor.py", "--count", "1"]
-        assert "dry_run" in checks[18].review_hint
-        assert "paused" in checks[18].review_hint
-        assert "8112" in checks[18].review_hint
+        assert checks[18].cwd == host_root.resolve()
+        assert checks[18].cmd[-1] == str(plugin_root.resolve())
+        assert checks[19].cmd == ["uv", "run", "python", "tools/live_monitor.py", "--count", "1"]
+        assert "dry_run" in checks[19].review_hint
+        assert "paused" in checks[19].review_hint
+        assert "8112" in checks[19].review_hint
         assert checks[-1].cmd == [
             "uv",
             "run",
@@ -183,6 +186,7 @@ def test_preflight_plan_skips_optional_sample_when_missing():
         assert names == [
             "logic self-check",
             "pytest",
+            "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
             "host contract gate",
@@ -239,7 +243,8 @@ def test_preflight_dry_run_prints_commands_without_running():
         assert rc == 0
         assert "# neko_warthunder offline preflight" in text
         assert "## Quick read" in text
-        assert "baseline: logic self-check should report 362/362 passed" in text
+        assert "baseline: logic self-check should report 369/369 passed" in text
+        assert "vehicle profile id audit must keep" in text
         assert "release defaults gate must keep dry_run-first" in text
         assert "output freshness gate must prove battle pushes are fresh" in text
         assert "host War Thunder contract tests should pass" in text
@@ -260,6 +265,8 @@ def test_preflight_dry_run_prints_commands_without_running():
         assert "watch live_monitor Summary first" in text
         assert "uv run python tests/run_logic_tests.py" in text
         assert "uv run pytest -c tests/pytest.ini tests -q" in text
+        assert "vehicle profile id audit" in text
+        assert "uv run python tools/vehicle_profile_id_audit.py" in text
         assert "release defaults gate" in text
         assert "uv run python tools/release_defaults_gate.py" in text
         assert "output freshness gate" in text

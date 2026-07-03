@@ -1,13 +1,13 @@
 {
   "_README": {
     "说明": "各机型告警临界值配置。合并优先级：_default < _classes[该机型的class] < 机型自身字段。",
-    "机型代号来源": "键名必须是游戏 indicators 的 type 字段（实测最可靠）。注意：它【不一定等于】datamine 文件名——例如实测 type 'hs-123a-1_china'(连字符+国家后缀) 对应 datamine 文件名却是 'hs_123a_1'，两套命名规则不统一。大量代号两者恰好一致(如 j_15t/a6m2_zero/bf-109f-4)，故未实测的机型以 datamine 名作尽力填充；若某机进战局后 profile_matched=false，请以 /api/processed 里的真实 vehicle_type 为准修正。",
+    "机型代号来源": "键名必须是游戏 indicators 的 type 字段（实测最可靠）。补库候选优先使用 War Thunder Wiki 的 /unit/<gameId> slug 或页面内 gameId；这个 gameId 通常也就是数据层能从游戏 indicators 读到的 vehicle_type，例如 SB 2M-100A 页面 /unit/sb_2m_100 对应 sb_2m_100。注意：vehicle_type / Wiki gameId 【不一定等于】datamine 飞模文件名——例如实测 type 'hs-123a-1_china'(连字符+国家后缀) 对应 datamine 文件名却是 'hs_123a_1'，两套命名规则不统一。大量代号三者恰好一致(如 j_15t/a6m2_zero/bf-109f-4)，故没有 Wiki/实机确认的机型才以 datamine 名作尽力填充；若某机进战局后 profile_matched=false，请以 /api/processed 里的真实 vehicle_type 为准修正。",
     "性能数值来源": "重要：Datamine 的 FM JSON 可提供部分候选字段，如 Passport.Alt.stallSpeed、Aerodynamics.WingPlane.FlapsPolar*.alphaCritHigh、Autopilot.Pitch.AoaLimits、Strength.VNE/MNE；这些适合复核 stall/aoa/overspeed，但仍是候选告警线，不等于已实机验证。过热字段是热模型参数，不是 HUD 过热 warn/critical 阈值。本表早期 class 默认仍是工程估算；热门 exact/family 可用 tools/datamine_profile_candidates.py 与 tools/profile_candidate_diff.py 复核后小批量补入。温度阈值不得从 _default 泛化到所有载具，必须由 class/exact/family 显式给出；喷气机 turbine_temperature 是游戏遥测量，不等于现实发动机 TIT。modern_jet 的 j_15t IAS 超速仍保留真机断翼校准：实测 ~1609 km/h IAS 断翼，crit 1500 在断翼前约 96km/h/3.6s 触发；Datamine MNE 只补 Mach 候选。注意：断翼在遥测里无直接信号(无 hudmsg、/state 无结构损坏字段)，只能靠 IAS/Mach 阈值【预测式预警】，无法事后检出撕裂瞬间。",
     "如何确认自己机型的代号": "进入战局后访问 http://localhost:8112/api/processed，看 vehicle_type 字段；若该代号不在本表则回退 _default（profile_matched=false），可自行新增一条。",
     "加力时间说明": "afterburner_max_sec=0 表示不限/未知，不触发加力超时告警。喷气机在游戏内通常无加力时间限制；活塞机 WEP 的过热限制非固定秒数，故默认不计时，需要的话可自行按机型填写。",
     "字段含义": {
       "class": "引用 _classes 中的类别模板名",
-      "_tested": "true 表示该机型代号(type)已在游戏内实机采样验证过，最可靠；无此标记的为按 datamine 名尽力填充",
+      "_tested": "true 表示该机型代号(type)已在游戏内实机采样验证过，最可靠；无此标记的为按 Wiki gameId 或 datamine 名尽力填充",
       "fuel_time_warn_sec": "能估出油耗率时优先按剩余可飞时间告警：低于此秒数 -> 警告",
       "fuel_time_critical_sec": "剩余可飞时间低于此秒数 -> 危急",
       "fuel_low_fraction": "回退用：未估出油耗率(刚起飞)时，剩余燃油比例低于此 -> 警告(0~1)",

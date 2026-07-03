@@ -57,6 +57,12 @@ def build_checks(
             review_hint="release/status docs must not contain stale baselines or pre-V2 blocker language",
         ),
         Check(
+            "vehicle profile id audit",
+            plugin,
+            ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"],
+            review_hint="vehicle profile keys must follow Wiki gameId / runtime vehicle_type identity policy",
+        ),
+        Check(
             "release defaults gate",
             plugin,
             ["uv", "run", "python", "tools/release_defaults_gate.py"],

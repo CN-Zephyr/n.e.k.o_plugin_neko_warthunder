@@ -64,6 +64,7 @@ def run_gate() -> dict[str, Any]:
         _case_backpressure_suppresses_lower_priority(failures),
         _case_higher_priority_preempts_backpressure(failures),
         _case_death_bypasses_equal_priority_backpressure(failures),
+        _case_critical_safety_bypasses_backpressure(failures),
         _case_dry_run_side_effect_free(failures),
         _case_context_target_session(failures),
     ]
@@ -82,6 +83,7 @@ def run_gate() -> dict[str, Any]:
             "real_battle_push_requires_generic_host_callback_contract": True,
             "urgent_battle_events_require_interrupt_metadata": True,
             "death_event_bypasses_backpressure": True,
+            "critical_safety_event_bypasses_backpressure": True,
             "expired_events_must_not_push": True,
             "dry_run_must_not_push": True,
         },
@@ -233,6 +235,42 @@ def _case_death_bypasses_equal_priority_backpressure(failures: list[dict[str, st
         "push_calls": len(plugin.calls),
         "last_event": last_metadata.get("event_id"),
         "replace_pending": last_metadata.get("replace_pending"),
+        "interrupt_battle_event": last_metadata.get("interrupt_battle_event"),
+        "interrupt_pending": last_metadata.get("interrupt_pending"),
+    }
+
+
+def _case_critical_safety_bypasses_backpressure(failures: list[dict[str, str]]) -> dict[str, Any]:
+    plugin = _CapturePlugin()
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+
+    first = dispatcher.push_event(BattleEvent("you_died", level="critical", ts=99.0), dry_run=False)
+    second = dispatcher.push_event(BattleEvent("overspeed", level="critical", ts=104.0), dry_run=False)
+    if not first.startswith("pushed("):
+        failures.append({"case": "critical_safety_bypasses_backpressure", "target": "first", "reason": "not_pushed"})
+    if not second.startswith("pushed("):
+        failures.append({"case": "critical_safety_bypasses_backpressure", "target": "second", "reason": "not_pushed"})
+    _expect_equal(failures, "critical_safety_bypasses_backpressure", "push_calls", len(plugin.calls), 2)
+    last_metadata = plugin.calls[-1].get("metadata") or {} if plugin.calls else {}
+    _expect_equal(failures, "critical_safety_bypasses_backpressure", "last.event_id", last_metadata.get("event_id"), "overspeed")
+    _expect_equal(
+        failures,
+        "critical_safety_bypasses_backpressure",
+        "last.interrupt_battle_event",
+        last_metadata.get("interrupt_battle_event"),
+        True,
+    )
+    _expect_equal(
+        failures,
+        "critical_safety_bypasses_backpressure",
+        "last.interrupt_pending",
+        last_metadata.get("interrupt_pending"),
+        True,
+    )
+    return {
+        "name": "critical_safety_bypasses_backpressure",
+        "push_calls": len(plugin.calls),
+        "last_event": last_metadata.get("event_id"),
         "interrupt_battle_event": last_metadata.get("interrupt_battle_event"),
         "interrupt_pending": last_metadata.get("interrupt_pending"),
     }

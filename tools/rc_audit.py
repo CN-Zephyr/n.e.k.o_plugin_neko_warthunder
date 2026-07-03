@@ -101,10 +101,18 @@ STALE_BASELINES = [
     "357 passed",
     "360/360 passed",
     "360 passed",
+    "364/364 passed",
+    "364 passed",
+    "365/365 passed",
+    "365 passed",
+    "366/366 passed",
+    "366 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "362/362 passed",
+    "369/369 passed",
+    "vehicle profile id audit",
+    "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
     "tools/update_vehicle_profile_economy_from_datamine.py",
     "vehicle family coverage",

@@ -45,6 +45,12 @@ def build_checks(
         Check("logic self-check", plugin, ["uv", "run", "python", "tests/run_logic_tests.py"]),
         Check("pytest", plugin, ["uv", "run", "pytest", "-c", "tests/pytest.ini", "tests", "-q"]),
         Check(
+            "vehicle profile id audit",
+            plugin,
+            ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"],
+            "vehicle profile keys must follow Wiki gameId / runtime vehicle_type identity policy",
+        ),
+        Check(
             "release defaults gate",
             plugin,
             ["uv", "run", "python", "tools/release_defaults_gate.py"],
@@ -286,7 +292,8 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check should report 362/362 passed")
+    print("- baseline: logic self-check should report 369/369 passed")
+    print("- vehicle profile id audit must keep Wiki gameId / runtime vehicle_type identity policy intact")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
     print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and short-reply constrained")
     print("- host contract gate must prove the local host consumes short-reply metadata and quiets ordinary battle cues during user chat")

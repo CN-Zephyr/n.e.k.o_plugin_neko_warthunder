@@ -85,6 +85,13 @@ def _coverage_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
     return {group: sum(1 for entry in entries if _has_group(entry, group)) for group in groups}
 
 
+def _best_family_prefix_len(compact_vehicle_id: str, compact_prefixes: list[str]) -> int:
+    return max(
+        (len(prefix) for prefix in compact_prefixes if prefix and compact_vehicle_id.startswith(prefix)),
+        default=0,
+    )
+
+
 def _family_risks(
     *,
     family: dict[str, Any],
@@ -118,6 +125,11 @@ def build_report(*, profiles_path: str | pathlib.Path = DEFAULT_PROFILES) -> dic
     families = [family for family in profiles.get("_families", []) if isinstance(family, dict)]
     classes = profiles.get("_classes") if isinstance(profiles.get("_classes"), dict) else {}
     compact_exact = {vehicle_id: _compact_name(vehicle_id) for vehicle_id in exact}
+    compact_family_prefixes = [
+        _compact_name(str(family["prefix"]))
+        for family in families
+        if isinstance(family.get("prefix"), str) and family.get("prefix")
+    ]
 
     family_rows: list[dict[str, Any]] = []
     for family in families:
@@ -126,7 +138,16 @@ def build_report(*, profiles_path: str | pathlib.Path = DEFAULT_PROFILES) -> dic
         matches = [
             vehicle_id
             for vehicle_id, compact_vehicle_id in compact_exact.items()
-            if compact_prefix and compact_vehicle_id.startswith(compact_prefix)
+            if compact_prefix
+            and compact_vehicle_id.startswith(compact_prefix)
+            and len(compact_prefix) == _best_family_prefix_len(compact_vehicle_id, compact_family_prefixes)
+        ]
+        shadowed_matches = [
+            vehicle_id
+            for vehicle_id, compact_vehicle_id in compact_exact.items()
+            if compact_prefix
+            and compact_vehicle_id.startswith(compact_prefix)
+            and len(compact_prefix) < _best_family_prefix_len(compact_vehicle_id, compact_family_prefixes)
         ]
         infix_matches = [
             vehicle_id
@@ -151,6 +172,8 @@ def build_report(*, profiles_path: str | pathlib.Path = DEFAULT_PROFILES) -> dic
             "class_exists": bool(family_class and family_class in classes),
             "exact_count": len(matches),
             "exact_samples": matches[:8],
+            "shadowed_exact_count": len(shadowed_matches),
+            "shadowed_exact_samples": shadowed_matches[:8],
             "infix_exact_count": len(infix_matches),
             "infix_exact_samples": infix_matches[:8],
             "coverage": coverage,
