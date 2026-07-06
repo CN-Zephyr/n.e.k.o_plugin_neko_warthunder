@@ -60,10 +60,10 @@ def build_checks(
             "output freshness gate",
             plugin,
             ["uv", "run", "python", "tools/output_freshness_gate.py"],
-            "real battle push must carry coalesce/freshness/target/short-reply metadata and drop expired cues",
+            "real battle push must carry coalesce/freshness/target metadata and plugin-owned dialogue policy, then drop expired cues",
         ),
         Check(
-            "host contract gate",
+            "host boundary gate",
             plugin,
             [
                 "uv",
@@ -75,7 +75,7 @@ def build_checks(
                 "--host-root",
                 str(host),
             ],
-            "local host, when present, must consume short-reply metadata and apply War Thunder user-chat quieting",
+            "local host, when present, must not contain War Thunder-specific speech shaping or quiet-window hooks",
         ),
         Check(
             "free-text release gate",
@@ -160,22 +160,6 @@ def build_checks(
             )
         )
     if host.exists():
-        checks.append(
-            Check(
-                "host War Thunder contract tests",
-                host,
-                [
-                    "uv",
-                    "run",
-                    "pytest",
-                    "tests/unit/test_core_game_route_memory_contract.py",
-                    "tests/unit/test_callback_instruction_origin.py",
-                    "tests/unit/test_proactive_sm_integration.py",
-                    "-q",
-                ],
-                "host behavior must consume short battle replies and quiet ordinary War Thunder cues during user chat",
-            )
-        )
         checks.append(
             Check(
                 "plugin check",
@@ -292,12 +276,12 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check should report 379/379 passed")
+    print("- baseline: logic self-check should report 442/442 passed")
     print("- vehicle profile id audit must keep Wiki gameId / runtime vehicle_type identity policy intact")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
-    print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and short-reply constrained")
-    print("- host contract gate must prove the local host consumes short-reply metadata and quiets ordinary battle cues during user chat")
-    print("- host War Thunder contract tests should pass when a local N.E.K.O checkout is present")
+    print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and plugin-dialogue constrained")
+    print("- host boundary gate must prove the local host has no War Thunder-specific speech shaping hooks")
+    print("- host boundary gate should pass when a local N.E.K.O checkout is present")
     print("- free-text release gate must pass before hudmsg / combat.feed / awards can be unstubbed")
     print("- replay degrade gate must pass before replay=true traffic can be considered safe")
     print("- ownership replay gate must keep third-party sample ownership explicit and interference unowned")
@@ -344,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--host-root",
         default=str(_BASE.parent / "N.E.K.O"),
-        help="N.E.K.O host repository root for host contract gates and plugin check.",
+        help="N.E.K.O host repository root for host boundary gate and plugin check.",
     )
     parser.add_argument("--run", action="store_true", help="Execute checks instead of only printing them.")
     parser.add_argument("--report-output", help="Write the offline readiness Markdown report to this path.")

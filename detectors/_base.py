@@ -51,6 +51,7 @@ class ConditionDetector:
         confirm_enter: int = 2,
         confirm_exit: int = 2,
         payload_fn: Callable[[BattleState], dict[str, Any]] | None = None,
+        predicate: Callable[[BattleState], bool] | None = None,
         wants_recovery: bool = False,
     ) -> None:
         self.id = event_id
@@ -58,6 +59,7 @@ class ConditionDetector:
         self.confirm_enter = max(1, confirm_enter)
         self.confirm_exit = max(1, confirm_exit)
         self.payload_fn = payload_fn
+        self.predicate = predicate
         self.wants_recovery = wants_recovery
         self._phase = _ARMED
         self._count = 0
@@ -73,6 +75,10 @@ class ConditionDetector:
         self._level = "warning"
 
     def feed(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
+        if self.predicate is not None and not self.predicate(cur):
+            self.reset()
+            return None
+
         active_now, level = _eval_flags(cur, self.groups)
 
         # 进入侧：ARMED / CONFIRMING_ENTER

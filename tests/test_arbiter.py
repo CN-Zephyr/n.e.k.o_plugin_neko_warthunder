@@ -28,7 +28,7 @@ def test_scenario_gating_drops_low_fuel_in_combat():
 def test_spawning_allows_owned_kill_event():
     arb = _arb()
     chosen, chain = arb.decide([BattleEvent("you_killed", level="warning")], SPAWNING, 1000.0)
-    flushed, flush_chain = arb.decide([], SPAWNING, 1002.1)
+    flushed, flush_chain = arb.decide([], SPAWNING, 1006.1)
     assert chosen is None
     assert any(c["result"] == "buffered" and c["reason"] == "kill_coalescing" for c in chain)
     assert flushed is not None and flushed.event_id == "you_killed"
@@ -129,6 +129,17 @@ def test_map_awareness_allowed_in_flight_but_low_priority_dropped_in_combat_stre
     assert in_flight is not None and in_flight.event_id == "enemy_nearby"
     assert combat is None
     assert any(c["result"] == "dropped" and "map_low_priority" in c["reason"] for c in chain)
+
+
+def test_ground_enemy_nearby_is_not_dropped_as_low_priority_map_awareness():
+    chosen, chain = _arb().decide(
+        [BattleEvent("enemy_nearby", level="warning", payload={"domain": "ground"})],
+        COMBAT_STRESS,
+        1000.0,
+    )
+
+    assert chosen is not None and chosen.event_id == "enemy_nearby"
+    assert not any("map_low_priority" in c["reason"] for c in chain)
 
 
 def test_ground_target_awareness_is_low_priority_map_awareness():

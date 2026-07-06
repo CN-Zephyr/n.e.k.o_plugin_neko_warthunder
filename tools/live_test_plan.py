@@ -120,7 +120,7 @@ _ACTION_DETAILS: dict[str, dict[str, str]] = {
     "verify_output_backpressure": {
         "operation": "dry_run=false 时连续触发同优先级或更低优先级事件，观察是否被输出背压压住。",
         "monitor": "tools/live_monitor.py Summary、observe.last_output_status、output_backpressure、event_expired、push_message 时延。",
-        "pass": "Summary 显示 output=dispatcher_suppressed/dropped(output_backpressure) 或 output=dispatcher_suppressed/dropped(event_expired)，旧事件不再排队晚回，更高优先级事件仍能通过。",
+        "pass": "Summary 显示 output=dispatcher_suppressed/dropped(output_backpressure)、output=dispatcher_suppressed/dropped(event_expired) 或 repeated_event_collapsed；旧事件不再排队晚回，击杀、death、critical 安全事件仍能通过。",
         "fail": "连续事件仍造成晚回、刷屏，或更高优先级事件被误压。",
         "data_gap": "不依赖新 DTO；若现场事件不足，可用 test_say / generic kill-death smoke 补充。",
     },
@@ -231,7 +231,7 @@ def build_quick_checklist(steps: list[dict[str, Any]]) -> list[dict[str, str]]:
         {
             "order": "0",
             "user_action": "先跑离线门禁，或确认当天代码未变。",
-            "monitor": "tests/run_logic_tests.py、pytest、host War Thunder contract tests、plugin check、sample/live plan。",
+            "monitor": "tests/run_logic_tests.py、pytest、host boundary gate、plugin check、sample/live plan。",
             "pass": "离线基线通过，操作清单包含 P1/P2 待测项。",
         },
         {
@@ -294,7 +294,7 @@ def build_quick_checklist(steps: list[dict[str, Any]]) -> list[dict[str, str]]:
             {
                 "order": "7",
                 "user_action": "条件允许时关闭 `dry_run`，复测数值安全或 generic kill/death。",
-                "monitor": "push_message、last_output_status、output_backpressure、event_expired、kill_coalesced。",
+                "monitor": "push_message、last_output_status、output_backpressure、event_expired、repeated_event_collapsed、kill_coalesced。",
                 "pass": "真实开口不刷屏，旧回复晚到减少，过期旧事件不真实 push，更高优先级事件仍可插队。",
             }
         )

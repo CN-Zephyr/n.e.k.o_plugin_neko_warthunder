@@ -145,7 +145,8 @@ def test_final_smoke_packet_with_sample_lists_v2_and_free_text_actions_without_r
     assert "death or critical output replaces older warning cues" in text
     assert "P1 user_chat_quiet_window" in text
     assert "battle_reply_contract=short_tts_line" in json.dumps(payload, ensure_ascii=False)
-    assert "| enemy_on_six | covered_by_current_sample | 1/1 | dry_run_until_live_evidence | -" in text
+    assert "| enemy_nearby | needs_live_sample | 0/0 | safe_generic_after_final_smoke | generic_enemy_proximity_events |" in text
+    assert "| enemy_on_six | needs_live_sample | 1/0 | dry_run_until_live_evidence | enemy_on_six_trigger |" in text
     assert "| tailing_risk | needs_live_sample | 0/0 | dry_run_until_live_evidence | rear_close_threat_candidates |" in text
     assert "| ground_target_nearby | needs_live_sample | 0/0 | dry_run_until_live_evidence |" in text
     encoded = json.dumps(payload, ensure_ascii=False)

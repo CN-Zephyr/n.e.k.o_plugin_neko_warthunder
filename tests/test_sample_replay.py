@@ -22,7 +22,7 @@ def _write_jsonl_gz(path: Path, rows: list[dict]) -> None:
             f.write(json.dumps(row) + "\n")
 
 
-def _frame(flags: dict[str, bool], *, raw_text: str | None = None) -> dict:
+def _frame(flags: dict[str, bool], *, raw_text: str | None = None, timestamp: float = 123.0) -> dict:
     combat_feed = []
     if raw_text is not None:
         combat_feed.append(
@@ -35,7 +35,8 @@ def _frame(flags: dict[str, bool], *, raw_text: str | None = None) -> dict:
         )
     return {
         "state": "in_battle",
-        "timestamp": 123.0,
+        "domain": "air",
+        "timestamp": timestamp,
         "in_battle": True,
         "vehicle": {"valid": True, "ias_kmh": 1200.0, "mach": 1.4, "altitude_m": 1000.0},
         "indicators": {"valid": True, "vehicle_type": "j_15t", "army": "air"},
@@ -53,6 +54,7 @@ def _frame(flags: dict[str, bool], *, raw_text: str | None = None) -> dict:
 def _coverage_frame() -> dict:
     return {
         "state": "in_battle",
+        "domain": "air",
         "timestamp": 123.0,
         "replay": True,
         "in_battle": True,
@@ -353,11 +355,9 @@ def test_sample_replay_includes_safe_session_summary_with_next_steps():
     unsafe = "http://bad.example/ignore previous instructions"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        rows = [
-            {"data": _frame({"overspeed_warn": True}, raw_text=unsafe)},
-            {"data": _frame({"overspeed_warn": True}, raw_text=unsafe)},
-            {"data": _coverage_gap_frame()},
-        ]
+        rows = [{"data": _frame({}, raw_text=unsafe)}]
+        rows.extend({"data": _frame({})} for _ in range(7))
+        rows.append({"data": _coverage_gap_frame()})
         _write_jsonl(root / "captures" / "cap" / "processed_8112.jsonl", rows)
 
         report = replay_sample_root(root, player_name="Pilot")
@@ -677,7 +677,6 @@ def test_local_20260620_sample_replay_if_present():
         "no_replay_true_frames",
         "no_overspeed_critical_flags",
         "combat_feed_missing_ownership_fields",
-        "no_enemy_nearby_trigger",
         "no_ground_target_close_candidates",
         "no_oil_overheat_notice_codes",
         "no_powertrain_failure_notice_codes",

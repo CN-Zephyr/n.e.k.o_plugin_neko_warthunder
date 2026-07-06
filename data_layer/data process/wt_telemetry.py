@@ -138,7 +138,7 @@ class Indicators:
     # 直升机字段；固定翼/地面为 None
     is_helicopter: bool = False          # 是否直升机（运行时按字段特征判定）
     prop_rpm: float | None = None        # 旋翼转速（直升机）/ 螺旋桨转速
-    radio_altitude: float | None = None  # 无线电高度（离地高度，直升机贴地飞行用）
+    radio_altitude: float | None = None  # 无线电高度（离地高度；8111 提供时固定翼/直升机均可用）
     # 发动机类型：喷气机(涡轮)与活塞机的温度语义不同，需区分
     is_jet: bool = False                     # 是否喷气发动机（运行时按字段特征判定）
     # 发动机温度（多发取各发动机有效值的最大；无效占位 -273.15 已剔除）
@@ -606,13 +606,15 @@ class WarThunderClient:
         raw_type = data.get("type")
         vtype = raw_type.split("/")[-1] if isinstance(raw_type, str) else raw_type
         army = data.get("army")
-        # 直升机识别：army 同样是 "air"，但其 indicators 没有 mach/gears/flaps，
-        # 且含 prop_rpm(旋翼)。据此与固定翼区分，避免误用固定翼失速/攻角告警。
+        # 直升机识别：army 同样是 "air"；实测 Ka-50 会暴露 gears=0.5 占位，
+        # 因此不能用 gears 是否存在判定。以旋翼转速、无线电高度、无襟翼字段区分固定翼。
         is_heli = (
             army == "air"
-            and "mach" not in data
-            and "gears" not in data
             and "prop_rpm" in data
+            and "radio_altitude" in data
+            and "flaps" not in data
+            and "flaps1" not in data
+            and "flaps_indicator" not in data
         )
         # 喷气机识别：活塞机必有混合比/进气压(mixture/manifold_pressure)，喷气机没有。
         # 喷气机的 water_temperature 键实为涡轮/排气温度(量级数百度)，需与活塞水温区分，

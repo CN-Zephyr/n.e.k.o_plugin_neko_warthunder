@@ -18,16 +18,16 @@
 |---|---|---|---|
 | `stall_risk` | flags `stall_warning`/`stall_critical` | 边沿+debounce+迟滞+cooldown；不把高 AoA 混成失速播报 | ias_kmh, aoa_deg, radio_altitude_m（若有）, altitude_m |
 | `high_aoa` | flags `aoa_high` / `aoa_critical` | 独立飞控告警；不复用失速话术 | aoa_deg, ias_kmh, g_now |
-| `over_g` | flags `over_g` / `over_g_critical` | 独立飞控告警；用数据层按 profile/datamine 候选计算的过载 flag | g_now, ias_kmh, aoa_deg |
+| `over_g` | flags `over_g` / `over_g_critical` | 独立飞控告警；数据层优先按 profile 的 Instructor G 限制计算，缺少时回退 datamine 结构候选 | g_now, ias_kmh, aoa_deg |
 | `overspeed` | flags `overspeed_warn` / `overspeed_critical`（数据层 v1.6 已提供，插件侧待验证） | 同上 | ias_kmh, mach |
 | `overheat` | flags `engine_overheat`/`engine_overheat_critical`（OR `oil_overheat*`）；或 `hud_notices.feed[].code=engine_overheat/oil_overheat` | flags 走边沿+debounce；hud_notices 按 id 去重（不抢占） | temp_c；或 safe notice code |
 | `low_fuel` | flags `fuel_low`/`fuel_critical` | 同上（仅 IN_FLIGHT） | fuel_fraction, fuel_remaining_sec |
 | `low_alt_danger` | flags `altitude_low`/`altitude_critical` + `radio_altitude_m`（AGL，优先） | 同上；`altitude_m` 仅作为 MSL/海拔上下文，不作为优先离地判断 | radio_altitude_m, altitude_m, climb_ms |
 | `spawn` | `state` not_in_battle→in_battle / 新 `vehicle_type` | 边沿一次 | vehicle_type |
-| `you_died` | `combat.feed[].is_my_death == true` | 新 id 去重；不回退到 `vehicle_valid` 死亡播报 | cause, killer_name, killer_vehicle |
-| `you_killed` | `combat.feed[].is_my_kill == true` | 新 id 去重 + 多杀合并 | victim, victim_vehicle |
+| `you_died` | `combat.feed[].is_my_death == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；不回退到 `vehicle_valid` 死亡播报 | cause, killer_name, killer_vehicle |
+| `you_killed` | `combat.feed[].is_my_kill == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；多杀合并 | victim, victim_vehicle |
 | `battle_end` | `mission_status` / `state` | 边沿一次 | result, my{kills,deaths} |
-| `enemy_nearby` | `proximity.events[]` | V2：按 id 去重；低优先级，COMBAT_STRESS 下抑制 | distance_m, compass, clock, target_type |
+| `enemy_nearby` | `proximity.events[]` | V2：按 id 去重；按域门控，空战普通近敌是低优先级，陆战/海战近敌可作为交战观察信号 | distance_m, compass, clock, target_type, domain |
 | `air_threat_nearby` | `proximity.events[].is_air == true` OR `situation.nearest_air_threat` / `situation.enemies[]` 空中目标进入 5000m | V2：边沿事实按 id 去重，连续态势按距离段/钟点去重；可在 IN_FLIGHT / COMBAT_STRESS 下提示 | distance_m, compass, clock, relative_deg |
 | `enemy_on_six` | `proximity.events[]` OR `situation.enemies[]` 中 `clock in 5/6/7` 或后向 `relative_deg` 且进入 5000m | V2：低置信后方威胁，不等同完整尾随判定 | distance_m, clock, relative_deg |
 | `tailing_risk` | 连续近距离后方 `proximity.events[]` OR 连续近距离后方 `situation.enemies[]` | V2+：保守持续后方威胁；不是完整 `being_tailed` | distance_m, clock, relative_deg |
@@ -129,7 +129,7 @@ v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空�
 - 必须字段：`combat.feed[].id`、`combat.feed[].is_my_kill == true`
 - 推荐字段：`victim`、`victim_vehicle`、`victim_is_ai`、`assist_name`
 - 缺字段降级：不可降级——无 `is_my_kill == true` 即无此事件；不回退到 raw hudmsg 文本匹配
-- 抓包要求：采多条真实击杀/助攻文本并确认 `combat.feed` id 单调递增、`is_my_kill` 只在我的击杀时为 true；2026-06-23 已观察到 `is_my_kill=true` 正向路径，`SPAWNING` gate 问题已修复；2026-06-28 又补 `CRITICAL_RISK` 延迟保留策略，下一轮需复测危急期间击杀不会抢播也不会丢失
+- 抓包要求：采多条真实击杀/助攻文本并确认 `combat.feed` id 单调递增、`is_my_kill` 只在我的击杀时为 true；2026-06-23 已观察到 `is_my_kill=true` 正向路径，`SPAWNING` gate 问题已修复；2026-06-28 又补 `CRITICAL_RISK` 延迟保留策略；2026-07-05 修复同一 feed id 从未归属后补为 `is_my_kill=true` 时不补触发的问题，下一轮需复测危急期间击杀不会抢播也不会丢失
 - 误判风险：中——主要取决于数据层 ownership flag 与 `/api/identity` seam；插件侧不再承担多语言文本解析。手动 identity seam 已有真机正向证据。
 
 ### B2 被击落 / 死亡 `you_died`
@@ -177,7 +177,7 @@ v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空�
 - 去重：按 `id` 单调去重；同一 proximity id 不重复播。
 - 输出：只使用 safe metadata（距离、方位、钟点、类别），不复读 raw 文本或玩家名。
 - 事件拆分：普通 proximity 目标为 `enemy_nearby`，空中目标为 `air_threat_nearby`，后向钟点 / 相对角度为 `enemy_on_six`，连续近距离后方 proximity 事件或 situation 帧保守升级为 `tailing_risk`。
-- 门控：`enemy_nearby` 是低优先级，COMBAT_STRESS 下抑制；`air_threat_nearby` / `enemy_on_six` / `tailing_risk` 可进入 IN_FLIGHT / COMBAT_STRESS 队列；CRITICAL_RISK / DEAD / SPAWNING 仍按 Arbiter 压制。
+- 门控：`enemy_nearby` 按域分流。空战/未知域下仍是低优先级 map awareness，COMBAT_STRESS 下抑制；陆战/海战域下视为近敌交战观察信号，COMBAT_STRESS 下可放行。脱战压力不读 raw 文本：空战/直升机用 `situation.nearest_air_threat` / `situation.enemies[]` + `proximity.thresholds_m.vs_air`，陆战/海战用 `situation.enemies[]` + `proximity.thresholds_m.vs_ground`。`air_threat_nearby` / `enemy_on_six` / `tailing_risk` 可进入 IN_FLIGHT / COMBAT_STRESS 队列；CRITICAL_RISK / DEAD / SPAWNING 仍按 Arbiter 压制。
 - 样本状态：2026-06-20 样本经 `sample_replay` 合并 side-stream proximity 和连续 `situation.enemies` 后，已有 `proximity_events=5317`、`proximity_air_events=5300`、`proximity_rear_events=49`、`situation_rear_air_threat_live_items=1906`，并可触发 `enemy_on_six=149` / `tailing_risk=44`；目标点仍缺 3000m 内触发样本。
 
 ### D2 任务目标点接近 `ground_target_nearby` — v2

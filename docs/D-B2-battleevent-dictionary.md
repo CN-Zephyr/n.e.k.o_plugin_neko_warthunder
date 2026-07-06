@@ -22,7 +22,7 @@
 - **cooldown**：同一事件两次开口的最短间隔。
 - **re-arm 条件**：退出后"算作新一次事件"需满足的条件——连续派生类需退出阈值保持一段时间（配合迟滞）；离散类按新的 feed/notice id / 新一次生命周期跳变。
 - **payload**：该事件**携带的派生上下文（具体标量子集）**，供 handler 拼"事实行"。**不是整个 snapshot**，只是这次事件相关的几个派生值。
-- **提示意图**：只描述"要让猫娘传达什么"，**不写具体台词**（台词归角色 LLM）。
+- **提示意图**：只描述"要让猫娘传达什么"，Detector 不写具体台词；最终输出由 dispatcher 统一管理。危急动作类默认由插件确定短句 `blind+plugin` 直出以降低延迟；开局、击杀/阵亡、过热、低油、普通接近、目标点和结算默认走 bounded `respond`，让猫娘在事实边界内自行组织短句。
 - ⚠️ 下面所有 severity / priority / cooldown 数值均为**草稿初值，待抓包后校准**。
 
 ## 1. 总览矩阵
@@ -34,7 +34,7 @@
 | `overspeed` | 连续派生 | 危急 | 7 | 8 | 是 | 15s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
 | `overheat` | 连续派生 / HUD notice | 重要提醒 | 6 | 6 | 否 | 30s | IN_FLIGHT / COMBAT_STRESS |
 | `low_fuel` | 连续派生 | 一般提醒 | 3 | 4 | 否 | 每局 1–2 次 | IN_FLIGHT |
-| `you_killed` | combat.feed 离散 | 战斗 | 3 | 5 | 否 | 8s（多杀合并） | SPAWNING / IN_FLIGHT / COMBAT_STRESS |
+| `you_killed` | combat.feed 离散 | 战斗 | 3 | 5 | 否 | 8s（多杀合并） | SPAWNING / IN_FLIGHT；COMBAT_STRESS 下延迟合并 |
 | `you_died` | combat.feed 离散 | 生命周期 | 8 | 10 | 是 | 每次死亡 1 次 | DEAD（死亡瞬间） |
 | `spawn` | 生命周期 | 生命周期 | 1 | 5 | 否 | 每次出生 1 次 | SPAWNING |
 | `battle_end` | 生命周期 | 生命周期 | 1 | 6 | 否 | 每局 1 次 | BATTLE_ENDED |
@@ -74,14 +74,14 @@
 
 #### `over_g` 过载过大
 - 中文说明：飞控/Betty 类 `over-g` 风险，机体结构或飞控限制可能被突破。
-- 来源信号：数据层 flag `over_g` / `over_g_critical`（优先使用 profile 中 `g_limit_*_candidate`，按当前燃油比例插值）。
+- 来源信号：数据层 flag `over_g` / `over_g_critical`（优先使用 profile 中 `instructor_g_limit_*`；缺少时才回退 `g_limit_*_candidate` 并按当前燃油比例插值）。
 - 触发条件摘要：当前 `Ny/load_factor` 超过 warning/critical 阈值；正/负过载均可触发。
 - 允许 Scenario：IN_FLIGHT、COMBAT_STRESS（critical 后入 CRITICAL_RISK）。
 - 被抑制 Scenario：SPAWNING、OUT_OF_BATTLE、DEAD、BATTLE_ENDED。
 - severity 8 / priority 9 / 抢占 是 / cooldown 10s。
 - re-arm：过载回落并保持退出窗口后可再触发。
 - payload：`g_now`、`ias_kmh`、`aoa_deg`。
-- 误判风险：中高（游戏模式、飞控保护、挂载/燃油对结构限制影响明显；先按 datamine 候选保守预警）。
+- 误判风险：中（游戏模式、飞控保护、挂载/燃油对结构限制影响明显；Instructor G 限制优先，避免结构候选误报正常高 G 机动）。
 - 提示意图：警示过载过大，提示松杆/回正，避免继续硬拉。
 
 #### `low_alt_danger` 低空危险
@@ -144,22 +144,22 @@
 
 #### `you_killed` 击杀
 - 中文说明：玩家击落/摧毁了敌方单位。
-- 来源信号：`/api/telemetry.combat.feed[]` 中新的 `id`，且 `is_my_kill == true`。
-- 触发条件摘要：数据层已完成身份归属判定；插件只按新 id 去重并消费 ownership flag。
-- 允许 Scenario：SPAWNING、IN_FLIGHT、COMBAT_STRESS；`CRITICAL_RISK` 下不立即播报，但允许 Arbiter 延迟保留 owned kill。
+- 来源信号：`/api/telemetry.combat.feed[]` 中未播报过的 `id`，且 `is_my_kill == true`。
+- 触发条件摘要：数据层已完成身份归属判定；插件按已播报 owned id 去重并消费 ownership flag，允许同一 feed id 从未归属后补为 owned kill 时补触发。
+- 允许 Scenario：SPAWNING、IN_FLIGHT；`COMBAT_STRESS` / `CRITICAL_RISK` 下不立即播报，但允许 Arbiter 延迟保留 owned kill，待压力解除后合并补一句。
 - 被抑制 Scenario：OUT_OF_BATTLE、DEAD、BATTLE_ENDED。
 - SPAWNING 说明：只放行数据层已归属的 owned kill；飞行安全事件仍由 spawn grace 压制，避免刚进场误报。
-- severity 3 / priority 5 / 抢占 否 / cooldown 8s（**多杀合并**：短窗内多条合成一次"连杀 N"；`CRITICAL_RISK` 下延迟保留，危急解除后补播）。
+- severity 3 / priority 5 / 抢占 否 / cooldown 8s（**多杀合并**：短窗内多条合成一次"连杀 N"；`COMBAT_STRESS` / `CRITICAL_RISK` 下延迟保留，压力解除后补播）。
 - re-arm：新的 combat.feed 击杀 id。
 - payload：`target_name`（可选）、`target_vehicle`（可选）、`killstreak_count`。
 - 缺字段降级：不可降级（无 `is_my_kill == true` 即无事件）。不回退到 raw hudmsg 文本匹配。
 - 误判风险：中（主要取决于数据层 ownership flag 与玩家身份 seam；插件侧不再做多语言文本解析）。
-- 提示意图：击杀庆祝/调侃，简短。
+- 提示意图：按空/陆/海载具域临场确认战果；可轻夸、调侃或收住，但不套固定夸夸，不复读 raw 玩家名。
 
 #### `you_died` 死亡（与生命周期合一）
 - 中文说明：玩家被击落/坠毁/阵亡。
-- 来源信号：`/api/telemetry.combat.feed[]` 中新的 `id`，且 `is_my_death == true`。
-- 触发条件摘要：数据层已完成死亡归属判定；插件只按新 id 去重并消费 ownership flag。`vehicle_valid` 翻转只用于 Scenario 存活态，不作为 `you_died` 主路径。
+- 来源信号：`/api/telemetry.combat.feed[]` 中未播报过的 `id`，且 `is_my_death == true`。
+- 触发条件摘要：数据层已完成死亡归属判定；插件按已播报 owned id 去重并消费 ownership flag，允许同一 feed id 从未归属后补为 owned death 时补触发。`vehicle_valid` 翻转只用于 Scenario 存活态，不作为 `you_died` 主路径。
 - 允许 Scenario：DEAD（死亡瞬间触发并进入 DEAD）。
 - 被抑制 Scenario：OUT_OF_BATTLE、SPAWNING、BATTLE_ENDED。
 - severity 8 / priority 10 / **抢占 是**（重要时刻不应被限流吞掉）/ cooldown：每次死亡 1 次。

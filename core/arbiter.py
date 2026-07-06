@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .contracts import CRITICAL_RISK, DEAD, BattleEvent, category_allowed
+from .contracts import COMBAT_STRESS, CRITICAL_RISK, DEAD, BattleEvent, category_allowed
 from .safety_guard import SafetyGuard
 
 class Arbiter:
@@ -17,12 +17,14 @@ class Arbiter:
         self._last_fired: dict[str, tuple[float, str]] = {}
         self._window_best: BattleEvent | None = None
         self._kill_window: BattleEvent | None = None
+        self._kill_window_first_at: float = 0.0
         self._kill_window_started_at: float = 0.0
 
     def reset(self) -> None:
         self._last_fired.clear()
         self._window_best = None
         self._kill_window = None
+        self._kill_window_first_at = 0.0
         self._kill_window_started_at = 0.0
 
     def decide(self, candidates: list[BattleEvent], scenario: str, now: float) -> tuple[BattleEvent | None, list[dict[str, Any]]]:
@@ -40,7 +42,8 @@ class Arbiter:
             allowed, gate_reason = _event_allowed(c, scenario)
             if not allowed:
                 if c.event_id == "you_killed" and scenario == DEAD and kill_coalesce_window > 0:
-                    if _recent_death_preempt(self._last_fired, now, kill_coalesce_window):
+                    effective_window = _kill_coalesce_window_for(c, kill_coalesce_window)
+                    if _recent_death_preempt(self._last_fired, now, effective_window):
                         trade_kill = _trade_kill_event(c, BattleEvent("you_died", level="critical", ts=now), now)
                         self._fire(trade_kill, now, critical=False)
                         chain.append(_rec(c, "spoken", "trade_kill_after_death"))
@@ -81,11 +84,13 @@ class Arbiter:
                     self._fire(trade_kill, now, critical=False)
                     chain.append(_rec(self._kill_window, "spoken", "trade_kill_preempt"))
                     self._kill_window = None
+                    self._kill_window_first_at = 0.0
                     self._kill_window_started_at = 0.0
                     return trade_kill, chain
                 if self._kill_window is not None:
                     chain.append(_rec(self._kill_window, "dropped", "lost_to_preempt"))
                     self._kill_window = None
+                    self._kill_window_first_at = 0.0
                     self._kill_window_started_at = 0.0
                 chain.append(_rec(best, "spoken", "preempt"))
                 for c in survivors:
@@ -110,10 +115,14 @@ class Arbiter:
                     chain.append(_rec(c, "dropped", "lost_in_window"))
 
         rate_remaining = self.safety.rate_limit_remaining(now)
+        effective_kill_window = _kill_coalesce_window_for(self._kill_window, kill_coalesce_window)
         if (
             self._kill_window is not None
-            and kill_coalesce_window > 0
-            and now - self._kill_window_started_at >= kill_coalesce_window
+            and effective_kill_window > 0
+            and (
+                now - self._kill_window_started_at >= effective_kill_window
+                or now - self._kill_window_first_at >= _kill_coalesce_max_hold_seconds(effective_kill_window)
+            )
             and rate_remaining <= 0
         ):
             chosen = self._kill_window
@@ -126,10 +135,15 @@ class Arbiter:
                     chain.append(_rec(chosen, "buffered", "scenario_gated_deferred(CRITICAL_RISK)"))
                     return None, chain
                 self._kill_window = None
+                self._kill_window_first_at = 0.0
                 self._kill_window_started_at = 0.0
                 chain.append(_rec(chosen, "dropped", gate_reason.replace("scenario_gated", "scenario_gated_on_flush", 1)))
                 return None, chain
+            if chosen.event_id == "you_killed" and scenario == COMBAT_STRESS and _kill_waits_for_combat_stress(chosen):
+                chain.append(_rec(chosen, "buffered", "scenario_gated_deferred(COMBAT_STRESS)"))
+                return None, chain
             self._kill_window = None
+            self._kill_window_first_at = 0.0
             self._kill_window_started_at = 0.0
             self._fire(chosen, now, critical=False)
             chain.append(_rec(chosen, "spoken", "kill_coalesced"))
@@ -166,6 +180,7 @@ class Arbiter:
                 ts=event.ts,
                 level=event.level,
             )
+            self._kill_window_first_at = now
             self._kill_window_started_at = now
             return
 
@@ -184,6 +199,7 @@ class Arbiter:
             ts=max(self._kill_window.ts, event.ts),
             level=self._kill_window.level,
         )
+        self._kill_window_started_at = now
 
 
 def _rank(e: BattleEvent) -> tuple[int, int, float]:
@@ -217,10 +233,42 @@ def _recent_death_preempt(last_fired: dict[str, tuple[float, str]], now: float, 
     return now - last_at <= grace
 
 
+def _kill_coalesce_max_hold_seconds(window_seconds: float) -> float:
+    return min(max(window_seconds * 3.0, window_seconds), 45.0)
+
+
+def _kill_coalesce_window_for(event: BattleEvent | None, configured_seconds: float) -> float:
+    if configured_seconds <= 0:
+        return 0.0
+    return configured_seconds
+
+
+def _kill_waits_for_combat_stress(event: BattleEvent) -> bool:
+    domain = str(event.payload.get("domain") or "").lower()
+    raw_reasons = event.payload.get("stress_reasons")
+    if isinstance(raw_reasons, (list, tuple, set, frozenset)):
+        reasons = {str(reason) for reason in raw_reasons}
+    elif isinstance(raw_reasons, str) and raw_reasons:
+        reasons = {raw_reasons}
+    else:
+        reasons = set()
+
+    if domain in {"air", "heli"}:
+        if not reasons:
+            return True
+        return bool(reasons & {"damage", "maneuver", "air_contact"})
+    if domain in {"ground", "naval"}:
+        return bool(reasons & {"damage", "surface_contact"})
+    return True
+
+
 def _event_allowed(event: BattleEvent, scenario: str) -> tuple[bool, str]:
     if not category_allowed(scenario, event.category):
         return False, f"scenario_gated({scenario})"
     if scenario == "COMBAT_STRESS" and event.event_id in {"enemy_nearby", "ground_target_nearby"}:
+        domain = str(event.payload.get("domain") or "").lower()
+        if event.event_id == "enemy_nearby" and domain in {"ground", "naval"}:
+            return True, ""
         return False, "scenario_gated(COMBAT_STRESS:map_low_priority)"
     return True, ""
 

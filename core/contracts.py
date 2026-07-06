@@ -84,6 +84,10 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "overspeed":      EventSpec("overspeed", CAT_SAFETY_CRITICAL, 8, True, 15, 6, 7),
     "overheat":       EventSpec("overheat", CAT_SAFETY_IMPORTANT, 6, False, 30, 5, SEV_IMPORTANT),
     "low_fuel":       EventSpec("low_fuel", CAT_SAFETY_MINOR, 4, False, -1, 3, 4),
+    "ground_laser_warning": EventSpec("ground_laser_warning", CAT_SAFETY_IMPORTANT, 7, False, 10, 6, 7),
+    "ground_crew_loss": EventSpec("ground_crew_loss", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 7),
+    "ground_ammo_empty": EventSpec("ground_ammo_empty", CAT_SAFETY_IMPORTANT, 5, False, 25, 5, 5),
+    "ground_ammo_low": EventSpec("ground_ammo_low", CAT_SAFETY_MINOR, 3, False, 45, 2, 2),
     "ground_target_nearby": EventSpec("ground_target_nearby", CAT_MAP_AWARENESS, 2, False, 35, 2, 2),
     "enemy_nearby":   EventSpec("enemy_nearby", CAT_MAP_AWARENESS, 2, False, 25, 2, 2),
     "air_threat_nearby": EventSpec("air_threat_nearby", CAT_MAP_AWARENESS, 3, False, 20, 3, 3),
@@ -125,6 +129,18 @@ def _clamp(value: Any, default: float, lo: float, hi: float) -> float:
     return max(lo, min(v, hi))
 
 
+def _dialogue_intrusion_mode(value: Any) -> str:
+    mode = str(value or "").strip()
+    aliases = {
+        "avoid_interrupt": "no_interrupt",
+        "protect_chat": "critical_only",
+        "balanced": "critical_only",
+        "immediate": "allow_interrupt",
+    }
+    mode = aliases.get(mode, mode)
+    return mode if mode in {"no_interrupt", "critical_only", "allow_interrupt"} else "critical_only"
+
+
 @dataclass
 class WtConfig:
     enabled: bool = True
@@ -139,7 +155,10 @@ class WtConfig:
     critical_preempt_cooldown_seconds: float = 5.0
     output_backpressure_seconds: float = 20.0
     output_event_max_age_seconds: float = 8.0
-    kill_coalesce_window_seconds: float = 2.0
+    dialogue_intrusion_mode: str = "critical_only"
+    user_chat_quiet_window_seconds: float = 60.0
+    battle_output_quiet_window_seconds: float = 30.0
+    kill_coalesce_window_seconds: float = 6.0
     spawn_grace_seconds: float = 6.0
     takeoff_low_alt_grace_seconds: float = 45.0
     takeoff_radio_altitude_enter_m: float = 10.0
@@ -150,6 +169,10 @@ class WtConfig:
     safety_failure_limit: int = 5
     player_name: str = ""
     target_lanlan: str = ""
+    plugin_reply_hint_enabled: bool = True
+    plugin_owned_battle_output_enabled: bool = False
+    plugin_owned_urgent_output_enabled: bool = True
+    plugin_owned_blind_output_enabled: bool = False
     observability_enabled: bool = False
     observability_max_events: int = 100
     observability_include_prompt_preview: bool = False
@@ -171,7 +194,10 @@ class WtConfig:
             critical_preempt_cooldown_seconds=_clamp(raw.get("critical_preempt_cooldown_seconds"), 5.0, 0.0, 120.0),
             output_backpressure_seconds=_clamp(raw.get("output_backpressure_seconds"), 20.0, 0.0, 300.0),
             output_event_max_age_seconds=_clamp(raw.get("output_event_max_age_seconds"), 8.0, 0.0, 120.0),
-            kill_coalesce_window_seconds=_clamp(raw.get("kill_coalesce_window_seconds"), 2.0, 0.0, 30.0),
+            dialogue_intrusion_mode=_dialogue_intrusion_mode(raw.get("dialogue_intrusion_mode")),
+            user_chat_quiet_window_seconds=_clamp(raw.get("user_chat_quiet_window_seconds"), 60.0, 0.0, 300.0),
+            battle_output_quiet_window_seconds=_clamp(raw.get("battle_output_quiet_window_seconds"), 30.0, 0.0, 300.0),
+            kill_coalesce_window_seconds=_clamp(raw.get("kill_coalesce_window_seconds"), 6.0, 0.0, 30.0),
             spawn_grace_seconds=_clamp(raw.get("spawn_grace_seconds"), 6.0, 0.0, 60.0),
             takeoff_low_alt_grace_seconds=_clamp(raw.get("takeoff_low_alt_grace_seconds"), 45.0, 0.0, 120.0),
             takeoff_radio_altitude_enter_m=_clamp(raw.get("takeoff_radio_altitude_enter_m"), 10.0, 0.0, 100.0),
@@ -182,6 +208,10 @@ class WtConfig:
             safety_failure_limit=int(_clamp(raw.get("safety_failure_limit"), 5, 1, 100)),
             player_name=str(raw.get("player_name") or "").strip(),
             target_lanlan=str(raw.get("target_lanlan") or raw.get("lanlan_name") or "").strip(),
+            plugin_reply_hint_enabled=bool(raw.get("plugin_reply_hint_enabled", True)),
+            plugin_owned_battle_output_enabled=bool(raw.get("plugin_owned_battle_output_enabled", False)),
+            plugin_owned_urgent_output_enabled=bool(raw.get("plugin_owned_urgent_output_enabled", True)),
+            plugin_owned_blind_output_enabled=bool(raw.get("plugin_owned_blind_output_enabled", False)),
             observability_enabled=bool(raw.get("observability_enabled", False)),
             observability_max_events=int(_clamp(raw.get("observability_max_events"), 100, 1, 1000)),
             observability_include_prompt_preview=bool(raw.get("observability_include_prompt_preview", False)),
@@ -206,6 +236,8 @@ class BattleState:
     replay: bool = False                    # data-layer replay degrade mode; suppress real battle events
     dead: bool = False                      # data-layer dead/spectating hold; data layer suppresses flags while true
     vehicle_valid: bool = False             # vehicle.valid：在战且有载具遥测=存活（出生/死亡判定用）
+    indicators_valid: bool = False          # /indicators valid; ground/naval may not have vehicle telemetry
+    has_player: bool = False                # map situation found the player marker
     domain: str = "unknown"                 # air / heli / ground / naval / menu / unknown
     domain_label: str | None = None
     vehicle_type: str | None = None
@@ -233,6 +265,11 @@ class BattleState:
     head_temp_c: float | None = None
     turbine_temp_c: float | None = None
     oil_temp_c: float | None = None
+    crew_current: float | None = None
+    crew_total: float | None = None
+    ammo_first_stage: float | None = None
+    gun_stabilizer: bool | None = None
+    gear_position: int | None = None
 
     # 离散来源
     hud_events: list[dict[str, Any]] = field(default_factory=list)
@@ -255,6 +292,16 @@ class BattleState:
     def any_critical_flag(self) -> bool:
         """危急集合对应的数据层 critical 级 flag 是否激活（驱动 CRITICAL_RISK）。"""
         return any(self.flag(code) for code in CRITICAL_FLAG_CODES)
+
+    def is_alive(self) -> bool:
+        if not self.in_battle or self.dead:
+            return False
+        if self.vehicle_valid:
+            return True
+        domain = (self.domain or "").lower()
+        if domain in {"ground", "naval"} and self.indicators_valid:
+            return bool(self.has_player or self.vehicle_type)
+        return False
 
 
 @dataclass

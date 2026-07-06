@@ -34,7 +34,7 @@ class HudNoticeDetector(DiscreteDetector):
         self._last_id: int = -1
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
-        if not (cur.in_battle and cur.vehicle_valid and not cur.dead):
+        if not cur.is_alive():
             return None
 
         notices = _notice_items(cur)

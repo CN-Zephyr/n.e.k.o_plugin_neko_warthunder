@@ -1,4 +1,4 @@
-import {
+﻿import {
   Page,
   Card,
   Grid,
@@ -122,6 +122,13 @@ type AwarenessState = {
   } | null
 }
 
+type OutputPolicyState = {
+  dialogue_intrusion_mode?: string | null
+  user_chat_quiet_window_seconds?: number | null
+  battle_output_quiet_window_seconds?: number | null
+  critical_bypass_quiet_window?: boolean | null
+}
+
 type DashboardState = {
   enabled?: boolean
   dry_run?: boolean
@@ -141,6 +148,7 @@ type DashboardState = {
   data_layer?: DataLayerState
   telemetry?: TelemetryState
   takeoff_protection?: TakeoffProtectionState
+  output_policy?: OutputPolicyState
   awareness?: AwarenessState
   safety?: SafetyState
   observe?: ObserveState
@@ -230,6 +238,13 @@ const DATA_LAYER_LABELS: Record<string, string> = {
   unknown: "未知",
 }
 
+const DIALOGUE_INTRUSION_LABELS: Record<string, string> = {
+  no_interrupt: "不打断当前对话",
+  critical_only: "仅危急可打断",
+  allow_interrupt: "允许打断当前对话",
+  custom: "自定义",
+}
+
 const IDENTITY_SOURCE_LABELS: Record<string, string> = {
   manual: "手动设置",
   auto: "自动识别",
@@ -316,6 +331,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const dataLayer = state.data_layer || {}
   const telemetry = state.telemetry || {}
   const takeoffProtection = state.takeoff_protection || {}
+  const outputPolicy = state.output_policy || {}
   const awareness = state.awareness || {}
   const latestProximity = awareness.latest_proximity || {}
   const situation = awareness.situation || {}
@@ -326,11 +342,13 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const lastOutput = observe.last_output_status
   const actions = Array.isArray(props.actions) ? props.actions : []
   const setDryRunAction = actionById(actions, "set_dry_run")
+  const setDialogueIntrusionModeAction = actionById(actions, "set_dialogue_intrusion_mode")
   const setIdentityAction = actionById(actions, "set_identity")
   const pauseAction = actionById(actions, "pause")
   const resumeAction = actionById(actions, "resume")
   const testSayAction = actionById(actions, "test_say")
   const [dryRunError, setDryRunError] = useState("")
+  const [dialoguePolicyError, setDialoguePolicyError] = useState("")
   const [identityName, setIdentityName] = useState(String(identity.player_name || identity.saved_player_name || identity.self?.name || ""))
   const [identityError, setIdentityError] = useState("")
 
@@ -345,6 +363,20 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
       await props.api.refresh()
     } catch (error) {
       setDryRunError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function setDialogueIntrusionMode(mode: string) {
+    if (!setDialogueIntrusionModeAction) {
+      setDialoguePolicyError("插话策略设置不可用")
+      return
+    }
+    try {
+      setDialoguePolicyError("")
+      await props.api.call("set_dialogue_intrusion_mode", { mode })
+      await props.api.refresh()
+    } catch (error) {
+      setDialoguePolicyError(error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -490,6 +522,20 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
           <Stack>
             <Switch checked={!!state.dry_run} label="模拟模式 dry_run" onChange={setDryRun} />
             {dryRunError ? <Alert tone="danger">{dryRunError}</Alert> : null}
+            <KeyValue
+              items={[
+                { key: "output_policy.dialogue_intrusion_mode", label: "插话策略", value: mappedText(outputPolicy.dialogue_intrusion_mode, DIALOGUE_INTRUSION_LABELS) },
+                { key: "output_policy.user_chat_quiet_window_seconds", label: "用户对话保护", value: numberText(outputPolicy.user_chat_quiet_window_seconds, "s") },
+                { key: "output_policy.battle_output_quiet_window_seconds", label: "播报间隔保护", value: numberText(outputPolicy.battle_output_quiet_window_seconds, "s") },
+                { key: "output_policy.critical_bypass_quiet_window", label: "危急可插话", value: badge(outputPolicy.critical_bypass_quiet_window ?? undefined) },
+              ]}
+            />
+            <Grid cols={3}>
+              <Button tone="primary" onClick={() => setDialogueIntrusionMode("no_interrupt")}>不打断当前对话</Button>
+              <Button tone="warning" onClick={() => setDialogueIntrusionMode("critical_only")}>仅危急可打断</Button>
+              <Button tone="danger" onClick={() => setDialogueIntrusionMode("allow_interrupt")}>允许打断当前对话</Button>
+            </Grid>
+            {dialoguePolicyError ? <Alert tone="danger">{dialoguePolicyError}</Alert> : null}
             <Grid cols={3}>
               <ActionButton action={pauseAction} actionId="pause" tone="danger">急停</ActionButton>
               <ActionButton action={resumeAction} actionId="resume" tone="success">恢复</ActionButton>

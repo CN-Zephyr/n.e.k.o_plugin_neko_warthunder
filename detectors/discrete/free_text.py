@@ -17,7 +17,7 @@ _TECHNICAL_HUD_NOTICE_CODES = frozenset({"engine_overheat", "oil_overheat", "pow
 
 
 def _alive(state: BattleState) -> bool:
-    return bool(state.in_battle and state.vehicle_valid and not state.dead)
+    return state.is_alive()
 
 
 def _items(value: Any) -> list[dict[str, Any]]:

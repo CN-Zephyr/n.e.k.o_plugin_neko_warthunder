@@ -22,7 +22,7 @@ _END_STATUSES = frozenset({"win", "won", "victory", "fail", "failed", "lost", "d
 
 
 def _alive(s: BattleState) -> bool:
-    return bool(s.in_battle and s.vehicle_valid and not s.dead)
+    return s.is_alive()
 
 
 class SpawnDetector(DiscreteDetector):
@@ -31,7 +31,16 @@ class SpawnDetector(DiscreteDetector):
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
         # 要求 prev.connected：遥测瞬断（parse(None)→not alive）恢复后不误判为重生
         if _alive(cur) and not _alive(prev) and prev.connected:
-            return BattleEvent("spawn", payload={"vehicle_type": cur.vehicle_type}, ts=cur.timestamp or 0.0, level="warning")
+            return BattleEvent(
+                "spawn",
+                payload={
+                    "vehicle_type": cur.vehicle_type,
+                    "domain": cur.domain,
+                    "domain_label": cur.domain_label,
+                },
+                ts=cur.timestamp or 0.0,
+                level="warning",
+            )
         return None
 
 
@@ -58,7 +67,8 @@ class DeathDetector(DiscreteDetector):
     id = "you_died"
 
     def __init__(self) -> None:
-        self._last_id: int = -1
+        self._last_seen_id: int = -1
+        self._emitted_ids: set[int] = set()
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
         feed = _feed_items(cur)
@@ -66,8 +76,10 @@ class DeathDetector(DiscreteDetector):
         if not ids:
             return None
         max_id = max(ids)
-        if max_id < self._last_id:
-            self._last_id = -1
+        if max_id < self._last_seen_id:
+            self._last_seen_id = -1
+            self._emitted_ids.clear()
+        self._last_seen_id = max(self._last_seen_id, max_id)
 
         newest: dict[str, Any] | None = None
         for item in feed:
@@ -75,14 +87,20 @@ class DeathDetector(DiscreteDetector):
                 eid = int(item.get("id"))
             except (TypeError, ValueError):
                 continue
-            if eid <= self._last_id:
+            if eid in self._emitted_ids:
                 continue
             if item.get("is_my_death") is True:
                 if newest is None or eid > int(newest.get("id")):
                     newest = item
-        self._last_id = max(self._last_id, max_id)
         if newest is None:
             return None
+        for item in feed:
+            try:
+                eid = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if item.get("is_my_death") is True:
+                self._emitted_ids.add(eid)
 
         return BattleEvent(
             "you_died",
@@ -120,7 +138,8 @@ class KillDetector(DiscreteDetector):
 
     def __init__(self, player_name: str) -> None:
         self.player_name = (player_name or "").strip()
-        self._last_id: int = -1  # 已处理的最大 feed id（单调、确定、有界；feed id 递增）
+        self._last_seen_id: int = -1
+        self._emitted_ids: set[int] = set()
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
         feed = _feed_items(cur)
@@ -130,8 +149,10 @@ class KillDetector(DiscreteDetector):
         if not ids:
             return None
         max_id = max(ids)
-        if max_id < self._last_id:  # 新对局 feed id 回退 → 重置
-            self._last_id = -1
+        if max_id < self._last_seen_id:  # 新对局 feed id 回退 → 重置
+            self._last_seen_id = -1
+            self._emitted_ids.clear()
+        self._last_seen_id = max(self._last_seen_id, max_id)
         newest: dict[str, Any] | None = None
         for item in feed:
             if not isinstance(item, dict):
@@ -140,14 +161,20 @@ class KillDetector(DiscreteDetector):
                 eid = int(item.get("id"))
             except (TypeError, ValueError):
                 continue
-            if eid <= self._last_id:
+            if eid in self._emitted_ids:
                 continue
             if item.get("is_my_kill") is True:
                 if newest is None or eid > int(newest.get("id")):
                     newest = item
-        self._last_id = max(self._last_id, max_id)
         if newest is None:
             return None
+        for item in feed:
+            try:
+                eid = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if item.get("is_my_kill") is True:
+                self._emitted_ids.add(eid)
         return BattleEvent(
             "you_killed",
             payload={

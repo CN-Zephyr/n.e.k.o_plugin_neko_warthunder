@@ -45,7 +45,7 @@ class AirSituationDetector(DiscreteDetector):
         self._tail_hits.clear()
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
-        if not (cur.in_battle and cur.vehicle_valid and not cur.dead):
+        if not cur.is_alive():
             self.reset()
             return None
         if cur.domain not in {"air", "heli"}:
@@ -107,7 +107,7 @@ class GroundTargetDetector(DiscreteDetector):
         self._last_key = None
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
-        if not (cur.in_battle and cur.vehicle_valid and not cur.dead):
+        if not cur.is_alive():
             return None
         if cur.domain not in {"air", "heli"}:
             return None

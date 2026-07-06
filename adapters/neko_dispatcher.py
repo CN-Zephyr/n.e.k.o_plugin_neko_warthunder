@@ -1,7 +1,8 @@
 """唯一 NEKO 输出边界（D-B4）。
 
 所有开口只走这里：把 BattleEvent 拼成"事实行 + 要求行"prompt（带 {MASTER_NAME} 占位符，
-宿主按会话展开），经 push_message(visibility=[], ai_behavior="respond") 交给猫娘 LLM 润色。
+宿主按会话展开），普通事件经 push_message(visibility=[], ai_behavior="respond") 交给猫娘 LLM 润色并触发语音；
+显式开启插件直出时，事件可用短句 push_message(visibility=["chat"], ai_behavior="blind") 降低延迟，但这只进聊天气泡。
 dry_run 时短路、绝不真投。常驻场景上下文走 push_context(ai_behavior="read")。
 """
 
@@ -26,8 +27,68 @@ HOST_REPLY_STYLE = "short_line"
 HOST_QUIET_WINDOW_POLICY = "suppress_non_urgent_during_user_input"
 V2_LIVE_EVIDENCE_GATED_EVENTS = frozenset({"enemy_on_six", "tailing_risk", "ground_target_nearby"})
 FREE_TEXT_DRY_RUN_ONLY_EVENTS = frozenset({"free_text_activity"})
-BACKPRESSURE_BYPASS_EVENTS = frozenset({"you_died"})
+BACKPRESSURE_BYPASS_EVENTS = frozenset({"you_died", "you_killed"})
 URGENT_REPLACE_EVENTS = frozenset({"you_died", "stall_risk", "high_aoa", "over_g", "low_alt_danger", "overspeed"})
+FLEX_STYLE_EVENTS = frozenset(
+    {
+        "spawn",
+        "you_killed",
+        "you_died",
+        "overheat",
+        "low_fuel",
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_ammo_empty",
+        "ground_ammo_low",
+        "enemy_nearby",
+        "ground_target_nearby",
+        "battle_end",
+    }
+)
+PLUGIN_OWNED_DIRECT_EVENTS = frozenset(
+    {
+        "stall_risk",
+        "high_aoa",
+        "over_g",
+        "low_alt_danger",
+        "overspeed",
+        "overheat",
+        "low_fuel",
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_ammo_empty",
+        "ground_ammo_low",
+        "ground_target_nearby",
+        "enemy_nearby",
+        "air_threat_nearby",
+        "enemy_on_six",
+        "tailing_risk",
+        "you_killed",
+        "you_died",
+        "battle_end",
+    }
+)
+REPEAT_COLLAPSE_EVENT_IDS = frozenset(
+    {
+        "stall_risk",
+        "high_aoa",
+        "over_g",
+        "low_alt_danger",
+        "overspeed",
+        "overheat",
+        "low_fuel",
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_ammo_empty",
+        "ground_ammo_low",
+        "ground_target_nearby",
+        "enemy_nearby",
+        "air_threat_nearby",
+        "enemy_on_six",
+        "tailing_risk",
+    }
+)
+REPEAT_COLLAPSE_SECONDS = 30.0
 EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     # These cues are useful only while the condition is still tactically fresh.
     "spawn": 3.0,
@@ -42,14 +103,18 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "over_g": 4.0,
     "stall_risk": 5.0,
     "overheat": 6.0,
+    "ground_laser_warning": 4.0,
+    "ground_crew_loss": 6.0,
+    "ground_ammo_empty": 8.0,
+    "ground_ammo_low": 8.0,
     # Kill/death/battle-end can tolerate a little more host latency, but still
     # should not be replayed as old news.
-    "you_killed": 6.0,
+    "you_killed": 30.0,
     "you_died": 8.0,
     "battle_end": 8.0,
 }
 COPILOT_ROLE_BOUNDARY = (
-    "边界：后座/WSO，只报事实和动作建议；不接管、不编锁定/开火/击杀/损伤/威胁。"
+    "边界：只提醒陪伴；不接管、不编锁定/开火/战果/损伤。"
 )
 
 # 每个事件的"要求行"意图（不写最终台词，台词归角色 LLM）。
@@ -61,17 +126,22 @@ _INTENT: dict[str, str] = {
     "overspeed": "速度过头，提醒 {MASTER_NAME} 收油门改出，别硬拉",
     "overheat": "发动机温度高，提醒 {MASTER_NAME} 收油门散热",
     "low_fuel": "油不多了，提醒 {MASTER_NAME} 留油返航",
+    "ground_laser_warning": "陆战激光告警，提醒 {MASTER_NAME} 可能被测距或锁定，短促说一句找掩体或动一下",
+    "ground_crew_loss": "陆战乘员损失，提醒 {MASTER_NAME} 车组受损，短促说一句收住、找掩体或别贪",
+    "ground_ammo_empty": "陆战一级弹药打空，提醒 {MASTER_NAME} 装填会变慢，短促说一句别硬拼",
+    "ground_ammo_low": "陆战一级弹药偏少，提醒 {MASTER_NAME} 后续装填会慢，短促说一句规划节奏",
     "ground_target_nearby": "报任务目标点接近，提醒 {MASTER_NAME} 看方位",
     "enemy_nearby": "报附近接触，提醒 {MASTER_NAME} 保持观察",
     "air_threat_nearby": "报空中威胁方位，提醒 {MASTER_NAME} 抬头确认",
     "enemy_on_six": "报后方威胁，提醒 {MASTER_NAME} 别让对面贴住",
     "tailing_risk": "报后方持续贴近，提醒 {MASTER_NAME} 立刻改出",
     "free_text_activity": "提醒 {MASTER_NAME} 检测到战场文字来源，只做安全泛化提示，不复读原文",
-    "you_killed": "确认刚才击杀，给 {MASTER_NAME} 一句短夸",
+    "you_killed": "确认刚才战果；按载具域一句短话，可不夸，不套固定话",
     "you_died": "按事实安抚 {MASTER_NAME}，准备重整",
     "spawn": (
-        "上机就位，跟 {MASTER_NAME} 打声短招呼；只说上机/就位/跟上，"
-        "不要报敌情、方位、雷达目标、锁定、击杀或威胁"
+        "跟 {MASTER_NAME} 短促开局招呼；"
+        "按空/陆/海载具域寒暄打气，可活泼即兴，"
+        "别报敌情/方位/锁定/击杀/威胁"
     ),
     "battle_end": "这局结束，给 {MASTER_NAME} 收尾一句，不展开战报",
 }
@@ -98,12 +168,113 @@ def _output_event_max_age_seconds(plugin: Any, event: BattleEvent | None = None)
     override = EVENT_MAX_AGE_OVERRIDES_SECONDS.get(event.event_id)
     if override is None:
         return configured
+    if event.event_id == "you_killed":
+        return max(configured, override)
     return min(configured, override)
+
+
+def _user_chat_quiet_window_seconds(plugin: Any) -> float:
+    cfg = getattr(plugin, "cfg", None)
+    try:
+        return max(0.0, float(getattr(cfg, "user_chat_quiet_window_seconds", 20.0)))
+    except (TypeError, ValueError):
+        return 20.0
+
+
+def _battle_output_quiet_window_seconds(plugin: Any) -> float:
+    cfg = getattr(plugin, "cfg", None)
+    try:
+        return max(0.0, float(getattr(cfg, "battle_output_quiet_window_seconds", 20.0)))
+    except (TypeError, ValueError):
+        return 20.0
+
+
+def _dialogue_intrusion_mode(plugin: Any) -> str:
+    cfg = getattr(plugin, "cfg", None)
+    mode = str(getattr(cfg, "dialogue_intrusion_mode", "critical_only") or "").strip()
+    aliases = {
+        "avoid_interrupt": "no_interrupt",
+        "protect_chat": "critical_only",
+        "balanced": "critical_only",
+        "immediate": "allow_interrupt",
+    }
+    mode = aliases.get(mode, mode)
+    return mode if mode in {"no_interrupt", "critical_only", "allow_interrupt"} else "critical_only"
 
 
 def _v2_live_verified_real_output_enabled(plugin: Any) -> bool:
     cfg = getattr(plugin, "cfg", None)
     return bool(getattr(cfg, "v2_live_verified_real_output_enabled", False))
+
+
+def _plugin_reply_hint_enabled(plugin: Any) -> bool:
+    cfg = getattr(plugin, "cfg", None)
+    return bool(getattr(cfg, "plugin_reply_hint_enabled", True))
+
+
+def _plugin_owned_blind_output_enabled(plugin: Any) -> bool:
+    cfg = getattr(plugin, "cfg", None)
+    return bool(getattr(cfg, "plugin_owned_blind_output_enabled", False))
+
+
+def _plugin_owned_battle_output_enabled(plugin: Any) -> bool:
+    cfg = getattr(plugin, "cfg", None)
+    return bool(getattr(cfg, "plugin_owned_battle_output_enabled", False))
+
+
+def _plugin_owned_urgent_output_enabled(plugin: Any) -> bool:
+    cfg = getattr(plugin, "cfg", None)
+    return bool(getattr(cfg, "plugin_owned_urgent_output_enabled", True))
+
+
+def _should_use_plugin_owned_output(plugin: Any, event: BattleEvent, recommended_reply: str) -> bool:
+    if not recommended_reply:
+        return False
+    if _plugin_owned_blind_output_enabled(plugin):
+        return True
+    if _plugin_owned_battle_output_enabled(plugin) and event.event_id in PLUGIN_OWNED_DIRECT_EVENTS:
+        return True
+    if not _plugin_owned_urgent_output_enabled(plugin):
+        return False
+    return event.event_id == "you_died" or (event.event_id in URGENT_REPLACE_EVENTS and event.level == "critical")
+
+
+def _quiet_window_bypass(plugin: Any, event: BattleEvent) -> bool:
+    mode = _dialogue_intrusion_mode(plugin)
+    if mode == "no_interrupt":
+        return False
+    if mode == "allow_interrupt":
+        return True
+    if event.event_id == "you_died":
+        return True
+    return event.level == "critical" and event.event_id in URGENT_REPLACE_EVENTS
+
+
+def _quiet_window_suppression(plugin: Any, event: BattleEvent, now: float) -> tuple[str, float] | None:
+    if _quiet_window_bypass(plugin, event):
+        return None
+
+    user_window = _user_chat_quiet_window_seconds(plugin)
+    try:
+        last_user_chat_at = float(getattr(plugin, "_last_user_chat_at", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        last_user_chat_at = 0.0
+    if user_window > 0 and last_user_chat_at > 0:
+        remaining = user_window - (now - last_user_chat_at)
+        if remaining > 0:
+            return "user_chat_quiet_window", round(remaining, 3)
+
+    battle_window = _battle_output_quiet_window_seconds(plugin)
+    try:
+        last_battle_respond_at = float(getattr(plugin, "_last_battle_respond_at", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        last_battle_respond_at = 0.0
+    if battle_window > 0 and last_battle_respond_at > 0:
+        remaining = battle_window - (now - last_battle_respond_at)
+        if remaining > 0:
+            return "battle_output_quiet_window", round(remaining, 3)
+
+    return None
 
 
 def _clean_target_lanlan(value: Any) -> str:
@@ -180,7 +351,7 @@ def _reply_style_contract(event: BattleEvent) -> str:
     if event.event_id == "you_killed":
         if event.payload.get("trade_death"):
             return (
-                "Style: one short Chinese line; vehicle was lost, but praise the trade kill as not wasted; no analysis."
+                "Style: exactly one natural Chinese line; lost vehicle but note the trade gently; no slogan, no analysis."
             )
         kill_count = 1
         try:
@@ -188,19 +359,128 @@ def _reply_style_contract(event: BattleEvent) -> str:
         except (TypeError, ValueError):
             kill_count = 1
         if kill_count > 1:
-            return "Style: one short Chinese line; acknowledge multi-kill once; no repeated praise."
-        return "Style: one short Chinese line; confirm kill once; no hype."
+            return "Style: exactly one natural Chinese line; react to the streak once, warm and playful; no fixed praise."
+        return "Style: exactly one natural Chinese line; casual live reaction to the kill; warm or playful, no slogan."
     if event.event_id == "you_died":
         return "Style: one short Chinese line; calm reset; no analysis."
+    if event.event_id == "spawn":
+        return "Style: one short lively Chinese line; ready-up greeting only; no battle facts."
     if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
         return "Style: one short Chinese line; urgent command; no filler."
     if event.event_id in {"air_threat_nearby", "enemy_nearby", "enemy_on_six", "tailing_risk"}:
         return "Style: one short Chinese line; situational cue; no takeover."
     if event.event_id == "ground_target_nearby":
         return "Style: one short Chinese line; target/nav cue only; no takeover."
+    if event.event_id in {"ground_laser_warning", "ground_crew_loss", "ground_ammo_empty", "ground_ammo_low"}:
+        return "Style: one short Chinese line; ground crew cue; no takeover."
     if event.event_id == "overheat":
         return "Style: one short Chinese line; situational cue; no repeated wording."
     return "Style: one short Chinese line; concise copilot cue."
+
+
+def _plugin_dialogue_policy(event: BattleEvent) -> dict[str, Any]:
+    return {
+        "owner": "plugin",
+        "mode": BATTLE_REPLY_CONTRACT,
+        "max_chars": BATTLE_REPLY_MAX_CHARS,
+        "single_line": True,
+        "no_followup": True,
+        "prompt_owned": True,
+        "style": HOST_REPLY_STYLE,
+        "style_hint": _reply_style_contract(event),
+    }
+
+
+def _short_line(text: str) -> str:
+    line = str(text or "").strip().replace("\r", " ").replace("\n", " ")
+    for sep in ("。", "！", "？", "!", "?"):
+        idx = line.find(sep)
+        if idx >= 0:
+            line = line[: idx + 1]
+            break
+    return line[:BATTLE_REPLY_MAX_CHARS].strip()
+
+
+def _spawn_domain(event: BattleEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    return str(payload.get("domain") or "").lower()
+
+
+def _spawn_domain_hint(event: BattleEvent) -> str:
+    domain = _spawn_domain(event)
+    if domain in {"air", "heli"}:
+        return "空战/飞行开局，可以围绕上机、升空、跟上、护住你来发挥"
+    if domain == "ground":
+        return "陆战/载具开局，可以围绕上车、出击、跟上、看路来发挥"
+    if domain == "naval":
+        return "海战/舰艇开局，可以围绕上舰、出航、跟上、看海面来发挥"
+    return "未知载具域开局，只做泛化出场招呼和打气"
+
+
+def _event_domain(event: BattleEvent) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    return str(payload.get("domain") or "").lower()
+
+
+def _kill_domain_intent(domain: str) -> str:
+    if domain in {"air", "heli"}:
+        return "空战后座语气，可轻夸、吐槽或提醒留速"
+    if domain == "ground":
+        return "陆战车组语气，可轻夸、吐槽或提醒别贪；禁说击落坦克"
+    if domain == "naval":
+        return "海战舰桥语气，可轻夸、提气或提醒航向；禁说击落"
+    return "泛化确认战果，不猜载具类型"
+
+
+def _kill_style_hint(domain: str, kill_count: int, *, trade_death: bool) -> str:
+    base = "风格：一句短话；像临场反应，不像颁奖词；不复读上一句。"
+    if trade_death:
+        return f"{base} 只轻轻肯定换掉了，不复盘。"
+    if kill_count > 1:
+        return f"{base} 连杀只合并说一次，可以带点惊喜或坏笑。"
+    if domain == "ground":
+        return f"{base} 陆战别固定说稳住/推进，可轻夸、调侃或提醒别贪。"
+    if domain == "naval":
+        return f"{base} 海战别固定说压住/航向，可轻夸、提气或收住。"
+    if domain in {"air", "heli"}:
+        return f"{base} 空战别固定说漂亮/节奏，可轻夸、调侃或提醒留速。"
+    return f"{base} 可不夸。"
+
+
+def _recommended_reply_line(event: BattleEvent) -> str:
+    p, _ = sanitize_event_payload(event.event_id, event.payload)
+    if event.event_id == "spawn":
+        return ""
+    if event.event_id == "you_killed":
+        return ""
+    if event.event_id == "stall_risk":
+        return "加速，快失速了！"
+    if event.event_id == "high_aoa":
+        return "松杆，迎角过大！"
+    if event.event_id == "over_g":
+        return "松杆，过载太大！"
+    if event.event_id == "low_alt_danger":
+        return "拉起来，要撞地了！"
+    if event.event_id == "overspeed":
+        return "收油，速度太快！"
+    if event.event_id == "ground_laser_warning":
+        return "被照了，找掩体！"
+    if event.event_id == "ground_crew_loss":
+        return "车组受损，先收一下！"
+    if event.event_id == "ground_ammo_empty":
+        return "一级弹药空了，别硬拼！"
+    if event.event_id == "ground_ammo_low":
+        return "待发弹不多了，控节奏！"
+    if event.event_id == "enemy_on_six":
+        return "六点钟，甩开它！"
+    if event.event_id == "tailing_risk":
+        return "后方咬住了，机动！"
+    if event.event_id == "air_threat_nearby":
+        clock = p.get("clock")
+        if isinstance(clock, int) and 1 <= clock <= 12:
+            return _short_line(f"{clock}点钟有敌机。")
+        return "附近有敌机，抬头。"
+    return ""
 
 
 def _copilot_role_boundary(event: BattleEvent) -> str:
@@ -210,37 +490,87 @@ def _copilot_role_boundary(event: BattleEvent) -> str:
         "enemy_on_six",
         "tailing_risk",
         "ground_target_nearby",
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_ammo_empty",
+        "ground_ammo_low",
     }:
         return (
             COPILOT_ROLE_BOUNDARY
-            + " 目标/威胁只报观测到的方位距离；禁句：交给我/我来/已锁定/开火。"
+            + " 只报观测到的方位/距离/目标类型，缺项别补；禁：交给我/我来/已锁定/开火。"
         )
     return COPILOT_ROLE_BOUNDARY
 
 
+def _event_intent(event: BattleEvent) -> str:
+    if event.edge == "recovery":
+        return _RECOVERY_INTENT
+    if event.event_id == "spawn":
+        return (
+            f"跟 {{MASTER_NAME}} 短促开局招呼；"
+            f"{_spawn_domain_hint(event)}；"
+            "可活泼即兴、轻微玩笑或打气；别报敌情/方位/锁定/击杀/威胁"
+        )
+    if event.event_id == "you_killed":
+        p, _ = sanitize_event_payload(event.event_id, event.payload)
+        domain = str(p.get("domain") or "").lower()
+        try:
+            kill_count = int(p.get("kill_count") or 1)
+        except (TypeError, ValueError):
+            kill_count = 1
+        if p.get("trade_death"):
+            return (
+                f"换掉一个；{_kill_domain_intent(domain)}；"
+                "对 {MASTER_NAME} 克制反应，可安慰或轻夸，不复盘，不套固定话"
+            )
+        if kill_count > 1:
+            return (
+                f"连续战果 {kill_count} 个；{_kill_domain_intent(domain)}；"
+                "对 {MASTER_NAME} 只回应一句，可开心、坏笑或轻轻得意，不逐条念，不套固定话"
+            )
+        return (
+            f"刚才战果；{_kill_domain_intent(domain)}；"
+            "对 {MASTER_NAME} 顺口接一句，可确认、轻夸、调侃或收住，不套固定话；别总说稳住/继续推进"
+        )
+    return _INTENT.get(event.event_id, "")
+
+
+def _prompt_reply_contract(event: BattleEvent) -> str:
+    if event.event_id in FLEX_STYLE_EVENTS:
+        return "短话为主，可带一点情绪/玩笑/陪伴感；不反问、不续聊。"
+    return "一句短话；不反问、不续聊。"
+
+
 def _prompt_style_hint(event: BattleEvent) -> str:
     if event.event_id == "you_killed":
-        if event.payload.get("trade_death"):
-            return "风格：一句中文短句；载具没了也要肯定换掉一个，不展开分析。"
+        domain = _event_domain(event)
         kill_count = 1
         try:
             kill_count = int(event.payload.get("kill_count") or 1)
         except (TypeError, ValueError):
             kill_count = 1
-        if kill_count > 1:
-            return "风格：一句中文短句；只夸一次连杀，别连续刷屏。"
-        return "风格：一句中文短句；确认击杀，克制一点。"
+        return _kill_style_hint(domain, kill_count, trade_death=bool(event.payload.get("trade_death")))
     if event.event_id == "you_died":
-        return "风格：一句中文短句；安抚并重整，不复盘。"
+        return "风格：短话为主；可安抚、吐槽或打气，不复盘。"
+    if event.event_id == "spawn":
+        return "风格：短话为主；活泼一点，可有小情绪，只打出场招呼。"
     if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
-        return "风格：一句中文短句；急促指令，不闲聊。"
+        return "风格：一句短话；急促指令，不闲聊。"
     if event.event_id in {"air_threat_nearby", "enemy_nearby", "enemy_on_six", "tailing_risk"}:
-        return "风格：一句中文短句；只报态势，不接管武器。"
+        if event.event_id == "enemy_nearby":
+            return "风格：短话为主；像提醒伙伴留神，不接管武器。"
+        return "风格：一句短话；只报态势，不接管武器。"
     if event.event_id == "ground_target_nearby":
-        return "风格：一句中文短句；只做目标/航向提示。"
+        return "风格：短话为主；像导航或观察提醒，不接管操作。"
+    if event.event_id in {"ground_laser_warning", "ground_crew_loss", "ground_ammo_empty", "ground_ammo_low"}:
+        return "风格：一句短话；像车组提醒，不接管操作，不展开分析。"
     if event.event_id == "overheat":
-        return "风格：一句中文短句；直接提醒处置。"
-    return "风格：一句中文短句；干净利落。"
+        return "风格：短话为主；提醒处置，可带一点紧张感。"
+    if event.event_id == "low_fuel":
+        return "风格：短话为主；提醒规划，可带一点陪伴感。"
+    if event.event_id == "battle_end":
+        return "风格：短话为主；轻松收尾，可小小吐槽，不展开战报。"
+    return "风格：一句短话；干净利落。"
 
 
 def _host_interrupt_pending(event: BattleEvent) -> bool:
@@ -268,18 +598,6 @@ def _host_callback_contract(
         "version": HOST_CALLBACK_CONTRACT_VERSION,
         "kind": HOST_CALLBACK_KIND,
         "delivery": delivery,
-        "reply": {
-            "mode": BATTLE_REPLY_CONTRACT,
-            "style": HOST_REPLY_STYLE,
-            "max_chars": BATTLE_REPLY_MAX_CHARS,
-            "single_turn": True,
-            "drop_followup_chunks": True,
-            "style_hint": _reply_style_contract(event),
-        },
-        "quiet_window": {
-            "policy": HOST_QUIET_WINDOW_POLICY,
-            "bypass": _host_interrupt_pending(event) or event.level == "critical",
-        },
         "freshness": {
             key: freshness[key]
             for key in ("event_ts", "event_age_seconds", "event_max_age_seconds", "event_expires_at")
@@ -298,6 +616,7 @@ def _fact_line(event: BattleEvent) -> str:
     death_fact = _death_fact(event.event_id, p)
     proximity_fact = _proximity_fact(event.event_id, p)
     objective_fact = _objective_fact(event.event_id, p)
+    ground_fact = _ground_vehicle_fact(event.event_id, p)
     free_text_fact = _free_text_fact(event.event_id, p)
     has_radio_altitude = p.get("radio_altitude_m") is not None
     order = [
@@ -321,6 +640,8 @@ def _fact_line(event: BattleEvent) -> str:
         bits.append(proximity_fact)
     if objective_fact:
         bits.append(objective_fact)
+    if ground_fact:
+        bits.append(ground_fact)
     if free_text_fact:
         bits.append(free_text_fact)
     if has_radio_altitude:
@@ -418,6 +739,18 @@ def _objective_fact(event_id: str, payload: dict[str, Any]) -> str:
     return "任务目标点接近" if not detail else f"任务目标点接近（{'，'.join(detail)}）"
 
 
+def _ground_vehicle_fact(event_id: str, payload: dict[str, Any]) -> str:
+    if event_id == "ground_laser_warning":
+        return "陆战激光告警"
+    if event_id == "ground_crew_loss":
+        return "陆战车组受损"
+    if event_id == "ground_ammo_empty":
+        return "一级弹药打空"
+    if event_id == "ground_ammo_low":
+        return "一级弹药偏少"
+    return ""
+
+
 def _free_text_fact(event_id: str, payload: dict[str, Any]) -> str:
     if event_id != "free_text_activity":
         return ""
@@ -457,14 +790,18 @@ class NekoDispatcher:
         self._clock = clock or time.time
         self._last_push_at: float | None = None
         self._last_push_priority = -1
+        self._last_event_push: dict[str, tuple[float, str, str]] = {}
 
     def build_prompt(self, event: BattleEvent) -> str:
-        intent = _RECOVERY_INTENT if event.edge == "recovery" else _INTENT.get(event.event_id, "")
+        intent = _event_intent(event)
         fact = _fact_line(event)
+        recommended_reply = _recommended_reply_line(event)
         lines = []
         if fact:
             lines.append(f"[当前] {fact}")
-        lines.append(f"[要求] {intent}。一句中文短句；不反问、不续聊、别复述数字/流程。")
+        lines.append(f"[要求] {intent}。{_prompt_reply_contract(event)}")
+        if _plugin_reply_hint_enabled(self.plugin) and recommended_reply:
+            lines[-1] = f"{lines[-1]} 建议台词：{recommended_reply}"
         lines.append(_copilot_role_boundary(event))
         lines.append(_prompt_style_hint(event))
         return "\n".join(lines)
@@ -543,6 +880,48 @@ class NekoDispatcher:
                     **freshness,
                 )
             return f"suppressed(event={event.event_id}/{event.edge}, reason=event_expired)"
+        recommended_reply = _recommended_reply_line(event)
+        if self._is_repeated_event_collapsed(event, recommended_reply, now):
+            if self.timeline:
+                self.timeline.record_stage(
+                    stage="dispatcher_suppressed",
+                    outcome="dropped",
+                    reason="repeated_event_collapsed",
+                    event_id=event.event_id,
+                    edge=event.edge,
+                    level=event.level,
+                    priority=event.priority,
+                    dry_run=False,
+                    kind="event",
+                    ai_behavior="blind" if _should_use_plugin_owned_output(self.plugin, event, recommended_reply) else "respond",
+                    pushed=False,
+                    safe_summary=f"{event.event_id}/{event.edge}/{event.level}",
+                    plugin_recommended_reply=recommended_reply,
+                    **freshness,
+                )
+            return f"suppressed(event={event.event_id}/{event.edge}, reason=repeated_event_collapsed)"
+        quiet_suppression = _quiet_window_suppression(self.plugin, event, now)
+        if quiet_suppression is not None:
+            reason, remaining = quiet_suppression
+            if self.timeline:
+                self.timeline.record_stage(
+                    stage="dispatcher_suppressed",
+                    outcome="dropped",
+                    reason=reason,
+                    event_id=event.event_id,
+                    edge=event.edge,
+                    level=event.level,
+                    priority=event.priority,
+                    dry_run=False,
+                    kind="event",
+                    ai_behavior="respond",
+                    pushed=False,
+                    safe_summary=f"{event.event_id}/{event.edge}/{event.level}",
+                    quiet_window_remaining_seconds=remaining,
+                    plugin_recommended_reply=recommended_reply,
+                    **freshness,
+                )
+            return f"suppressed(event={event.event_id}/{event.edge}, reason={reason})"
         if self._is_backpressured(event, now):
             if self.timeline:
                 self.timeline.record_stage(
@@ -561,9 +940,13 @@ class NekoDispatcher:
                     **freshness,
                 )
             return f"suppressed(event={event.event_id}/{event.edge}, reason=output_backpressure)"
-        text = self.build_prompt(event)
+        plugin_owned_output = _should_use_plugin_owned_output(self.plugin, event, recommended_reply)
+        text = _short_line(recommended_reply) if plugin_owned_output and recommended_reply else self.build_prompt(event)
         target_lanlan = _resolve_target_lanlan(self.plugin, event)
         host_contract = _host_callback_contract(event, freshness=freshness, target_lanlan=target_lanlan)
+        dialogue_policy = _plugin_dialogue_policy(event)
+        visibility = ["chat"] if plugin_owned_output else []
+        ai_behavior = "blind" if plugin_owned_output else "respond"
         metadata = {
             "plugin": "neko_warthunder",
             "event_id": event.event_id,
@@ -579,8 +962,12 @@ class NekoDispatcher:
             "max_reply_chars": BATTLE_REPLY_MAX_CHARS,
             "reply_max_chars": BATTLE_REPLY_MAX_CHARS,
             "response_module_hint": BATTLE_RESPONSE_MODULE_HINT,
+            "plugin_recommended_reply": recommended_reply,
+            "plugin_owned_output": plugin_owned_output,
             "reply_style_contract": _reply_style_contract(event),
-            "quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
+            "dialogue_policy_owner": "plugin",
+            "plugin_dialogue_policy": dialogue_policy,
+            "plugin_quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
             "host_callback_contract_version": HOST_CALLBACK_CONTRACT_VERSION,
             "host_callback_contract": host_contract,
             **freshness,
@@ -590,8 +977,8 @@ class NekoDispatcher:
         try:
             self.plugin.push_message(
                 source="neko_warthunder",
-                visibility=[],
-                ai_behavior="respond",
+                visibility=visibility,
+                ai_behavior=ai_behavior,
                 parts=[{"type": "text", "text": text}],
                 priority=event.priority,
                 coalesce_key=BATTLE_EVENT_COALESCE_KEY,
@@ -610,12 +997,18 @@ class NekoDispatcher:
                     priority=event.priority,
                     dry_run=False,
                     kind="event",
-                    ai_behavior="respond",
+                    ai_behavior=ai_behavior,
                     pushed=False,
                 )
             raise
         self._last_push_at = now
         self._last_push_priority = event.priority
+        self._last_event_push[event.event_id] = (now, event.level, recommended_reply)
+        if ai_behavior == "respond" and self.plugin is not None:
+            try:
+                setattr(self.plugin, "_last_battle_respond_at", now)
+            except Exception:
+                pass
         if self.timeline:
             self.timeline.record_stage(
                 stage="dispatcher_pushed",
@@ -627,22 +1020,27 @@ class NekoDispatcher:
                 priority=event.priority,
                 dry_run=False,
                 kind="event",
-                ai_behavior="respond",
+                ai_behavior=ai_behavior,
                 pushed=True,
                 safe_summary=f"{event.event_id}/{event.edge}/{event.level}",
                 target_lanlan=target_lanlan,
+                visibility=visibility,
                 coalesce_key=BATTLE_EVENT_COALESCE_KEY,
                 battle_reply_contract=BATTLE_REPLY_CONTRACT,
                 live_reply_contract=BATTLE_REPLY_CONTRACT,
                 max_reply_chars=BATTLE_REPLY_MAX_CHARS,
                 response_module_hint=BATTLE_RESPONSE_MODULE_HINT,
+                plugin_recommended_reply=recommended_reply,
+                plugin_owned_output=plugin_owned_output,
                 replace_pending=True,
                 interrupt_battle_event=_host_interrupt_pending(event),
                 interrupt_pending=_host_interrupt_pending(event),
                 reply_style_contract=_reply_style_contract(event),
                 reply_contract=BATTLE_REPLY_CONTRACT,
                 reply_max_chars=BATTLE_REPLY_MAX_CHARS,
-                quiet_window_policy=HOST_QUIET_WINDOW_POLICY,
+                dialogue_policy_owner="plugin",
+                plugin_dialogue_policy=dialogue_policy,
+                plugin_quiet_window_policy=HOST_QUIET_WINDOW_POLICY,
                 host_callback_contract_version=HOST_CALLBACK_CONTRACT_VERSION,
                 **freshness,
             )
@@ -663,6 +1061,16 @@ class NekoDispatcher:
         if max_age <= 0 or event.ts <= 0:
             return False
         return now >= event.ts and now - event.ts > max_age
+
+    def _is_repeated_event_collapsed(self, event: BattleEvent, recommended_reply: str, now: float) -> bool:
+        if event.event_id not in REPEAT_COLLAPSE_EVENT_IDS:
+            return False
+        last_at, last_level, last_reply = self._last_event_push.get(event.event_id, (-1e9, "", ""))
+        if now - last_at >= REPEAT_COLLAPSE_SECONDS:
+            return False
+        if event.level == "critical" and last_level != "critical":
+            return False
+        return last_reply == recommended_reply
 
     def _is_v2_live_evidence_gated(self, event: BattleEvent) -> bool:
         if event.event_id not in V2_LIVE_EVIDENCE_GATED_EVENTS:

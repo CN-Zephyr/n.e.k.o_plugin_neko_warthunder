@@ -30,6 +30,11 @@ def test_output_freshness_gate_passes_required_contracts():
     assert real_push["event_expires_at"] == 101.0
     assert real_push["target_lanlan"] == "Lanlan"
     assert real_push["reply_contract"] == "short_tts_line"
+    assert real_push["ai_behavior"] == "blind"
+    assert real_push["visibility"] == ["chat"]
+    assert real_push["dialogue_policy_owner"] == "plugin"
+    assert real_push["plugin_owned_output"] is True
+    assert real_push["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert real_push["replace_pending"] is True
     assert real_push["interrupt_battle_event"] is True
     assert real_push["interrupt_pending"] is True
@@ -37,7 +42,8 @@ def test_output_freshness_gate_passes_required_contracts():
     assert real_push["host_callback_contract_version"] == "neko.callback.v1"
     assert result["policy"]["real_battle_push_requires_coalesce_key"] is True
     assert result["policy"]["real_battle_push_requires_pending_replace_metadata"] is True
-    assert result["policy"]["real_battle_push_requires_generic_host_callback_contract"] is True
+    assert result["policy"]["real_battle_push_requires_generic_delivery_contract"] is True
+    assert result["policy"]["real_battle_push_requires_plugin_dialogue_policy"] is True
     assert result["policy"]["death_event_bypasses_backpressure"] is True
     assert result["policy"]["critical_safety_event_bypasses_backpressure"] is True
     assert result["policy"]["expired_events_must_not_push"] is True
@@ -53,6 +59,7 @@ def test_output_freshness_gate_renders_text_summary():
     assert "# neko_warthunder output freshness gate" in text
     assert "status: pass" in text
     assert "real battle output must be fresh" in text
+    assert "plugin-dialogue constrained" in text
     assert "real_push_contract" in text
     assert "expired_event_drop" in text
     assert "short_tts_line" in text

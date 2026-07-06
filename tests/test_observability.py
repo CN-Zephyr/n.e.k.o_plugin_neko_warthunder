@@ -191,7 +191,7 @@ def test_dispatcher_records_dry_run_output_status_without_prompt_text():
     assert UNSAFE_RAW not in repr(snapshot)
 
 
-def test_dispatcher_output_status_marks_event_kind_and_respond_behavior():
+def test_dispatcher_output_status_marks_event_kind_and_plugin_owned_behavior():
     RuntimeTimeline = _timeline_api()
     timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
     event = BattleEvent("you_killed")
@@ -203,6 +203,7 @@ def test_dispatcher_output_status_marks_event_kind_and_respond_behavior():
     assert result == "pushed(event=you_killed/enter)"
     assert status["kind"] == "event"
     assert status["ai_behavior"] == "respond"
+    assert status["plugin_owned_output"] is False
     assert status["pushed"] is True
 
 

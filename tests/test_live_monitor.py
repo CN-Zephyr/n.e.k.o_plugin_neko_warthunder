@@ -21,6 +21,7 @@ def _fake_fetcher(url: str):
                 "dry_run": True,
                 "connected": True,
                 "conn_state": "in_battle",
+                "game_context_active": True,
                 "in_battle": True,
                 "domain": "air",
                 "scenario": "COMBAT_STRESS",
@@ -103,6 +104,7 @@ def _fake_replay_fetcher(url: str):
                 "dry_run": True,
                 "connected": True,
                 "conn_state": "replay",
+                "game_context_active": True,
                 "in_battle": True,
                 "domain": "air",
                 "scenario": "IN_FLIGHT",
@@ -397,6 +399,7 @@ def test_live_monitor_render_text_is_short_and_actionable():
 
     assert "Hosted UI: ok" in text
     assert "Summary: health=ok, battle=in_battle/COMBAT_STRESS, free_text=dry_run_only, replay=clear, output=dispatcher_dry_run/dry_run[age=2.5s,target=Lanlan,tts=short_tts_line/28], issues=action_failed+traceback+error+tts" in text
+    assert "game_context_active=True" in text
     assert "in_battle=True" in text
     assert "scenario=COMBAT_STRESS" in text
     assert "flags=altitude_low, overspeed_warn" in text
@@ -462,6 +465,18 @@ def test_live_monitor_summary_includes_expired_output_reason():
     assert "Output detail: event_expired=旧战场事件已过期，真实开口前丢弃" in text
 
 
+def test_live_monitor_explains_repeated_event_collapsed_reason():
+    from neko_warthunder.tools.live_monitor import _format_output_summary, _format_reason_detail
+
+    summary = _format_output_summary(
+        {"stage": "dispatcher_suppressed", "outcome": "dropped", "reason": "repeated_event_collapsed"}
+    )
+    detail = _format_reason_detail("repeated_event_collapsed", kind="output")
+
+    assert summary == "dispatcher_suppressed/dropped(repeated_event_collapsed)"
+    assert detail == "repeated_event_collapsed=短时间重复战场提示已折叠"
+
+
 def test_live_monitor_marks_replay_true_as_suppressed_when_observe_matches():
     from neko_warthunder.tools.live_monitor import monitor_once
 
@@ -478,6 +493,21 @@ def test_live_monitor_marks_replay_true_as_suppressed_when_observe_matches():
     assert "RawReplayVictim" not in encoded
     assert "raw replay hud" not in encoded
     assert "raw replay award" not in encoded
+
+
+def test_live_monitor_output_summary_marks_plugin_owned_blind_mode():
+    from neko_warthunder.tools.live_monitor import _format_output_freshness_meta
+
+    text = _format_output_freshness_meta(
+        {
+            "live_reply_contract": "short_tts_line",
+            "max_reply_chars": 28,
+            "ai_behavior": "blind",
+            "plugin_owned_output": True,
+        }
+    )
+
+    assert text == "tts=short_tts_line/28,mode=blind+plugin"
 
 
 def test_live_monitor_render_text_reports_replay_degrade_without_raw_text():

@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 store.db
+.runtime_state.json
+.runtime_state.json.tmp
 
 .venv/
 venv/

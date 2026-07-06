@@ -9,7 +9,11 @@ from neko_warthunder.core.contracts import CRITICAL_EVENT_IDS, BattleEvent, WtCo
 
 class FakePlugin:
     def __init__(self) -> None:
-        self.cfg = WtConfig(output_backpressure_seconds=20.0)
+        self.cfg = WtConfig(
+            output_backpressure_seconds=20.0,
+            user_chat_quiet_window_seconds=0.0,
+            battle_output_quiet_window_seconds=0.0,
+        )
         self.calls: list[dict] = []
 
     def push_message(self, **kwargs) -> None:
@@ -51,6 +55,21 @@ def test_real_output_backpressure_allows_higher_priority_event_to_preempt_queue_
     assert plugin.calls[-1]["metadata"]["event_id"] == "low_alt_danger"
 
 
+def test_real_output_backpressure_does_not_drop_confirmed_kill_praise():
+    plugin = FakePlugin()
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 112.0]))
+
+    dispatcher.push_event(BattleEvent("over_g", level="critical", ts=99.9), dry_run=False)
+    result = dispatcher.push_event(BattleEvent("you_killed", ts=108.5), dry_run=False)
+
+    assert result.startswith("pushed(event=you_killed/enter)")
+    assert len(plugin.calls) == 2
+    assert plugin.calls[-1]["metadata"]["event_id"] == "you_killed"
+    assert "建议台词：" not in plugin.calls[-1]["parts"][0]["text"]
+    assert "不套固定话" in plugin.calls[-1]["parts"][0]["text"]
+    assert plugin.calls[-1]["metadata"]["plugin_recommended_reply"] == ""
+
+
 def test_real_output_backpressure_never_blocks_death_event():
     plugin = FakePlugin()
     dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
@@ -61,6 +80,36 @@ def test_real_output_backpressure_never_blocks_death_event():
     assert result.startswith("pushed(event=you_died/enter)")
     assert len(plugin.calls) == 2
     assert plugin.calls[-1]["metadata"]["interrupt_battle_event"] is True
+
+
+def test_repeated_urgent_safety_cue_collapses_inside_short_window():
+    plugin = FakePlugin()
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([100.0, 112.0, 131.0]))
+
+    first = dispatcher.push_event(BattleEvent("over_g", level="critical", ts=99.9), dry_run=False)
+    second = dispatcher.push_event(BattleEvent("over_g", level="critical", ts=111.9), dry_run=False)
+    third = dispatcher.push_event(BattleEvent("over_g", level="critical", ts=130.9), dry_run=False)
+
+    assert first.startswith("pushed(event=over_g/enter)")
+    assert second == "suppressed(event=over_g/enter, reason=repeated_event_collapsed)"
+    assert third.startswith("pushed(event=over_g/enter)")
+    assert len(plugin.calls) == 2
+    assert timeline.snapshot()["last_output_status"]["stage"] == "dispatcher_pushed"
+
+
+def test_critical_upgrade_is_not_collapsed_after_warning():
+    plugin = FakePlugin()
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+
+    first = dispatcher.push_event(BattleEvent("over_g", level="warning", ts=99.9), dry_run=False)
+    second = dispatcher.push_event(BattleEvent("over_g", level="critical", ts=104.9), dry_run=False)
+
+    assert first.startswith("pushed(event=over_g/enter)")
+    assert second.startswith("pushed(event=over_g/enter)")
+    assert len(plugin.calls) == 2
+    assert plugin.calls[0]["metadata"]["level"] == "warning"
+    assert plugin.calls[1]["metadata"]["level"] == "critical"
 
 
 def test_real_output_backpressure_never_blocks_critical_safety_event():
@@ -91,11 +140,87 @@ def test_each_critical_safety_event_bypasses_backpressure_and_interrupts_pending
         assert metadata["replace_pending"] is True
         assert metadata["interrupt_battle_event"] is True
         assert metadata["interrupt_pending"] is True
-        assert metadata["host_callback_contract"]["quiet_window"]["bypass"] is True
+        assert metadata["dialogue_policy_owner"] == "plugin"
+        assert metadata["plugin_dialogue_policy"]["owner"] == "plugin"
 
 
 def test_dispatcher_urgent_replace_events_cover_all_critical_safety_events():
     assert CRITICAL_EVENT_IDS <= URGENT_REPLACE_EVENTS
+
+
+def test_user_chat_quiet_window_suppresses_nonurgent_battle_cue():
+    plugin = FakePlugin()
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("you_killed", ts=104.0), dry_run=False)
+
+    assert result == "suppressed(event=you_killed/enter, reason=user_chat_quiet_window)"
+    assert plugin.calls == []
+    status = timeline.snapshot()["last_output_status"]
+    assert status["reason"] == "user_chat_quiet_window"
+    assert status["quiet_window_remaining_seconds"] == 15.0
+
+
+def test_user_chat_quiet_window_allows_critical_safety_cue():
+    plugin = FakePlugin()
+    plugin.cfg.dialogue_intrusion_mode = "critical_only"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    dispatcher = NekoDispatcher(plugin, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("low_alt_danger", level="critical", ts=104.0), dry_run=False)
+
+    assert result.startswith("pushed(event=low_alt_danger/enter)")
+    assert len(plugin.calls) == 1
+    assert plugin.calls[0]["metadata"]["interrupt_battle_event"] is True
+
+
+def test_no_interrupt_mode_suppresses_critical_safety_cue_during_user_chat():
+    plugin = FakePlugin()
+    plugin.cfg.dialogue_intrusion_mode = "no_interrupt"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("low_alt_danger", level="critical", ts=104.0), dry_run=False)
+
+    assert result == "suppressed(event=low_alt_danger/enter, reason=user_chat_quiet_window)"
+    assert plugin.calls == []
+    assert timeline.snapshot()["last_output_status"]["reason"] == "user_chat_quiet_window"
+
+
+def test_allow_interrupt_mode_bypasses_user_chat_quiet_window_for_ordinary_cues():
+    plugin = FakePlugin()
+    plugin.cfg.dialogue_intrusion_mode = "allow_interrupt"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    dispatcher = NekoDispatcher(plugin, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("you_killed", ts=104.0), dry_run=False)
+
+    assert result.startswith("pushed(event=you_killed/enter)")
+    assert len(plugin.calls) == 1
+
+
+def test_battle_output_quiet_window_suppresses_ordinary_followup():
+    plugin = FakePlugin()
+    plugin.cfg.battle_output_quiet_window_seconds = 20.0
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([100.0, 108.0]))
+
+    first = dispatcher.push_event(BattleEvent("you_killed", ts=99.0), dry_run=False)
+    second = dispatcher.push_event(BattleEvent("spawn", ts=107.0), dry_run=False)
+
+    assert first.startswith("pushed(event=you_killed/enter)")
+    assert second == "suppressed(event=spawn/enter, reason=battle_output_quiet_window)"
+    assert len(plugin.calls) == 1
+    status = timeline.snapshot()["last_output_status"]
+    assert status["reason"] == "battle_output_quiet_window"
+    assert status["quiet_window_remaining_seconds"] == 12.0
 
 
 def test_real_event_pushes_use_battle_coalesce_key_to_replace_stale_host_queue():
@@ -157,7 +282,19 @@ def test_kill_events_keep_short_but_less_aggressive_freshness_window():
     assert result.startswith("pushed(")
     metadata = plugin.calls[0]["metadata"]
     assert metadata["event_age_seconds"] == 5.5
-    assert metadata["event_max_age_seconds"] == 6.0
+    assert metadata["event_max_age_seconds"] == 30.0
+
+
+def test_delayed_kill_praise_keeps_wider_freshness_window_after_combat_stress():
+    plugin = FakePlugin()
+    plugin.cfg.output_event_max_age_seconds = 8.0
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 100.0]))
+
+    fresh = dispatcher.push_event(BattleEvent("you_killed", level="warning", ts=71.0), dry_run=False)
+    expired = dispatcher.push_event(BattleEvent("you_killed", level="warning", ts=69.0), dry_run=False)
+
+    assert fresh.startswith("pushed(")
+    assert expired == "suppressed(event=you_killed/enter, reason=event_expired)"
 
 
 def test_real_event_push_metadata_carries_event_age_and_expiry_for_host_queue():
@@ -192,13 +329,37 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert metadata["live_reply_contract"] == "short_tts_line"
     assert metadata["max_reply_chars"] == 28
     assert metadata["response_module_hint"] == "war_thunder_battle_event"
+    assert plugin.calls[0]["visibility"] == ["chat"]
+    assert plugin.calls[0]["ai_behavior"] == "blind"
+    assert plugin.calls[0]["parts"] == [{"type": "text", "text": "拉起来，要撞地了！"}]
+    assert "{MASTER_NAME}" not in plugin.calls[0]["parts"][0]["text"]
+    assert "建议台词：" not in plugin.calls[0]["parts"][0]["text"]
+    assert metadata["plugin_owned_output"] is True
+    assert metadata["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert metadata["reply_style_contract"].startswith("Style: one short Chinese line")
+    assert metadata["dialogue_policy_owner"] == "plugin"
+    assert metadata["plugin_dialogue_policy"] == {
+        "owner": "plugin",
+        "mode": "short_tts_line",
+        "max_chars": 28,
+        "single_line": True,
+        "no_followup": True,
+        "prompt_owned": True,
+        "style": "short_line",
+        "style_hint": metadata["reply_style_contract"],
+    }
     status = timeline.snapshot()["last_output_status"]
     assert status["battle_reply_contract"] == "short_tts_line"
     assert status["live_reply_contract"] == "short_tts_line"
     assert status["max_reply_chars"] == 28
     assert status["response_module_hint"] == "war_thunder_battle_event"
+    assert status["ai_behavior"] == "blind"
+    assert status["visibility"] == ["chat"]
+    assert status["plugin_owned_output"] is True
+    assert status["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert status["reply_style_contract"].startswith("Style: one short Chinese line")
+    assert status["dialogue_policy_owner"] == "plugin"
+    assert status["plugin_dialogue_policy"]["owner"] == "plugin"
 
 
 def test_real_event_push_metadata_reserves_generic_host_callback_contract():
@@ -216,7 +377,8 @@ def test_real_event_push_metadata_reserves_generic_host_callback_contract():
     assert metadata["interrupt_pending"] is True
     assert metadata["reply_contract"] == "short_tts_line"
     assert metadata["reply_max_chars"] == 28
-    assert metadata["quiet_window_policy"] == "suppress_non_urgent_during_user_input"
+    assert metadata["dialogue_policy_owner"] == "plugin"
+    assert metadata["plugin_quiet_window_policy"] == "suppress_non_urgent_during_user_input"
     assert contract["version"] == "neko.callback.v1"
     assert contract["kind"] == "realtime_cue"
     assert contract["delivery"] == {
@@ -227,15 +389,12 @@ def test_real_event_push_metadata_reserves_generic_host_callback_contract():
         "expires_at": 103.0,
         "max_age_seconds": 4.0,
     }
-    assert contract["reply"]["mode"] == "short_tts_line"
-    assert contract["reply"]["style"] == "short_line"
-    assert contract["reply"]["max_chars"] == 28
-    assert contract["reply"]["single_turn"] is True
-    assert contract["reply"]["drop_followup_chunks"] is True
-    assert contract["quiet_window"] == {
-        "policy": "suppress_non_urgent_during_user_input",
-        "bypass": True,
-    }
+    assert "reply" not in contract
+    assert "quiet_window" not in contract
+    assert metadata["plugin_dialogue_policy"]["owner"] == "plugin"
+    assert metadata["plugin_dialogue_policy"]["mode"] == "short_tts_line"
+    assert metadata["plugin_dialogue_policy"]["max_chars"] == 28
+    assert metadata["plugin_dialogue_policy"]["single_line"] is True
     assert contract["freshness"]["event_age_seconds"] == 1.0
     assert contract["target"] == {"lanlan": "Lanlan"}
     status = timeline.snapshot()["last_output_status"]
@@ -246,8 +405,10 @@ def test_real_event_push_metadata_reserves_generic_host_callback_contract():
 def test_kill_prompt_requests_one_shot_non_repetitive_praise():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("you_killed", payload={"kill_count": 2}))
 
-    assert "只夸一次连杀" in prompt
-    assert "别连续刷屏" in prompt
+    assert "连续战果" in prompt
+    assert "只合并说一次" in prompt
+    assert "不逐条念" in prompt
+    assert "临场反应，不像颁奖词" in prompt
 
 
 def test_real_event_push_uses_configured_target_lanlan():

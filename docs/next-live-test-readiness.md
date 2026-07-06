@@ -69,15 +69,15 @@
 
 | 顺序 | 用户操作 | 我方监控重点 | 通过标准 |
 | --- | --- | --- | --- |
-| 0 | 先跑离线门禁，或确认当天代码未变。 | tests/run_logic_tests.py、pytest、local host compatibility checks、plugin check、sample/live plan。 | 离线基线通过，操作清单包含 P1/P2 待测项；宿主兼容检查不代表要提交战雷专用核心补丁。 |
+| 0 | 先跑离线门禁，或确认当天代码未变。 | tests/run_logic_tests.py、pytest、host boundary gate、plugin check、sample/live plan。 | 离线基线通过，操作清单包含 P1/P2 待测项；宿主边界检查证明不需要提交战雷专用核心补丁。 |
 | 1 | 启动宿主、Hosted UI、数据层，打开面板。 | 48911/health、48916/health、8112/health、Hosted UI context/actions。 | 三项 health 正常，context 非空，actions 可调用。 |
 | 2 | 进战局前设置玩家名。 | /api/identity、combat.self.source、combat.player_name。 | combat.self.source=manual，后续 ownership 围绕该昵称生效。 |
 | 3 | 保持 `dry_run=true`，打一轮常规空战或陆战。 | observe.last_event、observe.last_decision、observe.last_output_status、processed.flags。 | 事件能解释为 allowed / preempt / cooldown / scenario_gated / dry_run 输出之一。 |
 | 4 | 触发或等待 owned kill / death。 | combat.feed[].is_my_kill / is_my_death、you_killed / you_died。 | 生成 generic kill/death，不含 raw 玩家名；death / critical 仍可抢占。 |
 | 5 | 观察 awards / hud_notices / combat.feed 自由文本源。 | free_text_safety.status、source_details、prompt / dry_run 输出。 | free_text=dry_run_only，raw HUD / combat.feed / awards 原文不进入 prompt。 |
 | 6 | 若出现 replay，继续观察不要手动触发输出。 | replay=true、detector_suppressed/replay、output_blocked。 | replay 帧静默，live_monitor 显示 replay suppressed，不真实开口。 |
-| 7 | 条件允许时关闭 `dry_run`，复测数值安全或 generic kill/death。 | push_message、last_output_status、output_backpressure、event_expired、event_age_seconds、event_expires_at、target_lanlan、battle_reply_contract、live_reply_contract、max_reply_chars、kill_coalesced。 | 真实开口不刷屏，旧回复晚到减少，过期旧事件不真实 push，更高优先级事件仍可插队，目标会话不走 fallback session，短播报合同不丢失。 |
-| 7a | 真实开口或样本回放期间手动给猫发日常消息。 | 聊天窗口、用户输入后约 10 秒内的战雷 callback、battle_event metadata。 | 普通战雷 cue 不混入这轮日常回复；warning 低空/超速不因 priority 高而插队；you_died 和 critical 危险仍可插队。 |
+| 7 | 条件允许时关闭 `dry_run`，复测数值安全或 generic kill/death。 | push_message、last_output_status、output_backpressure、event_expired、repeated_event_collapsed、event_age_seconds、event_expires_at、target_lanlan、battle_reply_contract、live_reply_contract、max_reply_chars、kill_coalesced、plugin_owned_output。 | 真实开口不刷屏，旧回复晚到减少，过期旧事件不真实 push，同类安全提示短窗折叠，击杀夸夸不被普通过载背压吃掉，目标会话不走 fallback session，短播报合同不丢失。 |
+| 7a | 真实开口或样本回放期间手动给猫发日常消息。 | 聊天窗口、用户输入后约 10 秒内的战雷 callback、battle_event metadata。 | 危急动作类默认以 `blind+plugin` 短句直出，不混入这轮日常回复；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和结算走 bounded `respond`；critical 危险仍可按插话策略插队。 |
 | 8 | 若出现动力故障 HUD 技术通知，不急着判断成播报事件。 | powertrain_failure、deferred_hud_notice、detector_suppressed、raw HUD 是否被阻断。 | 只显示 deferred 可观测记录，不真实开口，不泄漏 raw HUD 文本。 |
 
 ## Next live-test plan

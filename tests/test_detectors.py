@@ -53,11 +53,11 @@ def test_high_aoa_and_over_g_flags_emit_flight_control_events():
 
     aoa = detectors["high_aoa"].feed(
         C.BattleState(),
-        C.BattleState(flags={"aoa_critical": True}, aoa_deg=24.0, g_now=8.5),
+        C.BattleState(domain="air", flags={"aoa_critical": True}, aoa_deg=24.0, g_now=8.5),
     )
     over_g = detectors["over_g"].feed(
         C.BattleState(),
-        C.BattleState(flags={"over_g_critical": True}, g_now=13.1, aoa_deg=18.0),
+        C.BattleState(domain="air", flags={"over_g_critical": True}, g_now=13.1, aoa_deg=18.0),
     )
 
     assert aoa is not None and aoa.event_id == "high_aoa" and aoa.level == "critical"
@@ -80,9 +80,18 @@ def test_condition_escalation_reemits_critical():
 def test_spawn_detector():
     det = SpawnDetector()
     prev = C.BattleState(connected=True, in_battle=False, vehicle_valid=False)
-    cur = C.BattleState(connected=True, in_battle=True, vehicle_valid=True, vehicle_type="bf-109f-4")
+    cur = C.BattleState(
+        connected=True,
+        in_battle=True,
+        vehicle_valid=True,
+        vehicle_type="bf-109f-4",
+        domain="air",
+        domain_label="空军",
+    )
     ev = det.feed(prev, cur)
     assert ev is not None and ev.event_id == "spawn" and ev.payload.get("vehicle_type") == "bf-109f-4"
+    assert ev.payload.get("domain") == "air"
+    assert ev.payload.get("domain_label") == "空军"
     assert det.feed(cur, cur) is None  # 已存活不再触发
 
 
@@ -105,6 +114,26 @@ def test_death_detector():
     assert ev is not None and ev.event_id == "you_died" and ev.level == "critical"
 
 
+def test_death_detector_emits_when_ownership_arrives_late_for_seen_id():
+    det = DeathDetector()
+    prev = C.BattleState(in_battle=True, vehicle_valid=True)
+    first = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        combat={"feed": [{"id": 3, "is_my_death": False, "killer": "Opponent", "action": "crashed"}]},
+    )
+    second = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        combat={"feed": [{"id": 3, "is_my_death": True, "killer": "Opponent", "action": "crashed"}]},
+    )
+
+    assert det.feed(prev, first) is None
+    ev = det.feed(first, second)
+    assert ev is not None and ev.event_id == "you_died" and ev.level == "critical"
+    assert det.feed(second, second) is None
+
+
 def test_kill_dedup_monotonic():
     det = KillDetector("Me")
     feed1 = {"player_name": "Me", "feed": [{"id": 5, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "A"}]}
@@ -116,6 +145,27 @@ def test_kill_dedup_monotonic():
     cur2 = C.BattleState(in_battle=True, vehicle_valid=True, combat=feed2)
     ev2 = det.feed(cur1, cur2)
     assert ev2 is not None and ev2.payload.get("victim") == "B"  # 只发新 id
+
+
+def test_kill_detector_emits_when_ownership_arrives_late_for_seen_id():
+    det = KillDetector("Me")
+    prev = C.BattleState(in_battle=True, vehicle_valid=True)
+    first = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        combat={"feed": [{"id": 412, "is_kill": True, "is_my_kill": False, "victim": "AI Target"}]},
+    )
+    second = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        combat={"feed": [{"id": 412, "is_kill": True, "is_my_kill": True, "victim": "AI Target"}]},
+    )
+
+    assert det.feed(prev, first) is None
+    ev = det.feed(first, second)
+    assert ev is not None and ev.event_id == "you_killed"
+    assert ev.payload.get("victim") == "AI Target"
+    assert det.feed(second, second) is None
 
 
 def test_kill_requires_is_my_kill_flag():
@@ -184,16 +234,22 @@ def test_free_text_activity_detector_ignores_owned_combat_feed_and_technical_not
 
 def test_overspeed_warn_and_critical_flags_emit_events():
     engine = DetectorEngine(list(build_condition_detectors()))
-    prev = C.BattleState(in_battle=True, vehicle_valid=True)
+    prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="air")
 
-    warn = C.BattleState(in_battle=True, vehicle_valid=True, flags={"overspeed_warn": True}, ias_kmh=760.0)
+    warn = C.BattleState(in_battle=True, vehicle_valid=True, domain="air", flags={"overspeed_warn": True}, ias_kmh=760.0)
     assert engine.feed(prev, warn) == []
     events = engine.feed(warn, warn)
     assert len(events) == 1
     assert events[0].event_id == "overspeed"
     assert events[0].level == "warning"
 
-    critical = C.BattleState(in_battle=True, vehicle_valid=True, flags={"overspeed_critical": True}, ias_kmh=880.0)
+    critical = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        flags={"overspeed_critical": True},
+        ias_kmh=880.0,
+    )
     events = engine.feed(warn, critical)
     assert len(events) == 1
     assert events[0].event_id == "overspeed"
@@ -202,11 +258,12 @@ def test_overspeed_warn_and_critical_flags_emit_events():
 
 def test_low_alt_payload_carries_radio_altitude_for_agl_context():
     engine = DetectorEngine(list(build_condition_detectors()))
-    prev = C.BattleState(in_battle=True, vehicle_valid=True)
+    prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="air")
 
     low_1 = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         flags={"altitude_critical": True},
         altitude_m=1067.0,
         radio_altitude_m=8.0,
@@ -215,6 +272,7 @@ def test_low_alt_payload_carries_radio_altitude_for_agl_context():
     low_2 = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         flags={"altitude_critical": True},
         altitude_m=1060.0,
         radio_altitude_m=7.0,
@@ -232,12 +290,89 @@ def test_low_alt_payload_carries_radio_altitude_for_agl_context():
 
 def test_aoa_flags_emit_high_aoa_without_reusing_stall_risk():
     engine = DetectorEngine(list(build_condition_detectors()))
-    prev = C.BattleState(in_battle=True, vehicle_valid=True)
-    high_aoa = C.BattleState(in_battle=True, vehicle_valid=True, flags={"aoa_high": True}, aoa_deg=19.0)
+    prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="air")
+    high_aoa = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        flags={"aoa_high": True},
+        aoa_deg=19.0,
+    )
 
     events = engine.feed(prev, high_aoa)
     assert [e.event_id for e in events] == ["high_aoa"]
     assert engine.feed(high_aoa, high_aoa) == []
+
+
+def test_fixed_wing_safety_flags_are_suppressed_outside_air_domain():
+    air_only_flags = {
+        "stall_critical": True,
+        "aoa_critical": True,
+        "over_g_critical": True,
+        "altitude_critical": True,
+        "overspeed_critical": True,
+        "fuel_critical": True,
+    }
+
+    for domain in ("ground", "naval", "heli", ""):
+        engine = DetectorEngine(list(build_condition_detectors()))
+        state = C.BattleState(
+            in_battle=True,
+            vehicle_valid=True,
+            domain=domain,
+            flags=air_only_flags,
+            ias_kmh=1200.0,
+            aoa_deg=25.0,
+            g_now=12.0,
+            fuel_fraction=0.02,
+            altitude_m=20.0,
+            radio_altitude_m=5.0,
+        )
+
+        assert engine.feed(C.BattleState(domain=domain), state) == []
+        assert engine.feed(state, state) == []
+
+
+def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain():
+    engine = DetectorEngine(list(build_condition_detectors()))
+    prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground")
+    cur = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="ground",
+        flags={
+            "laser_warning": True,
+            "crew_critical": True,
+            "ammo_empty": True,
+        },
+        crew_current=1,
+        crew_total=4,
+        ammo_first_stage=0,
+    )
+
+    assert [event.event_id for event in engine.feed(prev, cur)] == [
+        "ground_laser_warning",
+        "ground_crew_loss",
+    ]
+    events = engine.feed(cur, cur)
+    assert [event.event_id for event in events] == ["ground_ammo_empty"]
+    assert events[0].payload == {"ammo_first_stage": 0, "domain": "ground"}
+
+
+def test_ground_status_flags_are_suppressed_outside_ground_domain():
+    flags = {
+        "laser_warning": True,
+        "crew_critical": True,
+        "ammo_empty": True,
+        "ammo_low": True,
+    }
+
+    for domain in ("air", "heli", "naval", ""):
+        engine = DetectorEngine(list(build_condition_detectors()))
+        cur = C.BattleState(in_battle=True, vehicle_valid=True, domain=domain, flags=flags)
+
+        assert engine.feed(C.BattleState(domain=domain), cur) == []
+        assert engine.feed(cur, cur) == []
 
 
 def test_kill_detector_uses_is_my_kill_flag():
@@ -446,11 +581,13 @@ def test_proximity_detector_promotes_air_and_rear_threats():
     air = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         proximity_events=[{"id": 2, "is_air": True, "distance_m": 1800, "clock": 2}],
     )
     rear = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         proximity_events=[
             {"id": 2, "is_air": True, "distance_m": 1800, "clock": 2},
             {"id": 3, "is_air": True, "distance_m": 700, "clock": 6, "text": "unsafe raw proximity text"},
@@ -470,12 +607,14 @@ def test_proximity_detector_upgrades_repeated_close_rear_threat_to_tailing_risk(
     first = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         timestamp=100.0,
         proximity_events=[{"id": 10, "is_air": True, "distance_m": 850, "clock": 6}],
     )
     second = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         timestamp=104.0,
         proximity_events=[
             {"id": 10, "is_air": True, "distance_m": 850, "clock": 6},
@@ -497,12 +636,14 @@ def test_proximity_detector_does_not_upgrade_distant_or_stale_rear_hits():
     distant = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         timestamp=100.0,
         proximity_events=[{"id": 20, "is_air": True, "distance_m": 1500, "clock": 6}],
     )
     stale = C.BattleState(
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         timestamp=106.0,
         proximity_events=[
             {"id": 20, "is_air": True, "distance_m": 1500, "clock": 6},
@@ -523,6 +664,33 @@ def test_proximity_detector_suppresses_dead_or_invalid_vehicle():
 
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=False, proximity_events=[event])) is None
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, dead=True, proximity_events=[event])) is None
+
+
+def test_ground_proximity_does_not_use_air_tail_terms():
+    det = ProximityDetector()
+    event = {
+        "id": 1,
+        "kind": "enter",
+        "type": "ground_model",
+        "category": "坦克",
+        "is_air": False,
+        "distance_m": 300,
+        "clock": 6,
+        "relative_deg": 180,
+    }
+    cur = C.BattleState(
+        in_battle=True,
+        indicators_valid=True,
+        has_player=True,
+        domain="ground",
+        vehicle_type="ussr_t_80ue1_sm",
+        proximity_events=[event],
+    )
+
+    out = det.feed(C.BattleState(), cur)
+
+    assert out is not None
+    assert out.event_id == "enemy_nearby"
 
 
 def test_air_situation_detector_uses_continuous_enemy_geometry_for_air_threats():

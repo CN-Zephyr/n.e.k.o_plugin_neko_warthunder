@@ -9,6 +9,7 @@ M2 接入 Scenario(D-B1) / Detector(D-B3) / Arbiter(D-B4) 后才真正产出事�
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import threading
 import time
@@ -19,6 +20,7 @@ from plugin.sdk.plugin import (
     neko_plugin,
     plugin_entry,
     lifecycle,
+    message,
     ui,
     Ok,
     Err,
@@ -40,6 +42,18 @@ from .detectors.condition.flight_safety import build_condition_detectors
 from .detectors.discrete.lifecycle import build_discrete_detectors
 
 _CONFIG_SECTION = "neko_warthunder"
+_RUNTIME_STATE_FILENAME = ".runtime_state.json"
+_DIALOGUE_INTRUSION_PRESETS: dict[str, tuple[float, float]] = {
+    "no_interrupt": (60.0, 30.0),
+    "critical_only": (60.0, 30.0),
+    "allow_interrupt": (0.0, 0.0),
+}
+_DIALOGUE_INTRUSION_ALIASES = {
+    "avoid_interrupt": "no_interrupt",
+    "protect_chat": "critical_only",
+    "balanced": "critical_only",
+    "immediate": "allow_interrupt",
+}
 _DEFERRED_HUD_NOTICE_CODES = frozenset({"powertrain_failure"})
 _BLOCKED_FREE_TEXT_SOURCES = {
     "awards": ("free_text_awards", ("awards", "feed")),
@@ -60,7 +74,9 @@ class NekoWarthunderPlugin(NekoPluginBase):
             self.logger = ctx.logger
 
         self.cfg = WtConfig()
-        self.data_layer_manager = DataLayerProcessManager(self.cfg, plugin_root=Path(__file__).resolve().parent)
+        self._plugin_root = Path(__file__).resolve().parent
+        self._runtime_state_path = self._plugin_root / _RUNTIME_STATE_FILENAME
+        self.data_layer_manager = DataLayerProcessManager(self.cfg, plugin_root=self._plugin_root)
         self.client = TelemetryClient(self.cfg.data_layer_url, self.cfg.http_timeout_seconds)
         self.safety = SafetyGuard(self.cfg)
         self.timeline = RuntimeTimeline(
@@ -84,6 +100,8 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self._deferred_hud_notice_ids: set[int] = set()
         self._blocked_free_text_sources_seen: set[str] = set()
         self._takeoff_radio_altitude_grace_active = False
+        self._last_user_chat_at = 0.0
+        self._last_battle_respond_at = 0.0
 
     # ------------------------------------------------------------------ 配置
     async def _reload_config(self) -> None:
@@ -94,6 +112,17 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 data = dumped[_CONFIG_SECTION]
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(f"config load failed, using defaults: {type(exc).__name__}")
+        runtime_state = self._load_runtime_state()
+        if not str(data.get("player_name") or "").strip():
+            saved_player_name = str(runtime_state.get("player_name") or "").strip()
+            if saved_player_name:
+                data["player_name"] = saved_player_name
+        saved_dialogue_mode = self._normalize_dialogue_intrusion_mode(runtime_state.get("dialogue_intrusion_mode"))
+        if saved_dialogue_mode in _DIALOGUE_INTRUSION_PRESETS:
+            user_window, battle_window = _DIALOGUE_INTRUSION_PRESETS[saved_dialogue_mode]
+            data["dialogue_intrusion_mode"] = saved_dialogue_mode
+            data["user_chat_quiet_window_seconds"] = user_window
+            data["battle_output_quiet_window_seconds"] = battle_window
         self._apply_config(WtConfig.from_mapping(data))
 
     def _apply_config(self, cfg: WtConfig) -> None:
@@ -121,8 +150,6 @@ class NekoWarthunderPlugin(NekoPluginBase):
     async def startup(self, **_):
         await self._reload_config()
         data_layer_status = self.data_layer_manager.start_if_needed()
-        self.dispatcher.push_context(WT_CONTEXT_INSTRUCTIONS)
-        self._instructions_injected = True
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="wt-poll")
         self._thread.start()
@@ -157,15 +184,64 @@ class NekoWarthunderPlugin(NekoPluginBase):
         await self._reload_config()
         return Ok({"status": "reloaded", "dry_run": self.cfg.dry_run})
 
+    @message(id="chat_quiet_window", source="chat")
+    def on_chat_message(self, **_):
+        self._last_user_chat_at = time.time()
+        if self.timeline:
+            self.timeline.record_stage(
+                stage="chat_observed",
+                outcome="observed",
+                reason="user_chat_quiet_window_started",
+                kind="chat",
+                source="chat",
+                safe_summary="chat/observed",
+            )
+        return Ok({"status": "observed"})
+
     async def _persist_identity_name(self, name: str) -> dict[str, Any]:
         persisted_name = str(name or "").strip()
         try:
-            await self.config.update({_CONFIG_SECTION: {"player_name": persisted_name}})
+            self._save_runtime_state({"player_name": persisted_name})
             self._apply_config(WtConfig.from_mapping({**self.cfg.to_dict(), "player_name": persisted_name}))
             return {"ok": True, "player_name": persisted_name}
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning(f"identity config persist failed: {type(exc).__name__}")
-            return {"ok": False, "error": f"config persist failed: {type(exc).__name__}"}
+            self.logger.warning(f"identity local persist failed: {type(exc).__name__}")
+            return {"ok": False, "error": f"local persist failed: {type(exc).__name__}"}
+
+    def _load_runtime_state(self) -> dict[str, Any]:
+        path = getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME)
+        try:
+            if not path.exists():
+                return {}
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"runtime state load failed: {type(exc).__name__}")
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_runtime_state(self, patch: dict[str, Any]) -> None:
+        path = getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME)
+        current = self._load_runtime_state()
+        current.update(patch)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+
+    @staticmethod
+    def _normalize_dialogue_intrusion_mode(value: Any) -> str:
+        mode = str(value or "").strip()
+        return _DIALOGUE_INTRUSION_ALIASES.get(mode, mode)
+
+    def _dialogue_intrusion_mode(self) -> str:
+        configured = self._normalize_dialogue_intrusion_mode(getattr(self.cfg, "dialogue_intrusion_mode", ""))
+        if configured in _DIALOGUE_INTRUSION_PRESETS:
+            return configured
+        user_window = float(getattr(self.cfg, "user_chat_quiet_window_seconds", 0.0) or 0.0)
+        battle_window = float(getattr(self.cfg, "battle_output_quiet_window_seconds", 0.0) or 0.0)
+        for mode, preset in _DIALOGUE_INTRUSION_PRESETS.items():
+            if (user_window, battle_window) == preset:
+                return mode
+        return "custom"
 
     def _restore_identity_to_data_layer(self) -> dict[str, Any]:
         name = str(self.cfg.player_name or "").strip()
@@ -207,8 +283,42 @@ class NekoWarthunderPlugin(NekoPluginBase):
         with self._state_lock:
             prev = self.state
             self.state = new_state
+        self._sync_game_context(prev, new_state)
         self._evaluate(prev, new_state)
         self._report()
+
+    @staticmethod
+    def _game_context_should_be_active(s: BattleState) -> bool:
+        return bool(s.connected and str(s.conn_state or "").lower() != "offline")
+
+    def _sync_game_context(self, prev: BattleState, cur: BattleState) -> None:
+        was_active = self._game_context_should_be_active(prev)
+        is_active = self._game_context_should_be_active(cur)
+        if is_active and not self._instructions_injected:
+            self.dispatcher.push_context(WT_CONTEXT_INSTRUCTIONS)
+            self._instructions_injected = True
+            self.timeline.record_stage(
+                stage="game_context_entered",
+                outcome="entered",
+                reason="telemetry_online",
+                connected=cur.connected,
+                conn_state=cur.conn_state,
+                in_battle=cur.in_battle,
+                safe_summary="war_thunder_context/entered",
+            )
+            return
+        if (not is_active) and self._instructions_injected and was_active:
+            self.dispatcher.push_context(WT_RESTORE_INSTRUCTIONS)
+            self._instructions_injected = False
+            self.timeline.record_stage(
+                stage="game_context_exited",
+                outcome="exited",
+                reason="telemetry_offline",
+                connected=cur.connected,
+                conn_state=cur.conn_state,
+                in_battle=cur.in_battle,
+                safe_summary="war_thunder_context/exited",
+            )
 
     def _evaluate(self, prev: BattleState, cur: BattleState) -> None:
         """Scenario(D-B1) + Detector(D-B3) → 候选 → Arbiter(D-B4) → dispatcher。"""
@@ -239,6 +349,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self._record_blocked_free_text_sources(cur)
         self._record_deferred_hud_notices(cur)
         candidates = self._suppress_takeoff_grace(candidates, cur, now)
+        candidates = self._annotate_runtime_context(candidates, cur, now)
         for candidate in candidates:
             self.timeline.record_stage(
                 stage="detector_candidate",
@@ -274,6 +385,35 @@ class NekoWarthunderPlugin(NekoPluginBase):
             except Exception as exc:  # noqa: BLE001 — 投递失败计入安全门，不杀循环
                 self.logger.warning(f"dispatch failed: {type(exc).__name__}: {exc}")
                 self.safety.record_failure(now)
+
+    def _annotate_runtime_context(
+        self,
+        candidates: list[BattleEvent],
+        cur: BattleState,
+        now: float,
+    ) -> list[BattleEvent]:
+        stress_reasons = sorted(self.resolver.current_stress_reasons(now))
+        if not stress_reasons:
+            return candidates
+        annotated: list[BattleEvent] = []
+        for candidate in candidates:
+            if candidate.event_id != "you_killed":
+                annotated.append(candidate)
+                continue
+            payload = dict(candidate.payload)
+            payload.setdefault("domain", cur.domain)
+            payload["stress_reasons"] = stress_reasons
+            payload["scenario_at_detect"] = cur.scenario
+            annotated.append(
+                BattleEvent(
+                    candidate.event_id,
+                    edge=candidate.edge,
+                    payload=payload,
+                    ts=candidate.ts,
+                    level=candidate.level,
+                )
+            )
+        return annotated
 
     def _record_blocked_free_text_sources(self, cur: BattleState) -> None:
         if not cur.in_battle:
@@ -333,7 +473,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         return 0
 
     def _record_deferred_hud_notices(self, cur: BattleState) -> None:
-        if not (cur.in_battle and cur.vehicle_valid and not cur.dead):
+        if not cur.is_alive():
             return
         seen_ids = getattr(self, "_deferred_hud_notice_ids", None)
         if seen_ids is None:
@@ -378,6 +518,9 @@ class NekoWarthunderPlugin(NekoPluginBase):
 
     def _takeoff_radio_altitude_grace_active_for(self, cur: BattleState, now: float) -> bool:
         radio_alt = cur.radio_altitude_m
+        if (cur.domain or "").lower() != "air":
+            self._takeoff_radio_altitude_grace_active = False
+            return False
         if radio_alt is None or not cur.in_battle or not cur.vehicle_valid or cur.dead:
             self._takeoff_radio_altitude_grace_active = False
             return False
@@ -399,12 +542,31 @@ class NekoWarthunderPlugin(NekoPluginBase):
             self._takeoff_radio_altitude_grace_active = True
         return self._takeoff_radio_altitude_grace_active
 
+    @staticmethod
+    def _takeoff_gear_down_or_moving(cur: BattleState) -> bool:
+        raw = cur.raw if isinstance(cur.raw, dict) else {}
+        indicators = raw.get("indicators") if isinstance(raw.get("indicators"), dict) else {}
+        gear_state = indicators.get("gear_state")
+        if gear_state in {"down", "moving"}:
+            return True
+        for key in ("gears", "gear_pct", "gear, %"):
+            try:
+                value = indicators.get(key)
+                if value is not None and float(value) > 0.5:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     def _suppress_takeoff_grace(
         self,
         candidates: list[BattleEvent],
         cur: BattleState,
         now: float,
     ) -> list[BattleEvent]:
+        if (cur.domain or "").lower() != "air":
+            self._takeoff_radio_altitude_grace_active = False
+            return candidates
         grace = float(getattr(self.cfg, "takeoff_low_alt_grace_seconds", 0.0) or 0.0)
         radio_grace_active = self._takeoff_radio_altitude_grace_active_for(cur, now)
         if grace <= 0 and not radio_grace_active:
@@ -413,17 +575,23 @@ class NekoWarthunderPlugin(NekoPluginBase):
             return candidates
         elapsed = self.resolver.seconds_since_spawn(now)
         time_grace_active = elapsed is not None and elapsed < grace
+        runway_grace_active = time_grace_active and self._takeoff_gear_down_or_moving(cur)
         if not time_grace_active and not radio_grace_active:
             return candidates
 
         kept: list[BattleEvent] = []
         for candidate in candidates:
             suppress_low_alt = candidate.event_id == "low_alt_danger" and (time_grace_active or radio_grace_active)
-            suppress_overspeed = candidate.event_id == "overspeed" and radio_grace_active
+            suppress_overspeed = candidate.event_id == "overspeed" and (radio_grace_active or runway_grace_active)
             if not (suppress_low_alt or suppress_overspeed):
                 kept.append(candidate)
                 continue
-            reason = "takeoff_low_alt_grace" if suppress_low_alt else "takeoff_radio_altitude_grace"
+            if suppress_low_alt:
+                reason = "takeoff_low_alt_grace"
+            elif radio_grace_active:
+                reason = "takeoff_radio_altitude_grace"
+            else:
+                reason = "takeoff_runway_grace"
             self.timeline.record_stage(
                 stage="detector_suppressed",
                 outcome="suppressed",
@@ -457,6 +625,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "scenario": s.scenario,
             "level": s.level,
             "dry_run": self.cfg.dry_run,
+            "game_context_active": bool(getattr(self, "_instructions_injected", False)),
             "safety": self.safety.status(),
         }
 
@@ -493,15 +662,33 @@ class NekoWarthunderPlugin(NekoPluginBase):
 
     def _takeoff_protection_snapshot(self, s: BattleState) -> dict[str, Any]:
         radio_altitude_m = s.radio_altitude_m
-        active = bool(getattr(self, "_takeoff_radio_altitude_grace_active", False))
+        is_air = (s.domain or "").lower() == "air"
+        radio_active = is_air and bool(getattr(self, "_takeoff_radio_altitude_grace_active", False))
+        resolver = getattr(self, "resolver", None)
+        elapsed = resolver.seconds_since_spawn(time.time()) if resolver is not None else None
+        time_active = (
+            is_air
+            and elapsed is not None
+            and elapsed < float(getattr(self.cfg, "takeoff_low_alt_grace_seconds", 0.0) or 0.0)
+            and s.in_battle
+            and s.vehicle_valid
+            and not s.dead
+        )
+        runway_active = time_active and self._takeoff_gear_down_or_moving(s)
+        active = radio_active or runway_active
+        suppresses = ["low_alt_danger"] if time_active or radio_active else []
+        if radio_active or runway_active:
+            suppresses.append("overspeed")
         return {
             "active": active,
             "radio_altitude_m": radio_altitude_m,
             "radio_altitude_available": radio_altitude_m is not None,
+            "runway_grace_active": runway_active,
+            "gear_down_or_moving": self._takeoff_gear_down_or_moving(s),
             "enter_m": self.cfg.takeoff_radio_altitude_enter_m,
             "exit_m": self.cfg.takeoff_radio_altitude_exit_m,
             "low_alt_grace_seconds": self.cfg.takeoff_low_alt_grace_seconds,
-            "suppresses": ["low_alt_danger", "overspeed"] if active else [],
+            "suppresses": suppresses,
         }
 
     def _awareness_snapshot(self, s: BattleState) -> dict[str, Any]:
@@ -553,6 +740,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "connected": s.connected,
             "conn_state": s.conn_state,
             "in_battle": s.in_battle,
+            "game_context_active": bool(getattr(self, "_instructions_injected", False)),
             "dead": s.dead,
             "domain": s.domain,
             "domain_label": s.domain_label,
@@ -569,6 +757,10 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "output_policy": {
                 "v2_live_verified_real_output_enabled": self.cfg.v2_live_verified_real_output_enabled,
                 "v2_live_evidence_gated_events": ["enemy_on_six", "tailing_risk", "ground_target_nearby"],
+                "dialogue_intrusion_mode": self._dialogue_intrusion_mode(),
+                "user_chat_quiet_window_seconds": self.cfg.user_chat_quiet_window_seconds,
+                "battle_output_quiet_window_seconds": self.cfg.battle_output_quiet_window_seconds,
+                "critical_bypass_quiet_window": self._dialogue_intrusion_mode() != "no_interrupt",
             },
             "awareness": self._awareness_snapshot(s),
             "safety": self.safety.snapshot(),
@@ -593,6 +785,46 @@ class NekoWarthunderPlugin(NekoPluginBase):
     async def set_dry_run(self, value: bool = True, **_):
         self.cfg.dry_run = bool(value)
         return Ok({"dry_run": self.cfg.dry_run})
+
+    @ui.action(id="set_dialogue_intrusion_mode", label="设置插话策略", tone="primary", group="runtime", order=15, refresh_context=True)
+    @plugin_entry(
+        id="set_dialogue_intrusion_mode",
+        name="设置插话策略",
+        description="选择战斗播报是否打断当前对话。死亡和 critical 安全告警始终允许穿透。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["no_interrupt", "critical_only", "allow_interrupt"],
+                    "default": "critical_only",
+                }
+            },
+        },
+    )
+    async def set_dialogue_intrusion_mode(self, mode: str = "critical_only", **_):
+        selected = self._normalize_dialogue_intrusion_mode(mode)
+        if selected not in _DIALOGUE_INTRUSION_PRESETS:
+            return Err(SdkError("unknown dialogue intrusion mode"))
+        user_window, battle_window = _DIALOGUE_INTRUSION_PRESETS[selected]
+        self.cfg.dialogue_intrusion_mode = selected
+        self.cfg.user_chat_quiet_window_seconds = user_window
+        self.cfg.battle_output_quiet_window_seconds = battle_window
+        self._save_runtime_state(
+            {
+                "dialogue_intrusion_mode": selected,
+                "user_chat_quiet_window_seconds": user_window,
+                "battle_output_quiet_window_seconds": battle_window,
+            }
+        )
+        return Ok(
+            {
+                "mode": selected,
+                "user_chat_quiet_window_seconds": user_window,
+                "battle_output_quiet_window_seconds": battle_window,
+                "critical_bypass_quiet_window": selected != "no_interrupt",
+            }
+        )
 
     @ui.action(id="pause", label="急停", tone="danger", group="runtime", order=20, refresh_context=True)
     @plugin_entry(id="pause", name="急停", description="暂停所有提醒输出。")

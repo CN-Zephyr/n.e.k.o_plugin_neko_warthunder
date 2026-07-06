@@ -107,10 +107,16 @@ STALE_BASELINES = [
     "365 passed",
     "366/366 passed",
     "366 passed",
+    "392/392 passed",
+    "392 passed",
+    "403/403 passed",
+    "403 passed",
+    "405/405 passed",
+    "405 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "379/379 passed",
+    "442/442 passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -163,7 +169,7 @@ REQUIRED_SNIPPETS = [
     "tools/ownership_replay_gate.py",
     "deferred HUD notice gate",
     "proximity/objective awareness gate",
-    "host contract gate",
+    "host boundary gate",
     "tools/host_contract_gate.py",
     "local host compatibility checks",
     "V2 readiness summary",

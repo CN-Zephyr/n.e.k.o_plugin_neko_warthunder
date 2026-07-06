@@ -120,9 +120,10 @@ def render_text_report(report: dict[str, Any]) -> str:
         "# neko_warthunder live monitor",
         _format_summary_line(health, context, telemetry, logs),
         f"Health: {health_line}",
-        "Runtime: dry_run={dry_run}, connected={connected}, in_battle={in_battle}, scenario={scenario}, safety={safety}".format(
+        "Runtime: dry_run={dry_run}, connected={connected}, game_context_active={game_context_active}, in_battle={in_battle}, scenario={scenario}, safety={safety}".format(
             dry_run=context.get("dry_run"),
             connected=context.get("connected"),
+            game_context_active=context.get("game_context_active"),
             in_battle=context.get("in_battle"),
             scenario=context.get("scenario") or "-",
             safety=_safe_get(context.get("safety"), "status"),
@@ -196,6 +197,7 @@ def _summarize_context(data: dict[str, Any]) -> dict[str, Any]:
         "dry_run": state.get("dry_run"),
         "connected": state.get("connected"),
         "conn_state": state.get("conn_state"),
+        "game_context_active": state.get("game_context_active"),
         "in_battle": state.get("in_battle"),
         "domain": state.get("domain"),
         "scenario": state.get("scenario"),
@@ -445,7 +447,7 @@ def _format_output_summary(output: dict[str, Any]) -> str:
         return "-"
     text = f"{output.get('stage') or '-'}/{output.get('outcome') or '-'}"
     reason = output.get("reason")
-    if reason in {"event_expired", "output_backpressure"}:
+    if reason in {"event_expired", "output_backpressure", "repeated_event_collapsed"}:
         text += f"({reason})"
     meta = _format_output_freshness_meta(output)
     if meta:
@@ -468,6 +470,13 @@ def _format_output_freshness_meta(output: dict[str, Any]) -> str:
         if isinstance(max_chars, int):
             text += f"/{max_chars}"
         parts.append(f"tts={text}")
+    ai_behavior = str(output.get("ai_behavior") or "").strip()
+    plugin_owned = output.get("plugin_owned_output")
+    if ai_behavior:
+        mode = ai_behavior
+        if plugin_owned is True:
+            mode += "+plugin"
+        parts.append(f"mode={mode}")
     return ",".join(parts)
 
 
@@ -481,6 +490,7 @@ def _format_reason_detail(reason: Any, *, kind: str) -> str:
         "dry_run_enabled": "dry_run 开启，仅模拟不真实开口",
         "event_expired": "旧战场事件已过期，真实开口前丢弃",
         "output_backpressure": "输出背压中，同级或低优先级提示被压住",
+        "repeated_event_collapsed": "短时间重复战场提示已折叠",
         "manual_pause": "手动暂停中，输出被压住",
         "scenario_gated": "当前场景不允许播这个事件",
         "cooldown": "冷却中，避免重复播报",

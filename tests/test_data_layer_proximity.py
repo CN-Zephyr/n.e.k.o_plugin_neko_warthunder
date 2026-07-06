@@ -117,6 +117,78 @@ def test_vehicle_profile_default_does_not_apply_thermal_thresholds_to_unknowns()
         assert key not in cfg
 
 
+def test_fixed_wing_low_altitude_prefers_radio_altitude_when_available():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    result = processor.process(
+        _vehicle(altitude_m=1200, ias_kmh=500),
+        _indicators(radio_altitude=50.0, gear_state="up"),
+        timestamp=100.0,
+    )
+
+    assert result.radio_altitude_m == 50.0
+    assert result.altitude_m == 1200
+    assert result.flags["altitude_critical"] is True
+
+
+def test_fixed_wing_low_altitude_falls_back_to_msl_without_radio_altitude():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    high_msl = processor.process(
+        _vehicle(altitude_m=1200, ias_kmh=500),
+        _indicators(radio_altitude=None, gear_state="up"),
+        timestamp=100.0,
+    )
+    low_msl = processor.process(
+        _vehicle(altitude_m=80, ias_kmh=500),
+        _indicators(radio_altitude=None, gear_state="up"),
+        timestamp=101.0,
+    )
+
+    assert high_msl.radio_altitude_m is None
+    assert "altitude_low" not in high_msl.flags
+    assert "altitude_critical" not in high_msl.flags
+    assert low_msl.flags["altitude_critical"] is True
+
+
+def test_ka50_indicators_are_classified_as_helicopter_despite_gears_placeholder():
+    from wt_processor import TelemetryProcessor
+    from wt_telemetry import WarThunderClient
+
+    raw = {
+        "valid": True,
+        "army": "air",
+        "type": "ka_50",
+        "speed": 63.347168,
+        "vario": -8.188931,
+        "gears": 0.5,
+        "prop_rpm": 266.340637,
+        "radio_altitude": 470.016876,
+        "rpm": 14538.244141,
+        "water_temperature_hour": 825.791626,
+        "water_temperature_min": 825.791626,
+    }
+    indicators = WarThunderClient()._parse_indicators(raw)
+
+    assert indicators.is_helicopter is True
+
+    result = TelemetryProcessor().process(
+        _vehicle(ias_kmh=228, altitude_m=1995, load_factor=1.68),
+        indicators,
+        timestamp=100.0,
+    )
+
+    assert result.vehicle_class == "heli"
+    assert result.rotor_rpm == 266.340637
+    assert result.radio_altitude_m == 470.016876
+    assert "stall_warning" not in result.flags
+    assert "altitude_low" not in result.flags
+
+
 def test_su30mk2v_turbine_threshold_no_longer_warns_at_live_788_sample():
     from wt_processor import TelemetryProcessor
 
@@ -152,22 +224,29 @@ def test_su30_oil_threshold_uses_datamine_exact_profile():
     assert warning.flags["oil_overheat"] is True
 
 
-def test_su30_over_g_uses_datamine_load_sensitive_limit():
+def test_su30_over_g_prefers_instructor_limit_over_datamine_structure_candidate():
     from wt_processor import TelemetryProcessor
 
     processor = TelemetryProcessor()
 
-    warning = processor.process(
+    normal_turn = processor.process(
         _vehicle(load_factor=6.5, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
         _indicators(throttle=0.8),
         timestamp=1000.0,
     )
-    critical = processor.process(
-        _vehicle(load_factor=13.1, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
+    warning = processor.process(
+        _vehicle(load_factor=10.5, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
         _indicators(throttle=0.8),
         timestamp=1001.0,
     )
+    critical = processor.process(
+        _vehicle(load_factor=13.1, fuel_kg=3769, fuel_full_kg=9400, ias_kmh=900),
+        _indicators(throttle=0.8),
+        timestamp=1002.0,
+    )
 
+    assert "over_g" not in normal_turn.flags
+    assert "over_g_critical" not in normal_turn.flags
     assert warning.flags["over_g"] is True
     assert "over_g_critical" not in warning.flags
     assert critical.flags["over_g_critical"] is True

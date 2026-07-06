@@ -11,8 +11,8 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 ## 1. 输入 / 输出 / 状态
 
 - **输入**：本 tick 的候选 `BattleEvent[]`（来自 D-B3 各 Detector，含 `event_id/edge/payload`）+ 当前 `Scenario`（D-B1 解析器给）+ Arbiter 自己的历史状态。
-- **输出**：0 或 1 条 `BattleEvent` → dispatcher（`ai_behavior="respond"`）。
-- **状态（跨 tick 记忆）**：`_last_output_at`（全局限流时钟）、`per_event_last_fired_at`（各事件 cooldown）、`_window`（当前窗口缓冲：最高分候选 + flush 计时）、`_last_critical_at`（防抢占风暴）、`seen_discrete_ids`（离散去重）。
+- **输出**：0 或 1 条 `BattleEvent` → dispatcher。危急/动作 cue 保留稳定短句；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和战斗结束走有边界的 `respond`，允许猫娘在短话范围内带一点情绪、玩笑或陪伴感，但不得编敌情、方位、锁定、击杀、威胁或损伤。态势/目标类只报观测到的方位、距离和目标类型，缺项不能补。
+- **状态（跨 tick 记忆）**：`_last_output_at`（全局限流时钟）、`per_event_last_fired_at`（各事件 cooldown）、`_window`（当前窗口缓冲：最高分候选 + flush 计时）、`_kill_window`（击杀合并缓冲：第一杀时间 + 最近一杀时间 + `kill_count`）、`_last_critical_at`（防抢占风暴）、`seen_discrete_ids`（离散去重）。
 
 ## 2. severity 两级映射 + 抢占资格（先钉死，否则 overheat 会乱抢占）
 
@@ -28,7 +28,7 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 候选 BattleEvent[]
   │
   ▼ [1] Scenario 门控   查 D-B1 矩阵(当前Scenario × 事件类别) → 抑制者直接丢(记 scenario_gated)
-  ▼ [2] 去重 / 合并     event cooldown 内丢；多杀合并；you_died 按 combat.feed id 去重；离散按 id 去重
+  ▼ [2] 去重 / 合并     event cooldown 内丢；多杀合并；kill/death 按已播报 owned feed id 去重；离散按 id 去重
   ▼ [3] 分流           抢占资格(见§2) → 抢占通道；其余 → 限流通道
   ├─ 抢占通道(critical) ─ [4] 抢占判定 → 立即开口(下方 §4-2)
   └─ 限流通道(warning/普通) ─ [5] 窗口择优(留最高 priority 1 个) → [6] 全局限流 flush
@@ -45,7 +45,7 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 
 ### 4-2 critical 是否抢占、怎么抢占
 - **抢占资格**：见 §2（危急集合 ∪ you_died，且数据层 critical）。
-- **怎么抢**：① **绕过全局限流**（`_last_output_at` 不拦它）；② **清空当前 warning 窗口缓冲**（被抢的 warning **丢弃、不补播**，避免抢占后补一串）；③ 仍受 Scenario 门控（但危急安全本就只在 IN_FLIGHT/COMBAT_STRESS 触发→入 CRITICAL_RISK）；④ 立即 `respond`。
+- **怎么抢**：① **绕过全局限流**（`_last_output_at` 不拦它）；② **清空当前 warning 窗口缓冲**（被抢的 warning **丢弃、不补播**，避免抢占后补一串）；③ 仍受 Scenario 门控（但危急安全本就只在 IN_FLIGHT/COMBAT_STRESS 触发→入 CRITICAL_RISK）；④ 立即交给 dispatcher，按默认插件短句 `blind+plugin` 直出。
 - **防抢占风暴**：两次 critical 之间至少隔 `critical_preempt_cooldown`（草稿 5s），**除非新 critical 的 priority 严格更高**（如 `you_died`(10) 可立刻打断正在播的 `stall_risk`(9)）。
 - **多 critical 同 tick**：按 priority 取最高 1 个（low_alt/stall=9、overspeed=8、you_died=10）。
 
@@ -63,14 +63,16 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 ### 4-5 同类事件 cooldown / 去重
 - **cooldown 归 Arbiter**（D-B3 已定）：同 `event_id` 在其 cooldown（D-B2）内的新候选直接丢（记 `cooldown_drop`）。
 - **re-arm 归 Detector**：保证"同一次持续状态"只产 1 个 enter 候选，Arbiter 不会反复收到。
-- **离散去重**：`you_killed` 多杀合并成"连杀 N"；`CRITICAL_RISK` 下的 owned kill 延迟保留，危急解除后再 flush；`you_died` 只消费 `combat.feed[].is_my_death == true` 的新 id；`vehicle_valid` 翻转只影响 Scenario 存活态，不参与死亡事件合并。
+- **离散去重**：`you_killed` 多杀合并成"连杀 N"；合并窗口按**最近一次击杀**滚动，连续战果先不急着夸，等安静满 `kill_coalesce_window_seconds` 后再合并输出；同时保留最长等待上限（当前为窗口的 3 倍），避免连续战果永远不播。空战/直升机在 `COMBAT_STRESS` 下按 `maneuver` / `air_contact` / `damage` 等压力源继续等；陆战/海战只在 `surface_contact` / `damage` 压力源下等脱战，不再强制拉长到固定 24s。`CRITICAL_RISK` 下的 owned kill 延迟保留，压力解除后再 flush；`you_died` 只消费 `combat.feed[].is_my_death == true` 的新 id；`vehicle_valid` 翻转只影响 Scenario 存活态，不参与死亡事件合并。
 
 ### 4-6 SPAWNING grace 如何抑制误报
 - 主防线 = **Scenario 门控**：SPAWNING 下安全类(危急/重要/一般)全抑制（D-B1），放行 `spawn` 与数据层已归属的 owned `you_killed`。刚出生在跑道的假 stall/假 low_alt 候选在第 [1] 步即被丢；真实 owned kill 不再因为 grace 被误压。
 - 双保险（可选）：出生后 `grace` 秒内不 arm 危急 Detector。grace 秒数待抓包定。
 
-### 4-7 COMBAT_STRESS 如何压低油 / 闲聊
-- = Scenario 门控：COMBAT_STRESS 下 **安全·一般提醒(low_fuel)=抑制、陪伴闲聊=抑制**；放行 危急 + 重要提醒(overheat) + 战斗击杀(简短)。打架时不被低油/闲聊分心。
+### 4-7 COMBAT_STRESS 如何压低油 / 闲聊 / 击杀夸夸
+- = Scenario 门控：COMBAT_STRESS 下 **安全·一般提醒(low_fuel)=抑制、陪伴闲聊=抑制**；放行危急 + 重要提醒(overheat)。
+- owned `you_killed` 先进入 kill coalescing buffer。若当前压力来源和击杀域匹配，则等场景回到 `IN_FLIGHT` 等稳定状态后合并补一句：空战/直升机匹配 `maneuver` / `air_contact` / `damage`，陆战/海战匹配 `surface_contact` / `damage`。若没有对应域压力证据，则按配置窗口合并，不再套空战缠斗的长等待。这样空战缠斗不会被夸夸打断，陆战/海战也能在近敌或受击时等真正脱战。
+- `enemy_nearby` 按域分流：空战普通近敌仍是低优先级 map awareness，`COMBAT_STRESS` 下压制；陆战/海战近敌是交战观察信号，`COMBAT_STRESS` 下可放行。`ground_target_nearby` 仍是空/直升机域的任务点提示，压力态下按低优先级压制。
 
 ### 4-8 DEAD / BATTLE_ENDED 如何压掉普通事件
 - = Scenario 门控：

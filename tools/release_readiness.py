@@ -72,10 +72,10 @@ def build_checks(
             "output freshness gate",
             plugin,
             ["uv", "run", "python", "tools/output_freshness_gate.py"],
-            review_hint="real battle push must carry coalesce/freshness/target/short-reply metadata and drop expired cues",
+            review_hint="real battle push must carry coalesce/freshness/target metadata and plugin-owned dialogue policy, then drop expired cues",
         ),
         Check(
-            "host contract gate",
+            "host boundary gate",
             plugin,
             [
                 "uv",
@@ -87,7 +87,7 @@ def build_checks(
                 "--host-root",
                 str(host),
             ],
-            review_hint="local host, when present, must consume short-reply metadata and apply War Thunder user-chat quieting",
+            review_hint="local host, when present, must not contain War Thunder-specific speech shaping or quiet-window hooks",
         ),
         Check(
             "free-text release gate",
@@ -152,22 +152,6 @@ def build_checks(
         Check("synthetic replay", plugin, ["uv", "run", "python", "tools/replay.py"]),
     ]
     if host.exists():
-        checks.append(
-            Check(
-                "host War Thunder contract tests",
-                host,
-                [
-                    "uv",
-                    "run",
-                    "pytest",
-                    "tests/unit/test_core_game_route_memory_contract.py",
-                    "tests/unit/test_callback_instruction_origin.py",
-                    "tests/unit/test_proactive_sm_integration.py",
-                    "-q",
-                ],
-                review_hint="host behavior must consume short battle replies and quiet ordinary War Thunder cues during user chat",
-            )
-        )
         checks.append(
             Check(
                 "plugin check",

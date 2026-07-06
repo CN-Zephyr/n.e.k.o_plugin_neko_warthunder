@@ -20,6 +20,10 @@ CONDITION_FLAG_GROUPS: dict[str, list[tuple[str, str]]] = {
     "overheat": [("engine_overheat", "engine_overheat_critical"), ("oil_overheat", "oil_overheat_critical")],
     "low_fuel": [("fuel_low", "fuel_critical")],
     "low_alt_danger": [("altitude_low", "altitude_critical")],
+    "ground_crew_loss": [("crew_loss", "crew_critical")],
+    "ground_ammo_low": [("ammo_low", "")],
+    "ground_ammo_empty": [("ammo_empty", "")],
+    "ground_laser_warning": [("", "laser_warning")],
     # overspeed：数据层 v1.6 已提供 warning/critical flag；插件侧只消费，不自行算阈值。
     "overspeed": [("overspeed_warn", "overspeed_critical")],
 }

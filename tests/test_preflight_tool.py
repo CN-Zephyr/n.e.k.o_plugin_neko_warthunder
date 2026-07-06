@@ -29,7 +29,7 @@ def test_preflight_plan_contains_documented_checks():
             "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
-            "host contract gate",
+            "host boundary gate",
             "free-text release gate",
             "replay degrade gate",
             "ownership replay gate",
@@ -41,7 +41,6 @@ def test_preflight_plan_contains_documented_checks():
             "V2 completion gate",
             "RC handoff report",
             "final smoke packet",
-            "host War Thunder contract tests",
             "plugin check",
             "runtime smoke",
             "synthetic replay",
@@ -62,10 +61,10 @@ def test_preflight_plan_contains_documented_checks():
         assert "dry_run-first" in checks[3].review_hint
         assert checks[4].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
         assert "coalesce" in checks[4].review_hint
-        assert "short-reply" in checks[4].review_hint
+        assert "plugin-owned dialogue policy" in checks[4].review_hint
         assert checks[5].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
         assert checks[5].cmd[-2] == "--host-root"
-        assert "quieting" in checks[5].review_hint
+        assert "must not contain" in checks[5].review_hint
         assert checks[6].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
         assert "hudmsg" in checks[6].review_hint
         assert "push_message" in checks[6].review_hint
@@ -85,21 +84,11 @@ def test_preflight_plan_contains_documented_checks():
         assert checks[15].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
         assert checks[16].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py"]
         assert checks[17].cwd == host_root.resolve()
-        assert checks[17].cmd == [
-            "uv",
-            "run",
-            "pytest",
-            "tests/unit/test_core_game_route_memory_contract.py",
-            "tests/unit/test_callback_instruction_origin.py",
-            "tests/unit/test_proactive_sm_integration.py",
-            "-q",
-        ]
-        assert checks[18].cwd == host_root.resolve()
-        assert checks[18].cmd[-1] == str(plugin_root.resolve())
-        assert checks[19].cmd == ["uv", "run", "python", "tools/live_monitor.py", "--count", "1"]
-        assert "dry_run" in checks[19].review_hint
-        assert "paused" in checks[19].review_hint
-        assert "8112" in checks[19].review_hint
+        assert checks[17].cmd[-1] == str(plugin_root.resolve())
+        assert checks[18].cmd == ["uv", "run", "python", "tools/live_monitor.py", "--count", "1"]
+        assert "dry_run" in checks[18].review_hint
+        assert "paused" in checks[18].review_hint
+        assert "8112" in checks[18].review_hint
         assert checks[-1].cmd == [
             "uv",
             "run",
@@ -189,7 +178,7 @@ def test_preflight_plan_skips_optional_sample_when_missing():
             "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
-            "host contract gate",
+            "host boundary gate",
             "free-text release gate",
             "replay degrade gate",
             "ownership replay gate",
@@ -243,11 +232,11 @@ def test_preflight_dry_run_prints_commands_without_running():
         assert rc == 0
         assert "# neko_warthunder offline preflight" in text
         assert "## Quick read" in text
-        assert "baseline: logic self-check should report 379/379 passed" in text
+        assert "baseline: logic self-check should report 442/442 passed" in text
         assert "vehicle profile id audit must keep" in text
         assert "release defaults gate must keep dry_run-first" in text
         assert "output freshness gate must prove battle pushes are fresh" in text
-        assert "host War Thunder contract tests should pass" in text
+        assert "host boundary gate must prove" in text
         assert "free-text release gate must pass" in text
         assert "replay degrade gate must pass" in text
         assert "ownership replay gate must keep" in text

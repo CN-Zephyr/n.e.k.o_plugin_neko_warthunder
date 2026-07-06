@@ -17,6 +17,14 @@ def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _is_fixed_wing_air(s: BattleState) -> bool:
+    return (s.domain or "").lower() == "air"
+
+
+def _is_ground(s: BattleState) -> bool:
+    return (s.domain or "").lower() == "ground"
+
+
 def _pl_stall(s: BattleState) -> dict[str, Any]:
     return _drop_none(
         {
@@ -60,14 +68,100 @@ def _pl_overspeed(s: BattleState) -> dict[str, Any]:
     return _drop_none({"ias_kmh": s.ias_kmh, "mach": s.mach})
 
 
+def _pl_ground_crew(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"crew_current": s.crew_current, "crew_total": s.crew_total, "domain": s.domain})
+
+
+def _pl_ground_ammo(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"ammo_first_stage": s.ammo_first_stage, "domain": s.domain})
+
+
+def _pl_ground_laser(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"domain": s.domain})
+
+
 def build_condition_detectors() -> list[ConditionDetector]:
     g = CONDITION_FLAG_GROUPS
     return [
-        ConditionDetector("stall_risk", g["stall_risk"], confirm_enter=2, confirm_exit=3, payload_fn=_pl_stall),
-        ConditionDetector("high_aoa", g["high_aoa"], confirm_enter=1, confirm_exit=2, payload_fn=_pl_high_aoa),
-        ConditionDetector("over_g", g["over_g"], confirm_enter=1, confirm_exit=2, payload_fn=_pl_over_g),
-        ConditionDetector("low_alt_danger", g["low_alt_danger"], confirm_enter=2, confirm_exit=2, payload_fn=_pl_low_alt),
-        ConditionDetector("overspeed", g["overspeed"], confirm_enter=2, confirm_exit=3, payload_fn=_pl_overspeed),
+        ConditionDetector(
+            "stall_risk",
+            g["stall_risk"],
+            confirm_enter=2,
+            confirm_exit=3,
+            payload_fn=_pl_stall,
+            predicate=_is_fixed_wing_air,
+        ),
+        ConditionDetector(
+            "high_aoa",
+            g["high_aoa"],
+            confirm_enter=1,
+            confirm_exit=2,
+            payload_fn=_pl_high_aoa,
+            predicate=_is_fixed_wing_air,
+        ),
+        ConditionDetector(
+            "over_g",
+            g["over_g"],
+            confirm_enter=1,
+            confirm_exit=2,
+            payload_fn=_pl_over_g,
+            predicate=_is_fixed_wing_air,
+        ),
+        ConditionDetector(
+            "low_alt_danger",
+            g["low_alt_danger"],
+            confirm_enter=2,
+            confirm_exit=2,
+            payload_fn=_pl_low_alt,
+            predicate=_is_fixed_wing_air,
+        ),
+        ConditionDetector(
+            "overspeed",
+            g["overspeed"],
+            confirm_enter=2,
+            confirm_exit=3,
+            payload_fn=_pl_overspeed,
+            predicate=_is_fixed_wing_air,
+        ),
         ConditionDetector("overheat", g["overheat"], confirm_enter=3, confirm_exit=4, payload_fn=_pl_overheat),
-        ConditionDetector("low_fuel", g["low_fuel"], confirm_enter=1, confirm_exit=2, payload_fn=_pl_low_fuel),
+        ConditionDetector(
+            "low_fuel",
+            g["low_fuel"],
+            confirm_enter=1,
+            confirm_exit=2,
+            payload_fn=_pl_low_fuel,
+            predicate=_is_fixed_wing_air,
+        ),
+        ConditionDetector(
+            "ground_laser_warning",
+            g["ground_laser_warning"],
+            confirm_enter=1,
+            confirm_exit=2,
+            payload_fn=_pl_ground_laser,
+            predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "ground_crew_loss",
+            g["ground_crew_loss"],
+            confirm_enter=1,
+            confirm_exit=3,
+            payload_fn=_pl_ground_crew,
+            predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "ground_ammo_empty",
+            g["ground_ammo_empty"],
+            confirm_enter=2,
+            confirm_exit=3,
+            payload_fn=_pl_ground_ammo,
+            predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "ground_ammo_low",
+            g["ground_ammo_low"],
+            confirm_enter=3,
+            confirm_exit=4,
+            payload_fn=_pl_ground_ammo,
+            predicate=_is_ground,
+        ),
     ]

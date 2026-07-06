@@ -47,6 +47,7 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
     hud_notices = payload.get("hud_notices") if isinstance(payload.get("hud_notices"), dict) else {}
     proximity = payload.get("proximity") if isinstance(payload.get("proximity"), dict) else {}
+    situation = payload.get("situation") if isinstance(payload.get("situation"), dict) else {}
     flags_raw = processed.get("flags") if isinstance(processed.get("flags"), dict) else {}
 
     fast_meta = meta.get("fast") if isinstance(meta.get("fast"), dict) else {}
@@ -58,6 +59,8 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
         replay=bool(payload.get("replay", False)),
         dead=bool(payload.get("dead", False)),
         vehicle_valid=bool(vehicle.get("valid", False)),
+        indicators_valid=bool(indicators.get("valid", False)),
+        has_player=bool(situation.get("has_player") or payload.get("player")),
         domain=str(payload.get("domain") or "unknown"),
         domain_label=(str(payload.get("domain_label")) if payload.get("domain_label") is not None else None),
         vehicle_type=(indicators.get("vehicle_type") or processed.get("vehicle_type")),
@@ -87,12 +90,19 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
         head_temp_c=_num(processed.get("head_temp_c")),
         turbine_temp_c=_num(processed.get("turbine_temp_c")),
         oil_temp_c=_num(processed.get("oil_temp_c")),
+        crew_current=_num(processed.get("crew_current")),
+        crew_total=_num(processed.get("crew_total")),
+        ammo_first_stage=_num(processed.get("ammo_first_stage")),
+        gun_stabilizer=(
+            bool(processed.get("gun_stabilizer")) if processed.get("gun_stabilizer") is not None else None
+        ),
+        gear_position=(int(gear) if (gear := _num(processed.get("gear_position"))) is not None else None),
         hud_events=list(payload.get("hud_events") or []) if isinstance(payload.get("hud_events"), list) else [],
         hud_notices=list(hud_notices.get("feed") or []) if isinstance(hud_notices.get("feed"), list) else [],
         combat=payload.get("combat") if isinstance(payload.get("combat"), dict) else {},
         proximity=proximity,
         proximity_events=list(proximity.get("events") or []) if isinstance(proximity.get("events"), list) else [],
-        situation=payload.get("situation") if isinstance(payload.get("situation"), dict) else {},
+        situation=situation,
         mission_status=(str(payload["mission_status"]) if payload.get("mission_status") is not None else None),
         raw=payload,
     )

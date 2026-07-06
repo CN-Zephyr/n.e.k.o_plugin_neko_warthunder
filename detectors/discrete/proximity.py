@@ -37,7 +37,7 @@ class ProximityDetector(DiscreteDetector):
         self._tail_hits.clear()
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
-        if not (cur.in_battle and cur.vehicle_valid and not cur.dead):
+        if not cur.is_alive():
             self._tail_hits.clear()
             return None
 
@@ -57,7 +57,7 @@ class ProximityDetector(DiscreteDetector):
             eid = _event_id(item)
             if eid is None or eid <= self._last_id:
                 continue
-            event_id = _awareness_event_id(item)
+            event_id = _awareness_event_id(item, cur.domain)
             rank = (_event_priority(event_id), eid)
             if rank > newest_rank:
                 newest = item
@@ -67,10 +67,13 @@ class ProximityDetector(DiscreteDetector):
         if newest is None:
             return None
 
-        event_id = _awareness_event_id(newest)
+        event_id = _awareness_event_id(newest, cur.domain)
         if event_id == "enemy_on_six" and self._record_tail_hit(newest, cur.timestamp or 0.0):
             event_id = "tailing_risk"
-        return BattleEvent(event_id, payload=_payload(newest), ts=cur.timestamp or 0.0, level="warning")
+        payload = _payload(newest)
+        if cur.domain and cur.domain != "unknown":
+            payload["domain"] = cur.domain
+        return BattleEvent(event_id, payload=payload, ts=cur.timestamp or 0.0, level="warning")
 
     def _record_tail_hit(self, item: dict[str, Any], now: float) -> bool:
         eid = _event_id(item)
@@ -94,8 +97,8 @@ def _event_id(item: dict[str, Any]) -> int | None:
         return None
 
 
-def _awareness_event_id(item: dict[str, Any]) -> str:
-    if _is_behind(item):
+def _awareness_event_id(item: dict[str, Any], domain: str) -> str:
+    if (domain or "").lower() in {"air", "heli"} and _is_behind(item):
         return "enemy_on_six"
     if item.get("is_air") is True:
         return "air_threat_nearby"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import pathlib
 import sys
 import threading
@@ -36,6 +37,7 @@ def _runtime_plugin_class():
         plugin_sdk_mod.neko_plugin = lambda cls: cls
         plugin_sdk_mod.plugin_entry = identity_decorator
         plugin_sdk_mod.lifecycle = identity_decorator
+        plugin_sdk_mod.message = identity_decorator
         plugin_sdk_mod.ui = types.SimpleNamespace(
             context=identity_decorator,
             action=identity_decorator,
@@ -50,7 +52,10 @@ def _runtime_plugin_class():
 
     module_name = "neko_warthunder.__runtime_under_test__"
     if module_name in sys.modules:
-        return sys.modules[module_name].NekoWarthunderPlugin
+        module = sys.modules[module_name]
+        if hasattr(module, "NekoWarthunderPlugin"):
+            return module.NekoWarthunderPlugin
+        del sys.modules[module_name]
 
     plugin_dir = pathlib.Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(module_name, plugin_dir / "__init__.py")
@@ -137,6 +142,64 @@ def test_status_report_emits_immediately_when_snapshot_changes():
     assert plugin.reported_statuses[-1]["scenario"] == "CRITICAL_RISK"
 
 
+def _plugin_for_game_context_tests():
+    plugin = _plugin_for_report_tests()
+    plugin._instructions_injected = False
+    plugin.pushed_contexts = []
+
+    class FakeDispatcher:
+        def push_context(self, text):
+            plugin.pushed_contexts.append(text)
+
+    plugin.dispatcher = FakeDispatcher()
+    plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    return plugin
+
+
+def test_game_context_is_not_active_for_offline_state():
+    plugin = _plugin_for_game_context_tests()
+
+    plugin._sync_game_context(BattleState(), BattleState(connected=True, conn_state="offline"))
+
+    assert plugin.pushed_contexts == []
+    assert plugin._instructions_injected is False
+
+
+def test_game_context_enters_when_telemetry_goes_online_once():
+    from neko_warthunder.core.instructions import WT_CONTEXT_INSTRUCTIONS
+
+    plugin = _plugin_for_game_context_tests()
+
+    plugin._sync_game_context(BattleState(), BattleState(connected=True, conn_state="not_in_battle"))
+    plugin._sync_game_context(
+        BattleState(connected=True, conn_state="not_in_battle"),
+        BattleState(connected=True, conn_state="in_battle", in_battle=True),
+    )
+
+    assert plugin.pushed_contexts == [WT_CONTEXT_INSTRUCTIONS]
+    assert plugin._instructions_injected is True
+    stages = [item["stage"] for item in plugin.timeline.snapshot()["recent_timeline"]]
+    assert "game_context_entered" in stages
+
+
+def test_game_context_exits_when_telemetry_goes_offline_once():
+    from neko_warthunder.core.instructions import WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS
+
+    plugin = _plugin_for_game_context_tests()
+
+    plugin._sync_game_context(BattleState(), BattleState(connected=True, conn_state="in_battle", in_battle=True))
+    plugin._sync_game_context(
+        BattleState(connected=True, conn_state="in_battle", in_battle=True),
+        BattleState(connected=False, conn_state="offline", in_battle=False),
+    )
+    plugin._sync_game_context(BattleState(connected=False, conn_state="offline"), BattleState())
+
+    assert plugin.pushed_contexts == [WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS]
+    assert plugin._instructions_injected is False
+    stages = [item["stage"] for item in plugin.timeline.snapshot()["recent_timeline"]]
+    assert "game_context_exited" in stages
+
+
 def test_replay_tick_records_suppressed_decision_without_output():
     Plugin = _runtime_plugin_class()
     plugin = object.__new__(Plugin)
@@ -210,8 +273,8 @@ def _plugin_for_runtime_evaluate_tests(*, clock_values: list[float], dry_run: bo
 def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
     plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 110.0, 112.0])
     try:
-        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False)
-        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True)
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
+        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
         plugin._evaluate(prev, spawn)
         plugin.pushed_events.clear()
 
@@ -220,6 +283,7 @@ def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             flags={"altitude_critical": True},
             altitude_m=38.0,
             climb_ms=-3.0,
@@ -229,6 +293,7 @@ def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             flags={"altitude_critical": True},
             altitude_m=35.0,
             climb_ms=-4.0,
@@ -247,8 +312,8 @@ def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
 def test_takeoff_low_alt_grace_does_not_suppress_stall_critical():
     plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 110.0, 112.0])
     try:
-        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False)
-        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True)
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
+        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
         plugin._evaluate(prev, spawn)
         plugin.pushed_events.clear()
 
@@ -257,6 +322,7 @@ def test_takeoff_low_alt_grace_does_not_suppress_stall_critical():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             flags={"stall_critical": True},
             aoa_deg=22.0,
             ias_kmh=160.0,
@@ -266,6 +332,7 @@ def test_takeoff_low_alt_grace_does_not_suppress_stall_critical():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             flags={"stall_critical": True},
             aoa_deg=23.0,
             ias_kmh=150.0,
@@ -281,12 +348,13 @@ def test_takeoff_low_alt_grace_does_not_suppress_stall_critical():
 def test_takeoff_radio_altitude_grace_suppresses_overspeed_until_airborne():
     plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 150.0, 152.0])
     try:
-        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False)
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
         spawn = BattleState(
             connected=True,
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=0.0,
         )
         plugin._evaluate(prev, spawn)
@@ -297,6 +365,7 @@ def test_takeoff_radio_altitude_grace_suppresses_overspeed_until_airborne():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=6.0,
             flags={"overspeed_critical": True},
             ias_kmh=1200.0,
@@ -306,6 +375,7 @@ def test_takeoff_radio_altitude_grace_suppresses_overspeed_until_airborne():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=7.0,
             flags={"overspeed_critical": True},
             ias_kmh=1210.0,
@@ -322,15 +392,96 @@ def test_takeoff_radio_altitude_grace_suppresses_overspeed_until_airborne():
         module.time.time = original_time
 
 
+def test_takeoff_runway_grace_suppresses_overspeed_without_radio_altitude_when_gear_down():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 110.0, 112.0])
+    try:
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
+        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
+        plugin._evaluate(prev, spawn)
+        plugin.pushed_events.clear()
+
+        fast_roll_1 = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="air",
+            radio_altitude_m=None,
+            flags={"overspeed_critical": True},
+            ias_kmh=1200.0,
+            raw={"indicators": {"gear_state": "down"}},
+        )
+        fast_roll_2 = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="air",
+            radio_altitude_m=None,
+            flags={"overspeed_critical": True},
+            ias_kmh=1210.0,
+            raw={"indicators": {"gear_state": "down"}},
+        )
+        plugin._evaluate(spawn, fast_roll_1)
+        plugin._evaluate(fast_roll_1, fast_roll_2)
+
+        assert plugin.pushed_events == []
+        decision = plugin.timeline.snapshot()["last_decision"]
+        assert decision["stage"] == "detector_suppressed"
+        assert decision["reason"] == "takeoff_runway_grace"
+        assert decision["event_id"] == "overspeed"
+    finally:
+        module.time.time = original_time
+
+
+def test_takeoff_runway_grace_does_not_suppress_airspawn_overspeed_without_gear_down():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 110.0, 112.0])
+    try:
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
+        spawn = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
+        plugin._evaluate(prev, spawn)
+        plugin.pushed_events.clear()
+
+        fast_air_1 = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="air",
+            radio_altitude_m=None,
+            flags={"overspeed_critical": True},
+            ias_kmh=1200.0,
+            raw={"indicators": {"gear_state": "up"}},
+        )
+        fast_air_2 = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="air",
+            radio_altitude_m=None,
+            flags={"overspeed_critical": True},
+            ias_kmh=1210.0,
+            raw={"indicators": {"gear_state": "up"}},
+        )
+        plugin._evaluate(spawn, fast_air_1)
+        plugin._evaluate(fast_air_1, fast_air_2)
+
+        assert [event.event_id for event in plugin.pushed_events] == ["overspeed"]
+    finally:
+        module.time.time = original_time
+
+
 def test_takeoff_radio_altitude_grace_releases_after_exit_height():
     plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 150.0, 152.0])
     try:
-        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False)
+        prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=False, domain="air")
         spawn = BattleState(
             connected=True,
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=0.0,
         )
         plugin._evaluate(prev, spawn)
@@ -341,6 +492,7 @@ def test_takeoff_radio_altitude_grace_releases_after_exit_height():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=45.0,
             flags={"overspeed_critical": True},
             ias_kmh=1200.0,
@@ -350,6 +502,7 @@ def test_takeoff_radio_altitude_grace_releases_after_exit_height():
             conn_state="in_battle",
             in_battle=True,
             vehicle_valid=True,
+            domain="air",
             radio_altitude_m=48.0,
             flags={"overspeed_critical": True},
             ias_kmh=1210.0,
@@ -386,6 +539,7 @@ def test_status_includes_data_layer_process_snapshot():
 def test_dashboard_context_includes_data_layer_process_snapshot():
     plugin = _plugin_for_report_tests()
     plugin.data_layer_manager = types.SimpleNamespace(snapshot=lambda: {"mode": "managed", "pid": 4321})
+    plugin.state.domain = "air"
     plugin.state.radio_altitude_m = 8.0
     plugin.state.altitude_m = 1067.0
     plugin.state.ias_kmh = 120.0
@@ -431,10 +585,14 @@ def test_dashboard_context_includes_data_layer_process_snapshot():
     assert result["takeoff_protection"]["enter_m"] == 10.0
     assert result["takeoff_protection"]["exit_m"] == 40.0
     assert result["takeoff_protection"]["suppresses"] == ["low_alt_danger", "overspeed"]
-    assert result["output_policy"] == {
-        "v2_live_verified_real_output_enabled": False,
-        "v2_live_evidence_gated_events": ["enemy_on_six", "tailing_risk", "ground_target_nearby"],
-    }
+    assert result["output_policy"]["v2_live_verified_real_output_enabled"] is False
+    assert result["output_policy"]["v2_live_evidence_gated_events"] == [
+        "enemy_on_six",
+        "tailing_risk",
+        "ground_target_nearby",
+    ]
+    assert result["output_policy"]["dialogue_intrusion_mode"] == "critical_only"
+    assert result["output_policy"]["critical_bypass_quiet_window"] is True
     assert result["awareness"]["proximity_event_count"] == 1
     assert result["awareness"]["latest_proximity"]["target_type"] == "fighter"
     assert result["awareness"]["latest_proximity"]["distance_m"] == 1400
@@ -469,12 +627,13 @@ def test_manual_pause_suppresses_detected_event_before_dispatcher():
     plugin.dispatcher = types.SimpleNamespace(push_event=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError))
     plugin.logger = types.SimpleNamespace(info=lambda *_args, **_kwargs: None)
 
-    prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True)
+    prev = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
     cur = BattleState(
         connected=True,
         conn_state="in_battle",
         in_battle=True,
         vehicle_valid=True,
+        domain="air",
         flags={"fuel_low": True},
         fuel_fraction=0.05,
     )
@@ -610,11 +769,25 @@ def test_test_say_push_is_audited_when_allowed():
     assert status["stage"] == "test_say_pushed"
     assert status["kind"] == "test_say"
     assert status["ai_behavior"] == "respond"
-    assert status["pushed"] is True
 
 
-def test_set_identity_persists_player_name_to_plugin_config():
+def test_chat_message_starts_quiet_window_without_storing_text():
     plugin = _plugin_for_action_tests()
+    plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    plugin._last_user_chat_at = 0.0
+
+    result = plugin.on_chat_message(text="raw private chat should not be stored", sender="human")
+
+    assert result == {"status": "observed"}
+    assert plugin._last_user_chat_at > 0
+    snapshot = plugin.timeline.snapshot()
+    assert "raw private chat" not in repr(snapshot)
+    assert snapshot["recent_timeline"][-1]["reason"] == "user_chat_quiet_window_started"
+
+
+def test_set_identity_persists_player_name_to_runtime_state(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
     module = sys.modules[plugin.__class__.__module__]
     original_request = module.request_set_identity
 
@@ -635,7 +808,7 @@ def test_set_identity_persists_player_name_to_plugin_config():
     identity = result["identity"]
     assert identity["ok"] is True
     assert identity["persisted"] is True
-    assert plugin.config_updates == [{"neko_warthunder": {"player_name": "CN-Zephyr"}}]
+    assert json.loads(plugin._runtime_state_path.read_text(encoding="utf-8")) == {"player_name": "CN-Zephyr"}
     assert plugin.cfg.player_name == "CN-Zephyr"
     assert plugin.state.combat["player_name"] == "CN-Zephyr"
 
@@ -651,9 +824,65 @@ def test_dashboard_identity_uses_saved_player_name_before_combat_frame():
     assert payload["identity"]["saved_player_name"] == "CN-Zephyr"
 
 
-def test_set_identity_clear_persists_empty_player_name():
+def test_set_dialogue_intrusion_mode_persists_no_interrupt_policy(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    result = asyncio.run(plugin.set_dialogue_intrusion_mode("no_interrupt"))
+
+    assert result["mode"] == "no_interrupt"
+    assert result["critical_bypass_quiet_window"] is False
+    assert plugin.cfg.dialogue_intrusion_mode == "no_interrupt"
+    assert plugin.cfg.user_chat_quiet_window_seconds == 60.0
+    assert plugin.cfg.battle_output_quiet_window_seconds == 30.0
+    saved = json.loads(plugin._runtime_state_path.read_text(encoding="utf-8"))
+    assert saved["dialogue_intrusion_mode"] == "no_interrupt"
+
+
+def test_set_dialogue_intrusion_mode_persists_critical_only_policy(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    result = asyncio.run(plugin.set_dialogue_intrusion_mode("critical_only"))
+
+    assert result["mode"] == "critical_only"
+    assert result["critical_bypass_quiet_window"] is True
+    assert plugin.cfg.dialogue_intrusion_mode == "critical_only"
+
+
+def test_reload_config_uses_saved_dialogue_intrusion_mode(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin._runtime_state_path.write_text(json.dumps({"dialogue_intrusion_mode": "no_interrupt"}), encoding="utf-8")
+
+    class EmptyConfig:
+        async def dump(self, timeout=5.0):
+            return {}
+
+    plugin.config = EmptyConfig()
+
+    asyncio.run(plugin._reload_config())
+
+    assert plugin.cfg.dialogue_intrusion_mode == "no_interrupt"
+    assert plugin.cfg.user_chat_quiet_window_seconds == 60.0
+    assert plugin.cfg.battle_output_quiet_window_seconds == 30.0
+
+
+def test_dashboard_reports_dialogue_intrusion_policy(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin.cfg = WtConfig(dialogue_intrusion_mode="no_interrupt")
+
+    payload = plugin._dashboard_payload(plugin.state)
+
+    assert payload["output_policy"]["dialogue_intrusion_mode"] == "no_interrupt"
+    assert payload["output_policy"]["critical_bypass_quiet_window"] is False
+
+
+def test_set_identity_clear_persists_empty_player_name(tmp_path):
     plugin = _plugin_for_action_tests()
     plugin.cfg = WtConfig(player_name="CN-Zephyr")
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
     module = sys.modules[plugin.__class__.__module__]
     original_request = module.request_set_identity
 
@@ -667,5 +896,21 @@ def test_set_identity_clear_persists_empty_player_name():
         module.request_set_identity = original_request
 
     assert result["identity"]["persisted"] is True
-    assert plugin.config_updates == [{"neko_warthunder": {"player_name": ""}}]
+    assert json.loads(plugin._runtime_state_path.read_text(encoding="utf-8")) == {"player_name": ""}
     assert plugin.cfg.player_name == ""
+
+
+def test_reload_config_uses_runtime_state_player_name_when_profile_missing(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin._runtime_state_path.write_text(json.dumps({"player_name": "CN-Zephyr"}), encoding="utf-8")
+
+    class EmptyConfig:
+        async def dump(self, timeout=5.0):
+            return {}
+
+    plugin.config = EmptyConfig()
+
+    asyncio.run(plugin._reload_config())
+
+    assert plugin.cfg.player_name == "CN-Zephyr"

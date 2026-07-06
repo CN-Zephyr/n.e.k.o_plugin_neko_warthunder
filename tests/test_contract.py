@@ -112,6 +112,33 @@ def test_parse_dead_and_profile_fields_from_v18_contract():
     assert s.profile_family == "Bf 109"
 
 
+def test_parse_ground_processed_fields_from_v18_contract():
+    payload = _sample()
+    payload["domain"] = "ground"
+    payload["processed"].update(
+        {
+            "crew_current": 1,
+            "crew_total": 4,
+            "ammo_first_stage": 0,
+            "gun_stabilizer": True,
+            "gear_position": -1,
+            "flags": {"crew_critical": True, "ammo_empty": True, "laser_warning": True},
+        }
+    )
+
+    s = parse_telemetry(payload)
+
+    assert s.domain == "ground"
+    assert s.crew_current == 1
+    assert s.crew_total == 4
+    assert s.ammo_first_stage == 0
+    assert s.gun_stabilizer is True
+    assert s.gear_position == -1
+    assert s.flag("crew_critical")
+    assert s.flag("ammo_empty")
+    assert s.flag("laser_warning")
+
+
 def test_parse_hud_notices_feed_without_losing_raw_contract():
     payload = _sample()
     payload["hud_notices"] = {

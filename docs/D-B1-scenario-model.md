@@ -8,7 +8,7 @@
 
 - 模型不变；唯一变化是**危急/重要提醒 flag 改由数据层 `/api/processed` 提供**（我们消费，不自己算阈值，见 D-B5 v0.2）。
 - CRITICAL_RISK 危急集合 = 数据层 critical 级安全 flag 中我们的子集：`stall_critical`、`altitude_critical`、`overspeed_critical`。数据层 v1.6 已提供 `overspeed_critical`，插件侧已接入，仍需真机验证触发节奏和 Arbiter 抢占语义。
-- COMBAT_STRESS 的"最近受创"信号取数据层 `hud_events`（关于我的 damage）。
+- COMBAT_STRESS 的"最近受创"信号取数据层 `hud_events`（关于我的 damage）；脱战窗口按载具域区分：空战/直升机看 `maneuver`/`air_contact`/`damage`，陆战看近距离 `surface_contact`/`damage`，海战看更长的 `surface_contact`/`damage`。
 
 ## 0. 设计约束（先钉死边界）
 
@@ -91,10 +91,10 @@ stateDiagram-v2
 
 ### COMBAT_STRESS（见第 5 节特别说明）
 - 定义：**高工作负荷的纯物理代理态**，不代表"判定到了敌人"。
-- 进入：最近 T 秒内收到**关于我的 hudmsg 受创**（被命中/起火等）**或**持续高 G 机动（`Ny` 超阈值持续若干秒）。
-- 退出：代理条件解除并经迟滞（一段时间无受创且 G 回落）→ `IN_FLIGHT`。
-- 依赖字段：`/hudmsg`（关于我的受创）、`/state.Ny`（G 载荷），可选 roll rate。
-- 对提示系统：放行危急安全 + 重要提醒(overheat) + 战斗击杀（简短）；**压制一般提醒（如低油）与陪伴闲聊**，别在打架时分心。
+- 进入：最近 T 秒内收到**关于我的 hudmsg 受创**（被命中/起火等）；空战/直升机域还可由持续高 G 机动或近距离空中威胁进入；陆战/海战不使用高 G 代理，改看近距离地面/水面接触。
+- 退出：对应域的代理条件解除并经迟滞 → `IN_FLIGHT`。当前默认：空战/直升机约 8s，陆战约 10s，海战约 20s。
+- 依赖字段：`/hudmsg`（关于我的受创）、`/state.Ny`（G 载荷，仅空/直升机）、`situation.nearest_air_threat` / `situation.enemies[]`、`proximity.thresholds_m`。
+- 对提示系统：放行危急安全 + 重要提醒(overheat)；**压制一般提醒（如低油）与陪伴闲聊**。owned 战斗击杀进入多杀合并缓冲；空战/直升机在 `maneuver`/`air_contact`/`damage` 压力下等脱战后补一句；陆战/海战只在 `surface_contact`/`damage` 压力下等脱战，其他情况下按配置窗口合并。陆战/海战近敌 `enemy_nearby` 是交战观察信号，不按普通地图提示在 COMBAT_STRESS 下硬压。
 
 ### CRITICAL_RISK
 - 定义：任一**危急**安全 flag 激活。**v1 危急集合 = `{stall_risk, low_alt_danger, overspeed}`**（濒临失速 / 危险低空 / 严重超速）。**overheat 不在此集合**——它归"安全·重要提醒"，不触发 CRITICAL_RISK、不抢占（见 D-B2）。
@@ -126,7 +126,7 @@ stateDiagram-v2
 | OUT_OF_BATTLE | — | 抑制 | 抑制 | 抑制 | 抑制 | 允许 |
 | SPAWNING | 允许(出生) | 抑制(grace) | 抑制 | 抑制 | 允许(owned kill) | 抑制 |
 | IN_FLIGHT | 允许 | 允许 | 允许 | 允许 | 允许 | 允许 |
-| COMBAT_STRESS | 允许 | 允许 | 允许 | 抑制 | 允许(简短) | 抑制 |
+| COMBAT_STRESS | 允许 | 允许 | 允许 | 抑制 | 延迟/按域放行 | 抑制 |
 | CRITICAL_RISK | 允许(死亡) | 允许(抢占) | 抑制 | 抑制 | 延迟(owned kill) | 抑制 |
 | DEAD | 允许(死亡) | 抑制 | 抑制 | 抑制 | 抑制 | 允许(安慰后) |
 | BATTLE_ENDED | 允许(结束) | 抑制 | 抑制 | 抑制 | 抑制 | 允许 |
@@ -135,7 +135,16 @@ stateDiagram-v2
 
 ## 5. COMBAT_STRESS 特别说明（v1 最大争议点）
 
-**为什么它最弱**：其余 6 个 Scenario 都能由确定性事实（valid / mission / 时间 / 危急 flag）干净导出。但 COMBAT_STRESS 本质要回答"我是不是在交战"，而在 **不碰 map、不做敌情感知** 的约束下，8111 没有干净信号说明这一点——硬判就会滑向被明令禁止的"战局理解"。
+**为什么它最弱**：其余 6 个 Scenario 都能由确定性事实（valid / mission / 时间 / 危急 flag）干净导出。但 COMBAT_STRESS 本质要回答"我是不是在高压操作或受击"，而不是严格判断"我是不是在交火"。在 **不碰 map、不做敌情感知** 的约束下，8111 没有干净信号说明交火本身——硬判就会滑向被明令禁止的"战局理解"。
+
+实现上 Resolver 会保留轻量压力来源：
+
+- `maneuver`：高 G / 高机动代理。仅用于空战/直升机；陆战/海战不因 G 值进入该压力源。
+- `air_contact`：空战/直升机的近距离空中威胁，阈值取数据层 `proximity.thresholds_m.vs_air`，缺省按 5000m 保守处理。
+- `surface_contact`：陆战/海战的近距离地面/水面接触，阈值取数据层 `proximity.thresholds_m.vs_ground`；缺省陆战 800m，海战 2500m。
+- `damage`：新增 damage HUD 事件。视为真实交战压力，按域使用不同迟滞窗口。
+
+Arbiter 不再把 `COMBAT_STRESS` 一概当作"不能夸"：空战/直升机在 `maneuver`/`air_contact`/`damage` 下等，陆战/海战在 `surface_contact`/`damage` 下等；没有对应域压力证据时按配置窗口合并。陆战/海战 `enemy_nearby` 可在 COMBAT_STRESS 下放行，空战普通 `enemy_nearby` 仍按低优先级 map awareness 压制。
 
 **v1 的保守处理（本草稿采用）**：只用**自包含物理代理**，绝不推断敌情：
 - 信号 A：最近 T 秒内有"关于我"的 hudmsg 受创（被命中/起火）。

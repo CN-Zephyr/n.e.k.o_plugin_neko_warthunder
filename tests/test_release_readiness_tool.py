@@ -28,7 +28,7 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
-            "host contract gate",
+            "host boundary gate",
             "free-text release gate",
             "replay degrade gate",
             "ownership replay gate",
@@ -40,7 +40,6 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "V2 completion gate",
             "RC handoff report",
             "synthetic replay",
-            "host War Thunder contract tests",
             "plugin check",
             "final smoke packet",
         ]
@@ -62,15 +61,7 @@ def test_release_readiness_plan_lists_offline_release_gates():
         assert checks[16].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
         assert checks[17].cmd == ["uv", "run", "python", "tools/replay.py"]
         assert checks[18].cwd == host.resolve()
-        assert checks[18].cmd == [
-            "uv",
-            "run",
-            "pytest",
-            "tests/unit/test_core_game_route_memory_contract.py",
-            "tests/unit/test_callback_instruction_origin.py",
-            "tests/unit/test_proactive_sm_integration.py",
-            "-q",
-        ]
+        assert checks[18].name == "plugin check"
         assert checks[-1].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py", "--offline-gates-passed"]
 
 
@@ -142,7 +133,7 @@ def test_release_readiness_plan_does_not_require_running_services():
             "vehicle profile id audit",
             "release defaults gate",
             "output freshness gate",
-            "host contract gate",
+            "host boundary gate",
             "free-text release gate",
             "replay degrade gate",
             "ownership replay gate",

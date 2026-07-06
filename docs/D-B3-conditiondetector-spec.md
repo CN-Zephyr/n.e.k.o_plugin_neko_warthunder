@@ -20,13 +20,13 @@
 | 数据源 | 边沿语义 | 我们怎么消费 | v1 例 |
 |---|---|---|---|
 | `processed.flags` / `alerts` | **电平型**（每帧出现） | ConditionDetector：**我们**做边沿+debounce+迟滞+re-arm | stall/aoa/altitude/fuel/overheat/overspeed（数据层 v1.6 已给 flag，插件侧待验证） |
-| `hud_notices` / `combat.feed` | **已边沿型**（带递增 id） | DiscreteDetector：**按 id 去重**，每个新 id 一次（fire-once） | overheat 技术通知 / you_killed / you_died |
+| `hud_notices` / `combat.feed` | **已边沿型**（带递增 id） | DiscreteDetector：hud_notices 按 id 去重；combat.feed 按已播报 owned id 去重，允许同 id 后补 ownership 时补触发 | overheat 技术通知 / you_killed / you_died |
 | `proximity.events` | **已边沿型**（首次进入触发一次，带 id/kind） | DiscreteDetector：按 id 去重；短窗连续近距离后方事件保守升级（V2 已消费，生成安全 generic 接近威胁事件） | enemy_nearby / air_threat_nearby / enemy_on_six / tailing_risk |
 | `situation.enemies` / `situation.nearest_air_threat` | 连续态势摘要（无事件 id） | AirSituationDetector：取最近安全空中敌方摘要，按距离段/钟点去重；可生成空中威胁、后方威胁，并用短窗连续近距离后方帧保守升级；raw label 不进 prompt | air_threat_nearby / enemy_on_six / tailing_risk |
 | `situation.ground_targets` | 状态摘要（按距离升序，无事件 id） | DiscreteDetector：取最近安全任务目标点，按 kind/grid/距离段去重；仅空/直升机域使用，raw label 不进 prompt | ground_target_nearby |
 | `state` / `vehicle_type` / `mission_status` | **状态跳变型** | 检测跳变沿一次 | spawn / alive-state / battle_end |
 
-> 一句话：**已边沿型（带 id）= 数据层已替我们 fire-once，我们只按 id 去重消费、绝不再 edge-detect；电平型 = fire-once 由我们的 re-arm 保证。**
+> 一句话：**已边沿型（带 id）= 数据层已替我们 fire-once，我们通常按 id 去重消费；combat.feed 的 ownership 可能后补，因此按已播报 owned id 去重；电平型 = fire-once 由我们的 re-arm 保证。**
 
 ## 0. 一句话定位
 
@@ -44,7 +44,7 @@ Detector = **一个纯粹的"条件 → 离散候选事件"单元**。它只回�
 - ❌ Scenario 门控（"DEAD 里别报失速"）→ Arbiter（查 D-B1 矩阵）。
 - ❌ 限流 / cooldown / 抢占 → Arbiter（见第 6 节）。
 - ❌ 跨 Detector 去重（如多个危急安全事件同窗竞争）→ Arbiter。
-- ❌ 拼提示文本 / 台词 → handler / 角色 LLM。
+- ❌ 拼提示文本 / 台词 → dispatcher 统一收口；危急动作类可由插件短句直出，其余需要语气变化的事件走 bounded `respond`。
 - ❌ `push_message` 或任何输出副作用。
 - ❌ 读原始 8111 / 做单位归一 → 数据层（合作者）。
 - ❌ 写 / 改 BattleState（只读消费）。

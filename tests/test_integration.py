@@ -11,7 +11,7 @@ from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detector
 
 
 def _alive(**kw):
-    base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True)
+    base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, domain="air")
     base.update(kw)
     return C.BattleState(**base)
 
@@ -22,6 +22,8 @@ def test_detector_engine_collects_condition_and_discrete_events_then_dedups():
     cur = _alive(
         timestamp=100.0,
         vehicle_type="bf-109f-4",
+        domain="air",
+        domain_label="空军",
         fuel_fraction=0.08,
         flags={"fuel_low": True},
         combat={"feed": [{"id": 7, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "Bandit"}]},
@@ -30,7 +32,7 @@ def test_detector_engine_collects_condition_and_discrete_events_then_dedups():
     events = engine.feed(prev, cur)
     assert [event.event_id for event in events] == ["low_fuel", "spawn", "you_killed"]
     assert events[0].payload == {"fuel_fraction": 0.08}
-    assert events[1].payload == {"vehicle_type": "bf-109f-4"}
+    assert events[1].payload == {"vehicle_type": "bf-109f-4", "domain": "air", "domain_label": "空军"}
     assert events[2].payload["victim"] == "Bandit"
 
     assert engine.feed(cur, cur) == []
@@ -46,6 +48,10 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
         "overspeed": {"ias_kmh": 760, "mach": 0.82},
         "overheat": {"temp_c": 118},
         "low_fuel": {"fuel_fraction": 0.07},
+        "ground_laser_warning": {"domain": "ground"},
+        "ground_crew_loss": {"domain": "ground", "crew_current": 1, "crew_total": 4},
+        "ground_ammo_empty": {"domain": "ground", "ammo_first_stage": 0},
+        "ground_ammo_low": {"domain": "ground", "ammo_first_stage": 3},
         "ground_target_nearby": {"grid": "B4", "distance_m": 2400},
         "enemy_nearby": {"distance_m": 1200, "compass": "E"},
         "air_threat_nearby": {"distance_m": 1800, "clock": 2},
@@ -54,7 +60,7 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
         "free_text_activity": {"source": "awards", "count": 1, "latest_code": "final_blow"},
         "you_killed": {"victim": "Bandit"},
         "you_died": {"cause": "unknown"},
-        "spawn": {"vehicle_type": "bf-109f-4"},
+        "spawn": {"vehicle_type": "bf-109f-4", "domain": "air"},
         "battle_end": {"result": "win, K2/D1"},
     }
 

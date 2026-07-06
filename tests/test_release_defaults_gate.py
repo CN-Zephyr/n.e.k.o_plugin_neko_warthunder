@@ -19,15 +19,27 @@ def test_release_defaults_gate_passes_with_conservative_defaults():
         "free_text_real_output_allowed": False,
         "v2_live_verified_real_output_enabled": False,
         "debug_timeline_enabled": False,
+        "plugin_reply_hint_enabled": True,
+        "plugin_owned_battle_output_enabled": False,
+        "plugin_owned_urgent_output_enabled": True,
+        "plugin_owned_blind_output_enabled": False,
+        "user_chat_quiet_window_enabled": True,
+        "battle_output_quiet_window_enabled": True,
         "raw_text_printed": False,
     }
     assert {item["name"] for item in result["checks"]} >= {
         "default_dry_run_true",
         "v2_live_verified_real_output_default_closed",
         "debug_timeline_default_closed",
+        "plugin_reply_hint_default_enabled",
+        "plugin_owned_battle_output_default_closed",
+        "plugin_owned_urgent_output_default_enabled",
+        "plugin_owned_blind_output_default_closed",
         "real_output_backpressure_enabled",
         "kill_coalescing_enabled",
-        "takeoff_radio_altitude_guard_enabled",
+        "user_chat_quiet_window_enabled",
+        "battle_output_quiet_window_enabled",
+        "takeoff_runway_guard_enabled",
         "data_layer_default_url_is_local_8112",
     }
 

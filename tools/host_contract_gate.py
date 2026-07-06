@@ -1,9 +1,10 @@
-"""Optional N.E.K.O host compatibility gate for battle output contracts.
+"""Optional N.E.K.O host boundary gate for War Thunder output contracts.
 
-The War Thunder plugin can attach freshness, coalescing, target-session, and
-short-TTS metadata, but the live experience only improves when the host consumes
-that metadata. This gate stays offline and static: when a local host checkout is
-available it verifies that the expected compatibility hooks are present.
+The plugin may attach freshness, coalescing, target-session, and short-reply
+metadata as a future generic host contract, but it must not require host core
+special-cases to shape Lanlan's speech. This gate stays offline and static:
+when a local host checkout is available it verifies that War Thunder-specific
+speech hooks are absent and that the runtime plugin copy is current.
 """
 
 from __future__ import annotations
@@ -24,72 +25,17 @@ class Requirement:
     reason: str
 
 
-REQUIREMENTS: tuple[Requirement, ...] = (
+FORBIDDEN_HOST_SNIPPETS: tuple[Requirement, ...] = (
     Requirement(
-        name="short_tts_contract_consumed",
-        reason="host must turn short_tts_line metadata into short, bounded Lanlan output",
+        name="no_warthunder_specific_host_speech_hooks",
+        reason="all War Thunder speech timing and reply shaping must stay inside the plugin",
         snippets=(
-            '_SHORT_TTS_REPLY_CONTRACT = "short_tts_line"',
-            "def _render_short_tts_reply_contract_instruction",
-            "def _shape_short_tts_reply_text",
-            "used_chars",
-            "_short_tts_reply_completed_for_turn",
-            "_short_tts_reply_chars_for_turn",
-            "short_tts_reply_total_output_chars",
-            "short_tts_reply_complete",
-            "def _is_short_tts_reply_complete_metadata",
-        ),
-    ),
-    Requirement(
-        name="voice_hot_swap_short_tts_prompted",
-        reason="voice hot-swap prime must receive the same short-reply contract as callback text",
-        snippets=(
-            "def _render_pending_extra_replies_by_origin",
-            "_render_short_tts_reply_contract_instruction(task_entries + event_entries)",
-        ),
-    ),
-    Requirement(
-        name="warthunder_metadata_preserved_to_extra_reply",
-        reason="metadata must survive enqueue_agent_callback so hot-swap filtering can see it",
-        snippets=(
-            "def enqueue_agent_callback",
-            'extra_reply["metadata"] = dict(',
-        ),
-    ),
-    Requirement(
-        name="pending_callback_coalesce_consumed",
-        reason="released cues with the same coalesce_key must replace older pending callbacks and hot-swap mirrors",
-        snippets=(
-            "def _callback_coalesce_key",
-            "def _coalesce_pending_agent_callback_queues",
-            "resolve_callback_delivery_ack(queued_cb, False)",
-            'extra_reply["coalesce_key"] = coalesce_key',
-            'callback.setdefault("coalesce_key"',
+            "_WARTHUNDER_",
+            "warthunder_user_input_quiet_window",
+            "_filter_warthunder_callbacks_for_user_quiet_window",
+            "_filter_warthunder_extra_replies_for_user_quiet_window",
+            "neko_warthunder:battle_event",
             "test_warthunder_user_chat_interference_allows_death_to_replace_stale_warning",
-        ),
-    ),
-    Requirement(
-        name="warthunder_user_input_quiet_window",
-        reason="ordinary battle cues must not interrupt recent user chat, while critical death can still pass",
-        snippets=(
-            '_WARTHUNDER_BATTLE_COALESCE_KEY = "neko_warthunder:battle_event"',
-            "_WARTHUNDER_USER_INPUT_QUIET_WINDOW_SECONDS",
-            "_WARTHUNDER_ALWAYS_ALLOW_DURING_USER_INPUT",
-            '"you_died"',
-            "def _mark_warthunder_user_input_quiet_window",
-            "def _warthunder_user_input_quiet_window_active",
-            "def _filter_warthunder_callbacks_for_user_quiet_window",
-            "def _filter_warthunder_extra_replies_for_user_quiet_window",
-        ),
-    ),
-    Requirement(
-        name="warthunder_quiet_window_call_sites",
-        reason="all callback delivery paths must apply the user-chat quiet window",
-        snippets=(
-            'reason="proactive_trigger"',
-            'reason="proactive_release"',
-            'reason="passive_drain"',
-            'reason="hot_swap_prime"',
         ),
     ),
 )
@@ -148,21 +94,21 @@ def run_gate(
     text = "\n".join(texts)
     checked: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
-    for requirement in REQUIREMENTS:
-        missing = [snippet for snippet in requirement.snippets if snippet not in text]
+    for requirement in FORBIDDEN_HOST_SNIPPETS:
+        present = [snippet for snippet in requirement.snippets if snippet in text]
         checked.append(
             {
                 "name": requirement.name,
-                "status": "pass" if not missing else "fail",
+                "status": "pass" if not present else "fail",
                 "reason": requirement.reason,
-                "missing": missing,
+                "forbidden_present": present,
             }
         )
-        for snippet in missing:
+        for snippet in present:
             failures.append(
                 {
                     "requirement": requirement.name,
-                    "missing": snippet,
+                    "forbidden": snippet,
                     "reason": requirement.reason,
                 }
             )
@@ -273,11 +219,14 @@ def render_text(payload: dict[str, Any]) -> str:
         lines.append(f"  reason: {item['reason']}")
         if item.get("missing"):
             lines.append("  missing: " + _format_missing(item["missing"]))
+        if item.get("forbidden_present"):
+            lines.append("  forbidden_present: " + _format_missing(item["forbidden_present"]))
     if payload.get("failures"):
         lines.append("")
         lines.append("failures:")
         for failure in payload["failures"]:
-            lines.append(f"- {failure['requirement']}: {failure['missing']}")
+            detail = failure.get("missing", failure.get("forbidden", ""))
+            lines.append(f"- {failure['requirement']}: {detail}")
     return "\n".join(lines) + "\n"
 
 
@@ -288,7 +237,7 @@ def _format_missing(missing: Any) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check local N.E.K.O host battle-output compatibility hooks.")
+    parser = argparse.ArgumentParser(description="Check local N.E.K.O host/plugin boundary for battle output hooks.")
     parser.add_argument("--host-root", default=str(_BASE.parent / "N.E.K.O"), help="N.E.K.O host repository root.")
     parser.add_argument("--plugin-root", default=str(_BASE), help="Standalone neko_warthunder plugin repository root.")
     parser.add_argument("--require-host", action="store_true", help="Fail when the host checkout is missing.")

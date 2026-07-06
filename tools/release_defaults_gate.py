@@ -37,6 +37,12 @@ def run_gate() -> dict[str, Any]:
             "free_text_real_output_allowed": False,
             "v2_live_verified_real_output_enabled": False,
             "debug_timeline_enabled": False,
+            "plugin_reply_hint_enabled": True,
+            "plugin_owned_battle_output_enabled": False,
+            "plugin_owned_urgent_output_enabled": True,
+            "plugin_owned_blind_output_enabled": False,
+            "user_chat_quiet_window_enabled": True,
+            "battle_output_quiet_window_enabled": True,
             "raw_text_printed": False,
         },
     }
@@ -58,6 +64,25 @@ def _checks(defaults: WtConfig, empty_mapping: WtConfig) -> list[dict[str, Any]]
             and empty_mapping.observability_include_prompt_preview is False,
         ),
         _expect(
+            "plugin_reply_hint_default_enabled",
+            defaults.plugin_reply_hint_enabled is True and empty_mapping.plugin_reply_hint_enabled is True,
+        ),
+        _expect(
+            "plugin_owned_battle_output_default_closed",
+            defaults.plugin_owned_battle_output_enabled is False
+            and empty_mapping.plugin_owned_battle_output_enabled is False,
+        ),
+        _expect(
+            "plugin_owned_urgent_output_default_enabled",
+            defaults.plugin_owned_urgent_output_enabled is True
+            and empty_mapping.plugin_owned_urgent_output_enabled is True,
+        ),
+        _expect(
+            "plugin_owned_blind_output_default_closed",
+            defaults.plugin_owned_blind_output_enabled is False
+            and empty_mapping.plugin_owned_blind_output_enabled is False,
+        ),
+        _expect(
             "real_output_backpressure_enabled",
             defaults.output_backpressure_seconds > 0
             and empty_mapping.output_backpressure_seconds > 0
@@ -69,7 +94,15 @@ def _checks(defaults: WtConfig, empty_mapping: WtConfig) -> list[dict[str, Any]]
             defaults.kill_coalesce_window_seconds > 0 and empty_mapping.kill_coalesce_window_seconds > 0,
         ),
         _expect(
-            "takeoff_radio_altitude_guard_enabled",
+            "user_chat_quiet_window_enabled",
+            defaults.user_chat_quiet_window_seconds > 0 and empty_mapping.user_chat_quiet_window_seconds > 0,
+        ),
+        _expect(
+            "battle_output_quiet_window_enabled",
+            defaults.battle_output_quiet_window_seconds > 0 and empty_mapping.battle_output_quiet_window_seconds > 0,
+        ),
+        _expect(
+            "takeoff_runway_guard_enabled",
             defaults.takeoff_low_alt_grace_seconds > 0
             and defaults.takeoff_radio_altitude_enter_m >= 0
             and defaults.takeoff_radio_altitude_exit_m > defaults.takeoff_radio_altitude_enter_m,

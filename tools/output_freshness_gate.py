@@ -1,10 +1,10 @@
 """Offline gate for real battle-output freshness contracts.
 
 This gate is synthetic and host-free. It proves that real battle-event
-``push_message`` calls carry the metadata the host needs to avoid stale,
-long, or misrouted replies: queue coalescing, event age/expiry, target
-session, and the short TTS reply contract. It also proves expired events are
-dropped before real push and dry_run decisions remain side-effect-free.
+``push_message`` calls carry plugin-owned delivery and dialogue policy:
+queue coalescing, event age/expiry, target session, and the plugin-side short
+TTS prompt contract. It also proves expired events are dropped before real push
+and dry_run decisions remain side-effect-free.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ class _CapturePlugin:
             dry_run=False,
             output_backpressure_seconds=20.0,
             output_event_max_age_seconds=8.0,
+            user_chat_quiet_window_seconds=0.0,
+            battle_output_quiet_window_seconds=0.0,
             target_lanlan="Lanlan",
         )
         self.calls: list[dict[str, Any]] = []
@@ -77,10 +79,10 @@ def run_gate() -> dict[str, Any]:
             "real_battle_push_requires_freshness_metadata": True,
             "tactical_cues_use_shorter_freshness_windows": True,
             "real_battle_push_requires_target_lanlan_when_resolved": True,
-            "real_battle_push_requires_short_tts_contract": True,
+            "real_battle_push_requires_plugin_dialogue_policy": True,
             "real_battle_push_requires_pending_replace_metadata": True,
             "real_battle_push_requires_reply_style_contract": True,
-            "real_battle_push_requires_generic_host_callback_contract": True,
+            "real_battle_push_requires_generic_delivery_contract": True,
             "urgent_battle_events_require_interrupt_metadata": True,
             "death_event_bypasses_backpressure": True,
             "critical_safety_event_bypasses_backpressure": True,
@@ -107,6 +109,8 @@ def _case_real_push_contract(failures: list[dict[str, str]]) -> dict[str, Any]:
     status = timeline.snapshot().get("last_output_status") or {}
     _expect_equal(failures, "real_push_contract", "call.coalesce_key", call.get("coalesce_key"), BATTLE_EVENT_COALESCE_KEY)
     _expect_equal(failures, "real_push_contract", "call.target_lanlan", call.get("target_lanlan"), "Lanlan")
+    _expect_equal(failures, "real_push_contract", "call.ai_behavior", call.get("ai_behavior"), "blind")
+    _expect_equal(failures, "real_push_contract", "call.visibility", call.get("visibility"), ["chat"])
     _expect_required_metadata(failures, "real_push_contract", metadata)
     _expect_required_status_metadata(failures, "real_push_contract.status", status)
     _expect_equal(failures, "real_push_contract", "metadata.event_age_seconds", metadata.get("event_age_seconds"), 3.0)
@@ -124,6 +128,11 @@ def _case_real_push_contract(failures: list[dict[str, str]]) -> dict[str, Any]:
         "event_expires_at": metadata.get("event_expires_at"),
         "target_lanlan": metadata.get("target_lanlan"),
         "reply_contract": metadata.get("battle_reply_contract"),
+        "ai_behavior": call.get("ai_behavior"),
+        "visibility": call.get("visibility"),
+        "dialogue_policy_owner": metadata.get("dialogue_policy_owner"),
+        "plugin_owned_output": metadata.get("plugin_owned_output"),
+        "plugin_recommended_reply": metadata.get("plugin_recommended_reply"),
         "replace_pending": metadata.get("replace_pending"),
         "interrupt_battle_event": metadata.get("interrupt_battle_event"),
         "interrupt_pending": metadata.get("interrupt_pending"),
@@ -324,12 +333,30 @@ def _expect_required_metadata(failures: list[dict[str, str]], case: str, metadat
         "replace_pending": True,
         "reply_contract": BATTLE_REPLY_CONTRACT,
         "reply_max_chars": BATTLE_REPLY_MAX_CHARS,
-        "quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
+        "dialogue_policy_owner": "plugin",
+        "plugin_owned_output": True,
+        "plugin_quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
         "host_callback_contract_version": HOST_CALLBACK_CONTRACT_VERSION,
     }
     for key, value in expected.items():
         _expect_equal(failures, case, f"metadata.{key}", metadata.get(key), value)
-    for key in ("event_ts", "event_age_seconds", "event_max_age_seconds", "event_expires_at", "reply_style_contract"):
+    policy = metadata.get("plugin_dialogue_policy")
+    if not isinstance(policy, dict):
+        failures.append({"case": case, "target": "metadata.plugin_dialogue_policy", "reason": "missing"})
+    else:
+        _expect_equal(failures, case, "plugin_dialogue_policy.owner", policy.get("owner"), "plugin")
+        _expect_equal(failures, case, "plugin_dialogue_policy.mode", policy.get("mode"), BATTLE_REPLY_CONTRACT)
+        _expect_equal(failures, case, "plugin_dialogue_policy.max_chars", policy.get("max_chars"), BATTLE_REPLY_MAX_CHARS)
+        _expect_equal(failures, case, "plugin_dialogue_policy.single_line", policy.get("single_line"), True)
+        _expect_equal(failures, case, "plugin_dialogue_policy.no_followup", policy.get("no_followup"), True)
+    for key in (
+        "event_ts",
+        "event_age_seconds",
+        "event_max_age_seconds",
+        "event_expires_at",
+        "reply_style_contract",
+        "plugin_recommended_reply",
+    ):
         if key not in metadata:
             failures.append({"case": case, "target": f"metadata.{key}", "reason": "missing"})
 
@@ -344,12 +371,27 @@ def _expect_required_status_metadata(failures: list[dict[str, str]], case: str, 
         "replace_pending": True,
         "reply_contract": BATTLE_REPLY_CONTRACT,
         "reply_max_chars": BATTLE_REPLY_MAX_CHARS,
-        "quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
+        "dialogue_policy_owner": "plugin",
+        "plugin_owned_output": True,
+        "plugin_quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
         "host_callback_contract_version": HOST_CALLBACK_CONTRACT_VERSION,
     }
     for key, value in expected.items():
         _expect_equal(failures, case, key, status.get(key), value)
-    for key in ("event_ts", "event_age_seconds", "event_max_age_seconds", "event_expires_at", "reply_style_contract"):
+    policy = status.get("plugin_dialogue_policy")
+    if not isinstance(policy, dict):
+        failures.append({"case": case, "target": "plugin_dialogue_policy", "reason": "missing"})
+    else:
+        _expect_equal(failures, case, "plugin_dialogue_policy.owner", policy.get("owner"), "plugin")
+        _expect_equal(failures, case, "plugin_dialogue_policy.mode", policy.get("mode"), BATTLE_REPLY_CONTRACT)
+    for key in (
+        "event_ts",
+        "event_age_seconds",
+        "event_max_age_seconds",
+        "event_expires_at",
+        "reply_style_contract",
+        "plugin_recommended_reply",
+    ):
         if key not in status:
             failures.append({"case": case, "target": key, "reason": "missing"})
 
@@ -362,17 +404,14 @@ def _expect_host_callback_contract(failures: list[dict[str, str]], case: str, me
     _expect_equal(failures, case, "host_callback_contract.version", contract.get("version"), HOST_CALLBACK_CONTRACT_VERSION)
     _expect_equal(failures, case, "host_callback_contract.kind", contract.get("kind"), "realtime_cue")
     delivery = contract.get("delivery") if isinstance(contract.get("delivery"), dict) else {}
-    reply = contract.get("reply") if isinstance(contract.get("reply"), dict) else {}
-    quiet = contract.get("quiet_window") if isinstance(contract.get("quiet_window"), dict) else {}
     freshness = contract.get("freshness") if isinstance(contract.get("freshness"), dict) else {}
     _expect_equal(failures, case, "host_callback_contract.delivery.coalesce_key", delivery.get("coalesce_key"), BATTLE_EVENT_COALESCE_KEY)
     _expect_equal(failures, case, "host_callback_contract.delivery.replace_pending", delivery.get("replace_pending"), True)
     _expect_equal(failures, case, "host_callback_contract.delivery.interrupt_pending", delivery.get("interrupt_pending"), True)
-    _expect_equal(failures, case, "host_callback_contract.reply.mode", reply.get("mode"), BATTLE_REPLY_CONTRACT)
-    _expect_equal(failures, case, "host_callback_contract.reply.max_chars", reply.get("max_chars"), BATTLE_REPLY_MAX_CHARS)
-    _expect_equal(failures, case, "host_callback_contract.reply.single_turn", reply.get("single_turn"), True)
-    _expect_equal(failures, case, "host_callback_contract.quiet_window.policy", quiet.get("policy"), HOST_QUIET_WINDOW_POLICY)
-    _expect_equal(failures, case, "host_callback_contract.quiet_window.bypass", quiet.get("bypass"), True)
+    if "reply" in contract:
+        failures.append({"case": case, "target": "host_callback_contract.reply", "reason": "must_be_plugin_owned"})
+    if "quiet_window" in contract:
+        failures.append({"case": case, "target": "host_callback_contract.quiet_window", "reason": "must_be_plugin_owned"})
     _expect_equal(failures, case, "host_callback_contract.freshness.event_age_seconds", freshness.get("event_age_seconds"), 3.0)
 
 
@@ -397,7 +436,7 @@ def render_text(result: dict[str, Any]) -> str:
     lines = [
         "# neko_warthunder output freshness gate",
         f"status: {result['status']}",
-        "policy: real battle output must be fresh, coalesced, targeted, and short-reply constrained",
+        "policy: real battle output must be fresh, coalesced, targeted, and plugin-dialogue constrained",
     ]
     for case in result["cases"]:
         details = " ".join(f"{k}={v}" for k, v in case.items() if k != "name")

@@ -285,6 +285,7 @@ class TelemetryProcessor:
             ias_kmh=getattr(vehicle, "ias_kmh", None),
             aoa_deg=getattr(vehicle, "aoa_deg", None),
             altitude_m=getattr(vehicle, "altitude_m", None),
+            radio_altitude_m=getattr(indicators, "radio_altitude", None),
             afterburner_max_sec=cfg.get("afterburner_max_sec"),
         )
 
@@ -565,7 +566,7 @@ class TelemetryProcessor:
             except (TypeError, ValueError):
                 return None
 
-        def _load_sensitive_limit(empty_key: str, full_key: str, fallback_key: str) -> float | None:
+        def _structure_candidate_limit(empty_key: str, full_key: str) -> float | None:
             empty = _num(cfg.get(empty_key))
             full = _num(cfg.get(full_key))
             if empty is not None and full is not None:
@@ -578,14 +579,20 @@ class TelemetryProcessor:
                 return empty
             if full is not None:
                 return full
-            return _num(cfg.get(fallback_key))
+            return None
 
-        pos_limit = _load_sensitive_limit(
+        def _spoken_limit(empty_key: str, full_key: str, instructor_key: str) -> float | None:
+            instructor_limit = _num(cfg.get(instructor_key))
+            if instructor_limit is not None:
+                return instructor_limit
+            return _structure_candidate_limit(empty_key, full_key)
+
+        pos_limit = _spoken_limit(
             "g_limit_positive_empty_candidate",
             "g_limit_positive_full_fuel_candidate",
             "instructor_g_limit_positive",
         )
-        neg_limit = _load_sensitive_limit(
+        neg_limit = _spoken_limit(
             "g_limit_negative_empty_candidate",
             "g_limit_negative_full_fuel_candidate",
             "instructor_g_limit_negative",
@@ -672,14 +679,17 @@ class TelemetryProcessor:
                       f"攻角偏大：AoA {aoa:.1f}°", aoa)
 
     def _process_altitude(self, vehicle: Any, cfg: dict[str, Any], result: ProcessedData) -> None:
-        alt = getattr(vehicle, "altitude_m", None)
+        alt = result.radio_altitude_m
+        if alt is None:
+            alt = getattr(vehicle, "altitude_m", None)
         if alt is None:
             return
         crit = cfg.get("altitude_critical_m")
         warn = cfg.get("altitude_warn_m")
+        label = "离地" if result.radio_altitude_m is not None else "海拔"
         if crit is not None and alt <= crit:
             self._add(result, "altitude_critical", "critical",
-                      f"高度过低：{alt:.0f} m（海拔）", alt)
+                      f"高度过低：{alt:.0f} m（{label}）", alt)
         elif warn is not None and alt <= warn:
             self._add(result, "altitude_low", "warning",
-                      f"高度偏低：{alt:.0f} m（海拔）", alt)
+                      f"高度偏低：{alt:.0f} m（{label}）", alt)

@@ -25,15 +25,33 @@ def test_kill_events_are_buffered_and_coalesced_before_flush():
 
     first, first_chain = arb.decide([BattleEvent("you_killed", payload={"victim": "A"}, ts=100.0)], IN_FLIGHT, 100.0)
     second, second_chain = arb.decide([BattleEvent("you_killed", payload={"victim": "B"}, ts=101.0)], IN_FLIGHT, 101.0)
-    chosen, chain = arb.decide([], IN_FLIGHT, 102.1)
+    too_early, early_chain = arb.decide([], IN_FLIGHT, 102.1)
+    chosen, chain = arb.decide([], IN_FLIGHT, 103.1)
 
     assert first is None
     assert second is None
+    assert too_early is None
+    assert early_chain == []
     assert any(item["result"] == "buffered" and item["reason"] == "kill_coalescing" for item in first_chain)
     assert any(item["result"] == "buffered" and item["reason"] == "kill_coalescing" for item in second_chain)
     assert chosen is not None
     assert chosen.event_id == "you_killed"
     assert chosen.payload["kill_count"] == 2
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_continuous_kill_streak_flushes_at_max_hold_even_without_quiet_gap():
+    arb = _arbiter()
+
+    for i, now in enumerate([100.0, 101.0, 102.0, 103.0, 104.0, 105.0], start=1):
+        chosen, _ = arb.decide([BattleEvent("you_killed", payload={"victim": f"E{i}"}, ts=now)], IN_FLIGHT, now)
+        assert chosen is None
+
+    chosen, chain = arb.decide([], IN_FLIGHT, 106.1)
+
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["kill_count"] == 6
     assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
 
 
@@ -161,7 +179,7 @@ def test_kill_coalescing_preserves_latest_domain_for_output_wording():
 
     arb.decide([BattleEvent("you_killed", payload={"victim": "A", "domain": "ground"}, ts=100.0)], IN_FLIGHT, 100.0)
     arb.decide([BattleEvent("you_killed", payload={"victim": "B", "domain": "ground"}, ts=101.0)], IN_FLIGHT, 101.0)
-    chosen, _ = arb.decide([], IN_FLIGHT, 102.1)
+    chosen, _ = arb.decide([], IN_FLIGHT, 103.1)
 
     assert chosen is not None
     assert chosen.payload.get("domain") == "ground"
@@ -191,11 +209,109 @@ def test_deferred_kill_flushes_after_critical_risk_clears():
 
     arb.decide([BattleEvent("you_killed", payload={"victim": "A", "domain": "air"}, ts=100.0)], CRITICAL_RISK, 100.0)
     blocked, _ = arb.decide([], CRITICAL_RISK, 102.1)
-    chosen, chain = arb.decide([], COMBAT_STRESS, 103.0)
+    still_combat, combat_chain = arb.decide([], COMBAT_STRESS, 103.0)
+    chosen, chain = arb.decide([], IN_FLIGHT, 104.0)
 
     assert blocked is None
+    assert still_combat is None
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "scenario_gated_deferred(COMBAT_STRESS)"
+        for item in combat_chain
+    )
     assert chosen is not None
     assert chosen.event_id == "you_killed"
     assert chosen.payload["kill_count"] == 1
     assert chosen.payload["domain"] == "air"
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_ground_kill_praise_does_not_wait_for_maneuver_only_combat_stress():
+    arb = _arbiter()
+
+    first, first_chain = arb.decide(
+        [BattleEvent("you_killed", payload={"victim": "A", "domain": "ground", "stress_reasons": ["maneuver"]}, ts=100.0)],
+        COMBAT_STRESS,
+        100.0,
+    )
+    chosen, chain = arb.decide([], COMBAT_STRESS, 102.1)
+
+    assert first is None
+    assert any(item["reason"] == "kill_coalescing" for item in first_chain)
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["domain"] == "ground"
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_ground_kill_coalescing_uses_configured_window_instead_of_air_combat_hold():
+    arb = _arbiter()
+
+    arb.decide([BattleEvent("you_killed", payload={"victim": "A", "domain": "ground"}, ts=100.0)], IN_FLIGHT, 100.0)
+    too_early, early_chain = arb.decide([], IN_FLIGHT, 101.0)
+    arb.decide([BattleEvent("you_killed", payload={"victim": "B", "domain": "ground"}, ts=101.5)], IN_FLIGHT, 101.5)
+    still_waiting, waiting_chain = arb.decide([], IN_FLIGHT, 102.0)
+    chosen, chain = arb.decide([], IN_FLIGHT, 103.6)
+
+    assert too_early is None
+    assert early_chain == []
+    assert still_waiting is None
+    assert waiting_chain == []
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["kill_count"] == 2
+    assert chosen.payload["domain"] == "ground"
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_ground_kill_praise_waits_during_damage_engagement_stress():
+    arb = _arbiter()
+
+    first, first_chain = arb.decide(
+        [BattleEvent("you_killed", payload={"victim": "A", "domain": "ground", "stress_reasons": ["damage"]}, ts=100.0)],
+        COMBAT_STRESS,
+        100.0,
+    )
+    still_stressed, stress_chain = arb.decide([], COMBAT_STRESS, 102.1)
+    chosen, chain = arb.decide([], IN_FLIGHT, 103.0)
+
+    assert first is None
+    assert any(item["reason"] == "kill_coalescing" for item in first_chain)
+    assert still_stressed is None
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "scenario_gated_deferred(COMBAT_STRESS)"
+        for item in stress_chain
+    )
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["domain"] == "ground"
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_ground_kill_praise_waits_during_surface_contact_stress():
+    arb = _arbiter()
+
+    first, first_chain = arb.decide(
+        [
+            BattleEvent(
+                "you_killed",
+                payload={"victim": "A", "domain": "ground", "stress_reasons": ["surface_contact"]},
+                ts=100.0,
+            )
+        ],
+        COMBAT_STRESS,
+        100.0,
+    )
+    still_stressed, stress_chain = arb.decide([], COMBAT_STRESS, 102.1)
+    chosen, chain = arb.decide([], IN_FLIGHT, 103.0)
+
+    assert first is None
+    assert any(item["reason"] == "kill_coalescing" for item in first_chain)
+    assert still_stressed is None
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "scenario_gated_deferred(COMBAT_STRESS)"
+        for item in stress_chain
+    )
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["domain"] == "ground"
     assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
