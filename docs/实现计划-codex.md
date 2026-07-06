@@ -41,7 +41,7 @@
 ## 当前边界
 
 - 插件与数据层唯一数据边界是 HTTP `:8112`，主入口是 `/api/telemetry`；L8 只负责可选启动/关闭自己拉起的 vendored 数据层进程。
-- 不 import、不修改 `data_layer/`。数据层作为 vendored 目录存在，后续更新以整包合并为主。
+- 运行时不把 `data_layer/` 当 Python 包 import；插件主链路与数据层唯一运行数据边界是 HTTP :8112。vendored `data_layer/data process/` 源码与 profile JSON 可以作为显式数据层合同/profile 维护项更新，后续仍以整包合并或明确的数据层维护任务为主。
 - 输出只走 `adapters/neko_dispatcher.py`。
 - dry_run 默认开启；真机确认前不要关闭。
 - Detector / Scenario / Arbiter 只处理事件语义，不承担自由文本过滤职责。

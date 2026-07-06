@@ -71,8 +71,9 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 - recovery 暂缓。
 
 边界：
-- 不 import、不修改 data_layer/。
-- 与数据层唯一数据边界是 HTTP :8112；L8 只负责可选启动/关闭自己拉起的 8112 数据层进程，不 import、不修改 data_layer/。
+- 运行时不要把 `data_layer/` 当 Python 包 import；插件与数据层唯一运行数据边界是 HTTP :8112。
+- L8 只负责可选启动/关闭自己拉起的 8112 数据层进程；已经存在的外部 :8112 服务不可接管或杀掉。
+- vendored `data_layer/data process/` 源码与 profile JSON 可以作为显式数据层合同/profile 维护项更新，但不能把数据层内部模块耦合进插件主链路。
 - 输出只走 adapters/neko_dispatcher.py。
 - 不为本插件继续扩宿主核心专用逻辑；宿主侧能力后续应走通用 callback contract 接口。
 - dry_run 默认开启，真机确认前不要关闭。
