@@ -12,6 +12,7 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 - 数据层字段缺口不再是“等待字段补齐”；插件侧已分项接入 `v1.6` DTO，剩余重点是真机 / 样本接缝验证。
 - 插件侧已按 `combat.feed[].is_my_kill` / `combat.feed[].is_my_death` 生成 `you_killed` / `you_died`，击杀/死亡 prompt 已按 `domain` / `cause` 使用 generic 空/陆/海措辞，不复读 raw victim 玩家名；已提供面板 `set_identity` action 调用数据层 `/api/identity` 设置/清除玩家名，并会把首次手动玩家名持久化到插件配置、下次启动自动恢复到数据层；玩家名 UI 只支持手动填写，`active_players` 仅保留为安全摘要/调试数据；在 `replay=true` 时静默 Detector 输出。
 - 插件侧已接入 `hud_notices.feed[].code` 中的 `engine_overheat` / `oil_overheat`，可映射为现有 `overheat` 事件；raw HUD 文本不进入 prompt。
+- 陆战已从“复用空战安全逻辑”拆出独立事件：`ground_laser_warning`、`ground_crew_loss`、`ground_ammo_empty`、`ground_ammo_low` 只在 `domain == "ground"` 时触发，不进入固定翼 `CRITICAL_RISK` 集合，不复用失速/迎角/过载/低空/超速/低油等空战连续条件。提示词只描述陆战事实，例如激光告警、车组受损、一级弹药空或偏少，不编锁定、击毁、敌情或载具损伤。
 - V2 接近/目标态势感知已接入双路径：`enemy_nearby` 仍消费数据层边沿事实 `proximity.events`；`air_threat_nearby` / `enemy_on_six` / `tailing_risk` 同时消费 `proximity.events` 和连续态势摘要 `situation.nearest_air_threat` / `situation.enemies`，按距离、钟点和相对角度生成安全 generic 事件；`ground_target_nearby` 消费 `situation.ground_targets`。普通接近和任务目标点在 COMBAT_STRESS 下被压住，空中威胁/后方威胁/持续尾随风险可进入队列，critical 安全事件仍优先。Hosted UI context / 面板暴露安全态势摘要，不暴露 raw 文本或目标 label。
 - `T-Safety: output text sanitizer` 已实现，位于 `NekoDispatcher` / prompt builder 前；prompt 和 `push_message.parts[].text` 只能使用 safe / generic 文案，且已覆盖 hudmsg / combat.feed / awards 常见自由文本字段族。
 - `tools/free_text_gate.py` 已纳入离线 preflight，作为 hudmsg / combat.feed / awards 去桩前的发布门禁：合成恶意玩家名、HUD、combat feed、award payload 后，验证 prompt 与 `push_message.parts[].text` 不含 raw 文本；这些路径在真机 dry_run 安全验证前仍保持 dry_run-only。
@@ -44,12 +45,14 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 
 先读：
 - PROJECT_STATUS.md
+- docs/handoff-20260707.md
 - docs/实现计划-codex.md
 - docs/真机验证-checklist.md
 - docs/统一测试前-离线检查.md
 - docs/真机测试结果-template.md
 - docs/样本回放-20260620.md
 - docs/待办事项.md
+- docs/mode-domain-boundaries.md
 - docs/D-B1-scenario-model.md ~ docs/D-B5-event-field-requirements.md
 - data_layer/data process/后端接口文档.md
 
@@ -63,6 +66,7 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 - 最终真机 smoke 的推荐 evidence 入口是交接包中的 `evidence_from_monitor_and_transcript`：`--from-live-monitor` 与 `--safe-transcript` 可在一条命令里合成 `local_test_logs\final_smoke_evidence.json`，分步命令只作为排障/补录路径。
 - `safe_transcript_metrics.json` 推荐由交接包里的 `safe_transcript_record` 生成：`--record-safe-transcript --reply-chars <count>` 只记录数字和确认 flag，不保存猫猫回复原文。
 - 真机前可先跑交接包里的 `evidence_rehearsal`：`--rehearsal-output-dir local_test_logs\final_smoke_rehearsal` 只演练证据流程，输出带 `rehearsal_only=true`，不能替代最终真机 evidence。
+- 2026-07-07 交接包：`D:\Users\zheng\Documents\Code\N-E-K-O-Warthunder\dist\neko_warthunder-0.1.0.neko-plugin`，SHA256 `960C20E35D2A516A96D2C3BD408123C3577505156DD527786C89BDDBCF828F6F`；release check / inspect / payload hash verify 已通过，包内不包含 `local_samples`、`local_test_logs`、captures、records、maps、tests、docs 或 tools。
 - 真机 smoke 已完成多轮；2026-06-23 已观察到 `overspeed_warn` / `overspeed_critical`、`low_fuel`、`low_alt_danger`、`stall_risk`、`overheat`、`you_killed`、`you_died` 进入 Arbiter / Dispatcher，并验证手动 identity、owned combat.feed 归属字段和 `dry_run=false` 真实 push 输出。
 - T-Observe 已完成轻量实现；真机 dry_run 已验证 `observe.last_decision` / `observe.last_output_status` 能解释 allow / preempt / cooldown / dry_run 输出。
 - T-Safety 与 free-text release gate 已完成；kill/death 的安全 generic 输出已通过真机 `dry_run=false` smoke，hudmsg / awards / 其他 free-text 正式播报前仍需 dry_run 安全验证。

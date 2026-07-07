@@ -3,6 +3,7 @@
 ## Handoff Snapshot
 
 - Synchronized for handoff on 2026-07-07.
+- Handoff summary: `docs/handoff-20260707.md`.
 - Source repository: `CN-Zephyr/project-N-E-K-O-Warthunder-8111-data-plugin`, branch `main`.
 - Current test package: `D:\Users\zheng\Documents\Code\N-E-K-O-Warthunder\dist\neko_warthunder-0.1.0.neko-plugin`.
 - Package size: about `0.227 MB`; package hash verified by `neko_plugin_cli verify`.
@@ -10,6 +11,7 @@
 - Latest offline gate status: `tests/run_logic_tests.py` reports `442/442 passed`, pytest reports `442 passed`, `tools/release_readiness.py --run` reports `ready_for_final_live_smoke`.
 - Release posture: ready for small-scope RC / final dry-run live smoke, not final public release until live evidence is recorded.
 - Safe defaults: `dry_run=true`, `data_layer_auto_start=true`, `dialogue_intrusion_mode="critical_only"`, `plugin_owned_battle_output_enabled=false`, `plugin_owned_urgent_output_enabled=true`, `v2_live_verified_real_output_enabled=false`.
+- Latest domain split: fixed-wing flight-safety events are guarded to `domain == "air"`; ground-only cues now use `ground_laser_warning`, `ground_crew_loss`, `ground_ammo_empty`, and `ground_ammo_low`, and do not enter fixed-wing `CRITICAL_RISK`.
 - Remaining handoff focus: run final live smoke with dry-run first, record safe `live_monitor` / transcript metrics evidence, capture `ground_target_nearby` within 3000m, validate replay=true real sample, keep free-text real speech closed until dry-run safety passes.
 
 ## Current State
@@ -27,6 +29,7 @@
 - `T-Deferred-HUD-Gate: deferred HUD notice release gate` is complete. `tools/deferred_hud_gate.py` proves `powertrain_failure` remains observable but non-speech: no Detector candidate, no Dispatcher prompt, no `push_message`, and no raw HUD text leak.
 - `T-Release-Defaults-Gate: release-safe defaults gate` is complete. `tools/release_defaults_gate.py` is now part of offline preflight and proves the default release posture remains dry-run-first, debug timeline off, unverified V2 real output closed, and real-output queue guards enabled.
 - `V2 Proximity / Objective Awareness` is implemented for the non-live scope. The plugin now consumes data-layer edge facts from `proximity.events` plus continuous air geometry from `situation.nearest_air_threat` / `situation.enemies`; `enemy_nearby` remains proximity-edge based, while `air_threat_nearby`, `enemy_on_six`, and conservative sustained-rear `tailing_risk` can come from either proximity or situation evidence. `ground_target_nearby` consumes `situation.ground_targets`. All outputs remain safe/generic, are gated below critical safety events, expose only safe Hosted UI awareness summaries, and validate through `tools/proximity_gate.py`.
+- Mode/domain boundaries are split by vehicle domain. Fixed-wing condition events (`stall_risk`, `high_aoa`, `over_g`, `low_alt_danger`, `overspeed`, `low_fuel`) require `domain == "air"` and reset silently in ground/naval/heli/unknown domains. Ground mode has its own non-critical cue set: `ground_laser_warning`, `ground_crew_loss`, `ground_ammo_empty`, and `ground_ammo_low`, driven by safe data-layer flags and documented in `docs/mode-domain-boundaries.md`.
 - `T-V2-Readiness: V2 readiness summary` is complete. `tools/v2_readiness.py` now folds the deterministic proximity/objective gate and optional local sample evidence into one safe report, separating V2 code/offline-gate completion from live-only evidence such as rear/six threat and 3000m objective samples.
 - `T-V2-Release-Matrix: V2 release capability matrix` is complete. `tools/v2_release_matrix.py` now renders each V2 capability as code/offline/live-evidence/real-output-policy rows, so `enemy_nearby`, `air_threat_nearby`, `enemy_on_six`, `tailing_risk`, and `ground_target_nearby` can be reviewed without confusing code completion with live verification.
 - `T-V2-Output-Policy: V2 real-output policy gate` is complete. `tools/v2_output_policy_gate.py` keeps live-evidence-gated V2 events (`enemy_on_six`, `tailing_risk`, `ground_target_nearby`) dry-run observable but suppresses real `push_message` by default until `v2_live_verified_real_output_enabled=true` is explicitly enabled.

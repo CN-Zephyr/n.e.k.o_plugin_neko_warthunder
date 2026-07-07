@@ -2,7 +2,7 @@
 
 > 面向接手者的当前计划。本文以当前独立插件仓库为准，不再沿用“等待数据层补字段”的旧前提。
 
-## 实现状态（2026-06-29）
+## 实现状态（2026-07-07）
 
 - M1 scaffold 已实现。
 - M2 Battle Awareness 理解/决策主链路已实现。
@@ -15,6 +15,7 @@
 - T-FreeText-Observe 已完成：运行态首次看到 `awards` / `combat.feed` / `hud_notices` / `hudmsg` / `hud_events` 时记录 `detector_suppressed/free_text_blocked` 安全摘要；同时新增 `free_text_activity` dry-run-only 候选，用于验证 Detector / Arbiter / Dispatcher 决策链。`dry_run=false` 仍以 `free_text_dry_run_only` 阻断真实输出，不保留 raw 文本到 observe，也不让 raw 文本进入 prompt。
 - T-Replay-Gate replay degrade release gate 已完成：`tools/replay_gate.py` 使用合成 `replay=true` 帧验证 Detector 不产出 candidate、Dispatcher 不构造 prompt、也不调用 `push_message`，并已纳入 `tools/preflight.py`。
 - T-Deferred-HUD-Gate deferred HUD notice gate 已完成：`tools/deferred_hud_gate.py` 验证 `powertrain_failure` 当前只记录为可观测的 deferred 技术通知，不生成 Detector candidate / Dispatcher prompt / `push_message`，且 raw HUD 文本不泄露。
+- 模式/领域边界已完成当前插件侧拆分：固定翼连续条件事件只允许 `domain == "air"` 触发；陆战新增 `ground_laser_warning`、`ground_crew_loss`、`ground_ammo_empty`、`ground_ammo_low` 四类正式候选，按陆战事实进入提示词，不复用固定翼失速/迎角/过载/低空/超速/低油逻辑，也不进入固定翼 `CRITICAL_RISK`。
 - V2 proximity / objective awareness 非真机依赖部分已完成：`proximity.events` / `situation` 已进入 BattleState，DiscreteDetector 按 id 去重生成 `enemy_nearby` / `air_threat_nearby` / `enemy_on_six`，短窗连续近距离后方事件会保守升级为 `tailing_risk`，并从 `situation.ground_targets` 生成低优先级 `ground_target_nearby`。Arbiter 按低优先级门控，Dispatcher 只输出 safe generic 文案，Hosted UI context / 面板显示安全态势摘要。
 - T-Proximity-Gate proximity / objective awareness gate 已完成：`tools/proximity_gate.py` 使用合成 proximity / situation DTO 验证 Detector / Arbiter / Dispatcher / `push_message.parts[].text` 的安全输出和门控关系，并已纳入 `tools/preflight.py` / `tools/release_readiness.py`。
 - T-V2-Readiness V2 收口汇总已完成：`tools/v2_readiness.py` 将 proximity/objective 离线门禁和可选本地样本证据合并成一个安全报告，明确区分 `v2_offline_gate_complete` 与 `v2_live_evidence_complete`，避免把真机样本缺口误写成代码未完成。
@@ -75,6 +76,7 @@
 - L2 BattleState：完成基础装配；已纳入 v1.6 DTO seam 和 V2 `proximity` / `situation` 字段。
 - L3 Scenario：完成；`replay: true` 已在 DetectorEngine 静默并 reset，且 T-Observe 会记录 `detector_suppressed/replay`，T-Live 会显示 `replay=suppressed(detector_suppressed/replay)` 与输出阻断状态；仍需真实 replay 样本验证。
 - L4 Detector：已实现主链路；`overspeed` 已在真机 dry_run 中验证 `overspeed_warn` / `overspeed_critical`；`low_fuel` 已在真机 dry_run 中验证 warning / critical；`low_alt_danger`、`stall_risk`、`overheat` 均已观察到 warning / critical 基础链路；`you_killed` / `you_died` 已消费 `combat.feed[].is_my_kill` / `combat.feed[].is_my_death`，按已播报 owned feed id 去重并允许同 id 后补 ownership 补触发，离线 replay 合成场景也已覆盖该形状；V2 `ProximityDetector` 已消费 data-layer `proximity.events` 并按 id 去重。
+- L4-Domain：完成当前空/陆分界。固定翼条件 detector 通过 domain predicate 只读空战帧；陆战 detector 读取 `laser_warning`、`crew_loss` / `crew_critical`、`ammo_empty`、`ammo_low`，输出 `ground_laser_warning` / `ground_crew_loss` / `ground_ammo_empty` / `ground_ammo_low`，非 `ground` 域静默 reset。海战和直升机仍只有保守通用/态势路径，没有独立安全事件矩阵。
 - L5 Arbiter：完成；`SPAWNING` 仍压制飞行安全误报，但已允许 owned combat kill 事件通过，避免真实击杀在出生 grace 内被误压。后续 M3 适配时要保持 cooldown、优先级、Scenario 门控语义不变。
 - L6 Dispatcher / instructions：完成基础输出；T-Safety 已在 prompt builder 前接入，prompt / `push_message.parts[].text` 不允许包含 unsafe raw。
 - T-FreeText-Gate：完成；`tools/free_text_gate.py` 是 hudmsg / combat.feed / awards 去桩前的离线发布门禁，preflight 默认执行。
