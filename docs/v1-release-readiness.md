@@ -1,10 +1,10 @@
-﻿# v1 Release Readiness
+# v1 Release Readiness
 
 > 状态：准备发布候选前的离线门禁说明。本文不替代真机 smoke，只回答“现在代码能不能进入最后一轮真机验收”。
 
 ## 当前结论
 
-- 离线逻辑基线：`442/442 passed`。
+- 离线逻辑基线：`444/444 passed`。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。
 - `tools/replay_gate.py` 已作为 replay 降级发布门禁，证明 `replay=true` 帧不会产生 Detector candidate、prompt 或真实 `push_message`。
 - `tools/ownership_replay_gate.py` 已作为第三方旧样本 ownership 门禁，证明手动 identity + 显式 opt-in 推断才能把旧 `combat.feed` 标为 owned kill/death，且干扰 combat feed 保持非我方。

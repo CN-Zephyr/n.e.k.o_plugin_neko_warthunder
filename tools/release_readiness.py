@@ -114,6 +114,12 @@ def build_checks(
             review_hint="powertrain_failure must stay observable but non-speech without raw HUD text",
         ),
         Check(
+            "mode/domain boundary gate",
+            plugin,
+            ["uv", "run", "python", "tools/domain_boundary_gate.py"],
+            review_hint="fixed-wing cues must stay air-only, while ground status cues must stay ground-only",
+        ),
+        Check(
             "proximity/objective awareness gate",
             plugin,
             ["uv", "run", "python", "tools/proximity_gate.py"],

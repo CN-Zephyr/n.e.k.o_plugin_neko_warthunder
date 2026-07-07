@@ -33,6 +33,7 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "replay degrade gate",
             "ownership replay gate",
             "deferred HUD notice gate",
+            "mode/domain boundary gate",
             "proximity/objective awareness gate",
             "V2 readiness summary",
             "V2 release matrix",
@@ -53,15 +54,16 @@ def test_release_readiness_plan_lists_offline_release_gates():
         assert checks[8].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
         assert checks[9].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
         assert checks[10].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
-        assert checks[11].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
-        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
-        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
-        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
-        assert checks[15].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
-        assert checks[16].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
-        assert checks[17].cmd == ["uv", "run", "python", "tools/replay.py"]
-        assert checks[18].cwd == host.resolve()
-        assert checks[18].name == "plugin check"
+        assert checks[11].cmd == ["uv", "run", "python", "tools/domain_boundary_gate.py"]
+        assert checks[12].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
+        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
+        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
+        assert checks[15].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
+        assert checks[16].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
+        assert checks[17].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
+        assert checks[18].cmd == ["uv", "run", "python", "tools/replay.py"]
+        assert checks[19].cwd == host.resolve()
+        assert checks[19].name == "plugin check"
         assert checks[-1].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py", "--offline-gates-passed"]
 
 
@@ -138,6 +140,7 @@ def test_release_readiness_plan_does_not_require_running_services():
             "replay degrade gate",
             "ownership replay gate",
             "deferred HUD notice gate",
+            "mode/domain boundary gate",
             "proximity/objective awareness gate",
             "V2 readiness summary",
             "V2 release matrix",
@@ -247,6 +250,7 @@ def test_release_readiness_cli_json_is_machine_readable():
     assert "output freshness gate" in [check["name"] for check in payload["checks"]]
     assert "replay degrade gate" in [check["name"] for check in payload["checks"]]
     assert "deferred HUD notice gate" in [check["name"] for check in payload["checks"]]
+    assert "mode/domain boundary gate" in [check["name"] for check in payload["checks"]]
     assert "proximity/objective awareness gate" in [check["name"] for check in payload["checks"]]
     assert "V2 readiness summary" in [check["name"] for check in payload["checks"]]
     assert "V2 release matrix" in [check["name"] for check in payload["checks"]]
@@ -297,6 +301,7 @@ def test_release_readiness_cli_text_names_next_step():
     assert "output freshness gate" in text
     assert "replay degrade gate" in text
     assert "deferred HUD notice gate" in text
+    assert "mode/domain boundary gate" in text
     assert "proximity/objective awareness gate" in text
     assert "V2 readiness summary" in text
     assert "V2 release matrix" in text

@@ -102,6 +102,12 @@ def build_checks(
             "powertrain_failure HUD notices must stay observable but non-speech without raw HUD text",
         ),
         Check(
+            "mode/domain boundary gate",
+            plugin,
+            ["uv", "run", "python", "tools/domain_boundary_gate.py"],
+            "fixed-wing cues must stay air-only, while ground status cues must stay ground-only",
+        ),
+        Check(
             "proximity/objective awareness gate",
             plugin,
             ["uv", "run", "python", "tools/proximity_gate.py"],
@@ -276,7 +282,7 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check should report 442/442 passed")
+    print("- baseline: logic self-check should report 444/444 passed")
     print("- vehicle profile id audit must keep Wiki gameId / runtime vehicle_type identity policy intact")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
     print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and plugin-dialogue constrained")
@@ -286,6 +292,7 @@ def print_plan(checks: Sequence[Check]) -> None:
     print("- replay degrade gate must pass before replay=true traffic can be considered safe")
     print("- ownership replay gate must keep third-party sample ownership explicit and interference unowned")
     print("- deferred HUD notice gate must pass before powertrain_failure strategy can change")
+    print("- mode/domain boundary gate must keep fixed-wing cues air-only and ground status cues ground-only")
     print("- proximity/objective awareness gate must pass before V2 proximity/objective prompts can be considered safe")
     print("- V2 readiness summary must separate offline-complete code from live-only sample evidence")
     print("- V2 release matrix must show which capabilities are dry_run-first until live evidence exists")
