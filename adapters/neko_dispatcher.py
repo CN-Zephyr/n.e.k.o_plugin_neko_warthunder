@@ -408,13 +408,24 @@ def _spawn_domain(event: BattleEvent) -> str:
 
 def _spawn_domain_hint(event: BattleEvent) -> str:
     domain = _spawn_domain(event)
-    if domain in {"air", "heli"}:
-        return "空战/飞行开局，可以围绕上机、升空、跟上、护住你来发挥"
+    if domain == "air":
+        return "当前模式：空战/飞行。角色：后座或僚机。可用语境：上机、升空、跟上、护住你"
+    if domain == "heli":
+        return (
+            "当前模式：直升机/旋翼机。角色：机组搭档。"
+            "可用语境：起飞、贴地、悬停、看高度、跟上；不要串到其他载具域"
+        )
     if domain == "ground":
-        return "陆战/载具开局，可以围绕上车、出击、跟上、看路来发挥"
+        return (
+            "当前模式：陆战/地面载具。角色：车组搭档。"
+            "可用语境：上车、出击、车组、装填、掩体、看路；不要串到其他载具域"
+        )
     if domain == "naval":
-        return "海战/舰艇开局，可以围绕上舰、出航、跟上、看海面来发挥"
-    return "未知载具域开局，只做泛化出场招呼和打气"
+        return (
+            "当前模式：海战/舰艇。角色：舰桥观察员。"
+            "可用语境：上舰、出航、舰桥、航向、海面；不要串到其他载具域"
+        )
+    return "当前模式：未知载具域。只做泛化出场招呼和打气，不猜载具类型"
 
 
 def _event_domain(event: BattleEvent) -> str:
@@ -422,13 +433,36 @@ def _event_domain(event: BattleEvent) -> str:
     return str(payload.get("domain") or "").lower()
 
 
-def _kill_domain_intent(domain: str) -> str:
-    if domain in {"air", "heli"}:
-        return "空战后座语气，可轻夸、吐槽或提醒留速"
+def _domain_prompt_contract(event: BattleEvent) -> str:
+    if event.event_id == "spawn":
+        return ""
+    domain = _event_domain(event)
+    if domain == "air":
+        return "当前模式：空战/飞行；角色：后座或僚机；"
+    if domain == "heli":
+        return "当前模式：直升机/旋翼机；角色：机组搭档；"
     if domain == "ground":
-        return "陆战车组语气，可轻夸、吐槽或提醒别贪；禁说击落坦克"
+        return "当前模式：陆战/地面载具；角色：车组搭档；只用本域语境；"
     if domain == "naval":
-        return "海战舰桥语气，可轻夸、提气或提醒航向；禁说击落"
+        return "当前模式：海战/舰艇；角色：舰桥观察员；只用本域语境；"
+    return ""
+
+
+def _metadata_domain_prompt_contract(event: BattleEvent) -> str:
+    if event.event_id == "spawn":
+        return _spawn_domain_hint(event)
+    return _domain_prompt_contract(event)
+
+
+def _kill_domain_intent(domain: str) -> str:
+    if domain == "air":
+        return "空战后座语气，可轻夸、吐槽或提醒留速"
+    if domain == "heli":
+        return "直升机机组语气，可轻夸、吐槽或提醒高度/脱离；不猜固定翼动作"
+    if domain == "ground":
+        return "陆战车组语气，可轻夸、吐槽或提醒别贪；只用地面载具战果语境"
+    if domain == "naval":
+        return "海战舰桥语气，可轻夸、提气或提醒航向；只用舰艇战果语境"
     return "泛化确认战果，不猜载具类型"
 
 
@@ -442,7 +476,9 @@ def _kill_style_hint(domain: str, kill_count: int, *, trade_death: bool) -> str:
         return f"{base} 陆战别固定说稳住/推进，可轻夸、调侃或提醒别贪。"
     if domain == "naval":
         return f"{base} 海战别固定说压住/航向，可轻夸、提气或收住。"
-    if domain in {"air", "heli"}:
+    if domain == "heli":
+        return f"{base} 直升机别固定说漂亮/节奏，可轻夸、调侃或提醒高度/脱离。"
+    if domain == "air":
         return f"{base} 空战别固定说漂亮/节奏，可轻夸、调侃或提醒留速。"
     return f"{base} 可不夸。"
 
@@ -796,10 +832,11 @@ class NekoDispatcher:
         intent = _event_intent(event)
         fact = _fact_line(event)
         recommended_reply = _recommended_reply_line(event)
+        domain_contract = _domain_prompt_contract(event)
         lines = []
         if fact:
             lines.append(f"[当前] {fact}")
-        lines.append(f"[要求] {intent}。{_prompt_reply_contract(event)}")
+        lines.append(f"[要求] {domain_contract}{intent}。{_prompt_reply_contract(event)}")
         if _plugin_reply_hint_enabled(self.plugin) and recommended_reply:
             lines[-1] = f"{lines[-1]} 建议台词：{recommended_reply}"
         lines.append(_copilot_role_boundary(event))
@@ -952,6 +989,8 @@ class NekoDispatcher:
             "event_id": event.event_id,
             "edge": event.edge,
             "level": event.level,
+            "domain": _event_domain(event),
+            "domain_prompt_contract": _metadata_domain_prompt_contract(event),
             "coalesce_key": BATTLE_EVENT_COALESCE_KEY,
             "replace_pending": True,
             "interrupt_battle_event": _host_interrupt_pending(event),

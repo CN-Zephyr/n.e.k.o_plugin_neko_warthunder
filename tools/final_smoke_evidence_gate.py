@@ -87,6 +87,15 @@ def evidence_template() -> dict[str, Any]:
                     "continued_across_chunks": True,
                 },
             },
+            {
+                "id": "mode_domain_boundary",
+                "status": "pending",
+                "observed": {
+                    "fixed_wing_cues_air_only": False,
+                    "ground_status_cues_ground_only": False,
+                    "ground_status_not_critical_risk": False,
+                },
+            },
         ],
     }
 
@@ -181,6 +190,7 @@ def run_rehearsal(output_dir: str | pathlib.Path) -> dict[str, Any]:
     monitor_path.write_text(json.dumps(monitor, ensure_ascii=False) + "\n", encoding="utf-8")
     transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     evidence = _apply_safe_transcript_payload(evidence_from_live_monitor(monitor_path), transcript)
+    evidence = _apply_mode_domain_boundary_confirmation(evidence)
     evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     gate = run_gate(evidence_path)
     result = {
@@ -294,6 +304,7 @@ def apply_operator_confirmations(
     critical_replaced_stale_warning: bool = False,
     user_chat_quiet_window: bool = False,
     short_tts_single_line: bool = False,
+    mode_domain_boundary: bool = False,
 ) -> dict[str, Any]:
     payload = _load_evidence_payload(path)
     if critical_replaced_stale_warning:
@@ -322,6 +333,20 @@ def apply_operator_confirmations(
             observed["continued_across_chunks"] = False
             item["observed"] = observed
             item["status"] = "pass"
+    if mode_domain_boundary:
+        payload = _apply_mode_domain_boundary_confirmation(payload)
+    return payload
+
+
+def _apply_mode_domain_boundary_confirmation(payload: dict[str, Any]) -> dict[str, Any]:
+    item = _focus_by_id(payload, "mode_domain_boundary")
+    if item is not None:
+        observed = _dict_value(item.get("observed"))
+        observed["fixed_wing_cues_air_only"] = True
+        observed["ground_status_cues_ground_only"] = True
+        observed["ground_status_not_critical_risk"] = True
+        item["observed"] = observed
+        item["status"] = "pass"
     return payload
 
 
@@ -542,6 +567,10 @@ def _validate_focus_observation(
         _expect_equal(failures, check_id, "live_reply_contract", observed.get("live_reply_contract"), _SHORT_TTS_CONTRACT)
         _expect_equal(failures, check_id, "max_reply_chars", observed.get("max_reply_chars"), _MAX_REPLY_CHARS)
         _expect_equal(failures, check_id, "continued_across_chunks", observed.get("continued_across_chunks"), False)
+    elif check_id == "mode_domain_boundary":
+        _expect_equal(failures, check_id, "fixed_wing_cues_air_only", observed.get("fixed_wing_cues_air_only"), True)
+        _expect_equal(failures, check_id, "ground_status_cues_ground_only", observed.get("ground_status_cues_ground_only"), True)
+        _expect_equal(failures, check_id, "ground_status_not_critical_risk", observed.get("ground_status_not_critical_risk"), True)
 
 
 def _expect_equal(
@@ -662,6 +691,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Operator confirms spoken battle output was one short line and did not continue across chunks.",
     )
+    parser.add_argument(
+        "--confirm-mode-domain-boundary",
+        action="store_true",
+        help="Operator confirms air-only and ground-only mode/domain boundaries held during final smoke.",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON result.")
     parser.add_argument("--output", help="Optional file path to save the rendered output.")
     args = parser.parse_args(argv)
@@ -711,6 +745,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ValueError as exc:
                 parser.error(str(exc))
+        if args.confirm_mode_domain_boundary:
+            payload = _apply_mode_domain_boundary_confirmation(payload)
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         if args.output:
             _write_output(args.output, text)
@@ -723,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = apply_safe_transcript_observations(args.evidence, args.safe_transcript)
         except ValueError as exc:
             parser.error(str(exc))
+        if args.confirm_mode_domain_boundary:
+            payload = _apply_mode_domain_boundary_confirmation(payload)
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         _write_output(args.output or args.evidence, text)
         print(text, end="")
@@ -734,6 +772,7 @@ def main(argv: list[str] | None = None) -> int:
             args.confirm_critical_replaced_stale_warning
             or args.confirm_user_chat_quiet_window
             or args.confirm_short_tts_single_line
+            or args.confirm_mode_domain_boundary
         ):
             parser.error("--update requires at least one --confirm-* flag")
         payload = apply_operator_confirmations(
@@ -741,6 +780,7 @@ def main(argv: list[str] | None = None) -> int:
             critical_replaced_stale_warning=args.confirm_critical_replaced_stale_warning,
             user_chat_quiet_window=args.confirm_user_chat_quiet_window,
             short_tts_single_line=args.confirm_short_tts_single_line,
+            mode_domain_boundary=args.confirm_mode_domain_boundary,
         )
         text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         _write_output(args.output or args.evidence, text)

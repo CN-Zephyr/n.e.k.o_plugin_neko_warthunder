@@ -73,6 +73,18 @@ RUNTIME_FOCUS_CHECKS: tuple[dict[str, Any], ...] = (
         ],
         "pass": "spoken battle replies are one short line and do not continue across chunks",
     },
+    {
+        "id": "mode_domain_boundary",
+        "priority": "P1",
+        "action": "verify_mode_domain_boundary",
+        "observe": [
+            "telemetry.domain",
+            "observe.last_event.event_id",
+            "fixed-wing safety cues in air domain",
+            "ground status cues in ground domain",
+        ],
+        "pass": "fixed-wing safety cues stay air-only, while ground status cues stay ground-only and outside fixed-wing critical risk",
+    },
 )
 
 
@@ -108,9 +120,9 @@ def build_packet(
             "safe_transcript_template": "uv run python tools\\final_smoke_evidence_gate.py --safe-transcript-template --output local_test_logs\\safe_transcript_metrics.json",
             "safe_transcript_record": "uv run python tools\\final_smoke_evidence_gate.py --record-safe-transcript --reply-chars <count> --reply-lines 1 --confirm-critical-replaced-stale-warning --confirm-user-chat-quiet-window --output local_test_logs\\safe_transcript_metrics.json",
             "evidence_from_monitor": "uv run python tools\\final_smoke_evidence_gate.py --from-live-monitor local_test_logs\\live_monitor_final.json --output local_test_logs\\final_smoke_evidence.json",
-            "evidence_from_monitor_and_transcript": "uv run python tools\\final_smoke_evidence_gate.py --from-live-monitor local_test_logs\\live_monitor_final.json --safe-transcript local_test_logs\\safe_transcript_metrics.json --output local_test_logs\\final_smoke_evidence.json",
+            "evidence_from_monitor_and_transcript": "uv run python tools\\final_smoke_evidence_gate.py --from-live-monitor local_test_logs\\live_monitor_final.json --safe-transcript local_test_logs\\safe_transcript_metrics.json --confirm-mode-domain-boundary --output local_test_logs\\final_smoke_evidence.json",
             "evidence_from_transcript": "uv run python tools\\final_smoke_evidence_gate.py local_test_logs\\final_smoke_evidence.json --safe-transcript local_test_logs\\safe_transcript_metrics.json",
-            "evidence_confirm": "uv run python tools\\final_smoke_evidence_gate.py local_test_logs\\final_smoke_evidence.json --update --confirm-critical-replaced-stale-warning --confirm-user-chat-quiet-window --confirm-short-tts-single-line",
+            "evidence_confirm": "uv run python tools\\final_smoke_evidence_gate.py local_test_logs\\final_smoke_evidence.json --update --confirm-critical-replaced-stale-warning --confirm-user-chat-quiet-window --confirm-short-tts-single-line --confirm-mode-domain-boundary",
             "evidence_gate": "uv run python tools\\final_smoke_evidence_gate.py local_test_logs\\final_smoke_evidence.json",
         },
         "handoff": handoff,

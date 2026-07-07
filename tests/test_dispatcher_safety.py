@@ -122,6 +122,8 @@ def test_ground_vehicle_prompts_use_ground_facts_without_air_wording():
     for event in events:
         prompt = dispatcher.build_prompt(event)
         assert "{MASTER_NAME}" in prompt
+        assert "当前模式：陆战/地面载具" in prompt
+        assert "角色：车组搭档" in prompt
         assert "陆战" in prompt or "一级弹药" in prompt
         assert "拉起" not in prompt
         assert "失速" not in prompt
@@ -138,6 +140,8 @@ def test_push_message_parts_text_excludes_unsafe_raw_name():
     assert len(plugin.calls) == 1
     call = plugin.calls[0]
     assert call["metadata"]["event_id"] == "you_killed"
+    assert call["metadata"]["domain"] == ""
+    assert call["metadata"]["domain_prompt_contract"] == ""
     assert call["parts"][0]["type"] == "text"
     assert UNSAFE_NAME not in call["parts"][0]["text"]
     assert "{MASTER_NAME}" in call["parts"][0]["text"]
@@ -286,9 +290,12 @@ def test_ground_kill_prompt_does_not_say_air_kill_wording():
     )
 
     assert "击毁" in prompt
+    assert "当前模式：陆战/地面载具" in prompt
+    assert "角色：车组搭档" in prompt
     assert "陆战车组语气" in prompt
-    assert "禁说击落坦克" in prompt
-    assert "击落敌方空中目标" not in prompt
+    assert "只用地面载具战果语境" in prompt
+    assert "击落" not in prompt
+    assert "空中目标" not in prompt
 
 
 def test_ground_kill_prompt_allows_non_template_praise_range():
@@ -326,14 +333,18 @@ def test_naval_kill_prompt_uses_ship_wording_instead_of_air_wording():
 
     assert "击毁敌方舰艇" in prompt
     assert "海战舰桥语气" in prompt
-    assert "击落敌方空中目标" not in prompt
+    assert "只用舰艇战果语境" in prompt
+    assert "击落" not in prompt
+    assert "空中目标" not in prompt
 
 
 def test_persistent_context_is_not_air_battle_only():
     assert "War Thunder）空战" not in WT_CONTEXT_INSTRUCTIONS
-    assert "空战时像后座/僚机" in WT_CONTEXT_INSTRUCTIONS
-    assert "陆战时像车组搭档" in WT_CONTEXT_INSTRUCTIONS
-    assert "海战时像舰桥观察员" in WT_CONTEXT_INSTRUCTIONS
+    assert "每条事件若写了\"当前模式\"" in WT_CONTEXT_INSTRUCTIONS
+    assert "空战像后座/僚机" in WT_CONTEXT_INSTRUCTIONS
+    assert "直升机像机组搭档" in WT_CONTEXT_INSTRUCTIONS
+    assert "陆战像车组搭档" in WT_CONTEXT_INSTRUCTIONS
+    assert "海战像舰桥观察员" in WT_CONTEXT_INSTRUCTIONS
 
 
 def test_proximity_prompt_uses_safe_generic_fact_without_raw_text():
@@ -380,7 +391,9 @@ def test_spawn_prompt_forbids_invented_target_or_radar_cues():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn", payload={"domain": "air"}))
 
     assert "短促开局招呼" in prompt
-    assert "空战/飞行开局，可以围绕上机、升空、跟上、护住你来发挥" in prompt
+    assert "当前模式：空战/飞行" in prompt
+    assert "角色：后座或僚机" in prompt
+    assert "可用语境：上机、升空、跟上、护住你" in prompt
     assert "可活泼即兴" in prompt
     assert "建议台词：" not in prompt
     assert "别报敌情/方位/锁定/击杀/威胁" in prompt
@@ -391,17 +404,34 @@ def test_spawn_prompt_forbids_invented_target_or_radar_cues():
 def test_spawn_prompt_uses_ground_opening_terms():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn", payload={"domain": "ground"}))
 
-    assert "陆战/载具开局，可以围绕上车、出击、跟上、看路来发挥" in prompt
+    assert "当前模式：陆战/地面载具" in prompt
+    assert "角色：车组搭档" in prompt
+    assert "可用语境：上车、出击、车组、装填、掩体、看路" in prompt
     assert "建议台词：" not in prompt
-    assert "空战/飞行开局" not in prompt
+    for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
+        assert air_term not in prompt
+
+
+def test_spawn_prompt_uses_helicopter_opening_terms():
+    prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn", payload={"domain": "heli"}))
+
+    assert "当前模式：直升机/旋翼机" in prompt
+    assert "角色：机组搭档" in prompt
+    assert "可用语境：起飞、贴地、悬停、看高度、跟上" in prompt
+    assert "建议台词：" not in prompt
+    for fixed_wing_or_ground_term in ("后座", "僚机", "机翼", "拉杆", "车组", "装填", "掩体", "舰桥"):
+        assert fixed_wing_or_ground_term not in prompt
 
 
 def test_spawn_prompt_uses_naval_opening_terms():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn", payload={"domain": "naval"}))
 
-    assert "海战/舰艇开局，可以围绕上舰、出航、跟上、看海面来发挥" in prompt
+    assert "当前模式：海战/舰艇" in prompt
+    assert "角色：舰桥观察员" in prompt
+    assert "可用语境：上舰、出航、舰桥、航向、海面" in prompt
     assert "建议台词：" not in prompt
-    assert "空战/飞行开局" not in prompt
+    for non_naval_term in ("空战", "飞行", "升空", "后座", "云霄", "坦克", "装填手", "履带"):
+        assert non_naval_term not in prompt
 
 
 def test_spawn_push_allows_host_polish_with_lively_bounded_prompt():
@@ -413,8 +443,13 @@ def test_spawn_push_allows_host_polish_with_lively_bounded_prompt():
     call = plugin.calls[0]
     assert call["visibility"] == []
     assert call["ai_behavior"] == "respond"
+    assert call["metadata"]["domain"] == "ground"
+    assert "当前模式：陆战/地面载具" in call["metadata"]["domain_prompt_contract"]
     assert "{MASTER_NAME}" in call["parts"][0]["text"]
-    assert "陆战/载具开局，可以围绕上车、出击、跟上、看路来发挥" in call["parts"][0]["text"]
+    assert "当前模式：陆战/地面载具" in call["parts"][0]["text"]
+    assert "角色：车组搭档" in call["parts"][0]["text"]
+    for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
+        assert air_term not in call["parts"][0]["text"]
     assert "可活泼即兴" in call["parts"][0]["text"]
     assert "别报敌情/方位/锁定/击杀/威胁" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is False

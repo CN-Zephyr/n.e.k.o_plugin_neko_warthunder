@@ -118,7 +118,7 @@ STALE_BASELINES = [
 ]
 
 REQUIRED_SNIPPETS = [
-    "444/444 passed",
+    "445/445 passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -148,6 +148,8 @@ REQUIRED_SNIPPETS = [
     "--confirm-critical-replaced-stale-warning",
     "--confirm-user-chat-quiet-window",
     "--confirm-short-tts-single-line",
+    "--confirm-mode-domain-boundary",
+    "mode_domain_boundary",
     "JSONL",
     "live_monitor_final.json",
     "safe_transcript_metrics.json",

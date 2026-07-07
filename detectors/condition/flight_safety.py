@@ -28,6 +28,7 @@ def _is_ground(s: BattleState) -> bool:
 def _pl_stall(s: BattleState) -> dict[str, Any]:
     return _drop_none(
         {
+            "domain": s.domain,
             "ias_kmh": s.ias_kmh,
             "aoa_deg": s.aoa_deg,
             "altitude_m": s.altitude_m,
@@ -37,25 +38,26 @@ def _pl_stall(s: BattleState) -> dict[str, Any]:
 
 
 def _pl_high_aoa(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"aoa_deg": s.aoa_deg, "ias_kmh": s.ias_kmh, "g_now": s.g_now})
+    return _drop_none({"domain": s.domain, "aoa_deg": s.aoa_deg, "ias_kmh": s.ias_kmh, "g_now": s.g_now})
 
 
 def _pl_over_g(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"g_now": s.g_now, "ias_kmh": s.ias_kmh, "aoa_deg": s.aoa_deg})
+    return _drop_none({"domain": s.domain, "g_now": s.g_now, "ias_kmh": s.ias_kmh, "aoa_deg": s.aoa_deg})
 
 
 def _pl_overheat(s: BattleState) -> dict[str, Any]:
     temp = next((t for t in (s.water_temp_c, s.head_temp_c, s.turbine_temp_c, s.oil_temp_c) if t is not None), None)
-    return _drop_none({"temp_c": temp})
+    return _drop_none({"domain": s.domain, "temp_c": temp})
 
 
 def _pl_low_fuel(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"fuel_fraction": s.fuel_fraction})
+    return _drop_none({"domain": s.domain, "fuel_fraction": s.fuel_fraction})
 
 
 def _pl_low_alt(s: BattleState) -> dict[str, Any]:
     return _drop_none(
         {
+            "domain": s.domain,
             "altitude_m": s.altitude_m,
             "radio_altitude_m": s.radio_altitude_m,
             "climb_ms": s.climb_ms,
@@ -65,7 +67,7 @@ def _pl_low_alt(s: BattleState) -> dict[str, Any]:
 
 
 def _pl_overspeed(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"ias_kmh": s.ias_kmh, "mach": s.mach})
+    return _drop_none({"domain": s.domain, "ias_kmh": s.ias_kmh, "mach": s.mach})
 
 
 def _pl_ground_crew(s: BattleState) -> dict[str, Any]:

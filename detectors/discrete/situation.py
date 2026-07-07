@@ -82,9 +82,11 @@ class AirSituationDetector(DiscreteDetector):
             return None
         self._last_key = key
 
+        payload = _air_payload(nearest)
+        payload["domain"] = cur.domain
         return BattleEvent(
             event_id,
-            payload=_air_payload(nearest),
+            payload=payload,
             ts=cur.timestamp or 0.0,
             level="warning",
         )
@@ -125,9 +127,11 @@ class GroundTargetDetector(DiscreteDetector):
             return None
         self._last_key = key
 
+        payload = _payload(nearest)
+        payload["domain"] = cur.domain
         return BattleEvent(
             "ground_target_nearby",
-            payload=_payload(nearest),
+            payload=payload,
             ts=cur.timestamp or 0.0,
             level="warning",
         )

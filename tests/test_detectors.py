@@ -720,6 +720,7 @@ def test_air_situation_detector_uses_continuous_enemy_geometry_for_air_threats()
     assert ev.event_id == "air_threat_nearby"
     assert ev.payload == {
         "source": "situation",
+        "domain": "air",
         "target_type": "aircraft",
         "category": "fighter",
         "is_air": True,
@@ -828,6 +829,7 @@ def test_ground_target_detector_emits_safe_objective_awareness_once():
     assert ev is not None
     assert ev.event_id == "ground_target_nearby"
     assert ev.payload == {
+        "domain": "air",
         "target_kind": "bombing_point",
         "grid": "B4",
         "distance_m": 2400.0,

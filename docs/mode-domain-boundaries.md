@@ -1,6 +1,6 @@
 # 模式领域边界
 
-更新时间：2026-07-07
+更新时间：2026-07-08
 
 ## 目标
 
@@ -49,6 +49,30 @@
 - `ground_ammo_low`：来自 `ammo_low`，提示一级弹药偏少。
 
 这些事件只允许 `domain == "ground"` 触发，且不进入固定翼 `CRITICAL_RISK` 集合。它们的提示词只能描述安全事实，不编敌情、锁定结果、击毁结果、载具损伤或玩家名。
+
+## 提示词与输出边界
+
+Detector 的 domain gate 只是第一层保险。所有会进入猫娘模型的战雷事件也必须把模式边界带到输出层：
+
+- 事件 payload 应尽量保留 `domain`，不要在 Detector / Arbiter 中丢失。
+- `NekoDispatcher.build_prompt()` 对带 `domain` 的事件写入 `当前模式` 合同。
+- `push_message.metadata` 同步携带 `domain` 与 `domain_prompt_contract`，便于 host / live monitor / final smoke evidence 复核。
+- 常驻 `WT_CONTEXT_INSTRUCTIONS` 明确：如果事件写了"当前模式"，模型必须只按该模式说话；没有写模式时不猜载具类型。
+
+当前模式话术边界：
+
+- `air`：空战 / 飞行；角色是后座或僚机；可用上机、升空、跟上、护住你等固定翼语境。
+- `heli`：直升机 / 旋翼机；角色是机组搭档；可用起飞、贴地、悬停、看高度、跟上；不猜固定翼动作。
+- `ground`：陆战 / 地面载具；角色是车组搭档；可用上车、出击、车组、装填、掩体、看路；不得串到升空、后座、云霄、机翼、拉杆等固定翼语境。
+- `naval`：海战 / 舰艇；角色是舰桥观察员；可用上舰、出航、舰桥、航向、海面；不得串到空战或陆战语境。
+- unknown：只做泛化出场招呼和打气，不猜载具类型。
+
+这层边界解决的是“事件已经分域，但模型嘴上串模式”的问题。以后新增事件时，必须同时检查：
+
+- 事件是否携带 `domain`。
+- prompt 是否有对应 `当前模式` 合同。
+- metadata 是否能反查同一份 domain contract。
+- `tests/test_dispatcher_safety.py` 是否覆盖错误域词汇不会出现在目标模式 prompt 中。
 
 ## 已知未完成
 

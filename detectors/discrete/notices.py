@@ -63,9 +63,12 @@ class HudNoticeDetector(DiscreteDetector):
         code = str(newest.get("code") or "")
         severity = str(newest.get("level") or newest.get("severity") or "warning").lower()
         level = "critical" if severity == "critical" else "warning"
+        payload = {"source": "hud_notice", "notice_code": code}
+        if cur.domain and cur.domain != "unknown":
+            payload["domain"] = cur.domain
         return BattleEvent(
             "overheat",
-            payload={"source": "hud_notice", "notice_code": code},
+            payload=payload,
             ts=cur.timestamp or 0.0,
             level=level,
         )

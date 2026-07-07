@@ -123,7 +123,7 @@ class BattleEndDetector(DiscreteDetector):
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
         if self._ended(cur) and not self._ended(prev):
-            payload: dict[str, Any] = {"result": cur.mission_status}
+            payload: dict[str, Any] = {"result": cur.mission_status, "domain": cur.domain}
             my = cur.combat.get("my") if isinstance(cur.combat, dict) else None
             if isinstance(my, dict):
                 payload["result"] = f"{cur.mission_status}, K{my.get('kills', 0)}/D{my.get('deaths', 0)}"

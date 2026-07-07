@@ -54,6 +54,15 @@ def _passing_evidence() -> dict:
                     "continued_across_chunks": False,
                 },
             },
+            {
+                "id": "mode_domain_boundary",
+                "status": "pass",
+                "observed": {
+                    "fixed_wing_cues_air_only": True,
+                    "ground_status_cues_ground_only": True,
+                    "ground_status_not_critical_risk": True,
+                },
+            },
         ],
     }
 
@@ -73,6 +82,7 @@ def test_final_smoke_evidence_gate_passes_complete_evidence(tmp_path):
         "critical_replaces_stale_warning",
         "user_chat_quiet_window",
         "short_tts_contract",
+        "mode_domain_boundary",
     ]
     assert result["policy"]["raw_chat_hud_combat_award_text_forbidden"] is True
 
@@ -81,7 +91,9 @@ def test_final_smoke_evidence_gate_fails_missing_focus_check(tmp_path):
     from neko_warthunder.tools import final_smoke_evidence_gate
 
     payload = _passing_evidence()
-    payload["runtime_focus_checks"] = payload["runtime_focus_checks"][:-1]
+    payload["runtime_focus_checks"] = [
+        item for item in payload["runtime_focus_checks"] if item["id"] != "short_tts_contract"
+    ]
     evidence = tmp_path / "evidence.json"
     evidence.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -361,6 +373,7 @@ def test_final_smoke_evidence_gate_cli_combines_monitor_and_safe_transcript(tmp_
                 str(monitor_path),
                 "--safe-transcript",
                 str(transcript),
+                "--confirm-mode-domain-boundary",
                 "--output",
                 str(evidence),
             ]
@@ -375,6 +388,7 @@ def test_final_smoke_evidence_gate_cli_combines_monitor_and_safe_transcript(tmp_
         "critical_replaces_stale_warning": "pass",
         "user_chat_quiet_window": "pass",
         "short_tts_contract": "pass",
+        "mode_domain_boundary": "pass",
     }
     assert written["safe_transcript_observations"]["short_single_line_contract_observed"] is True
     assert final_smoke_evidence_gate.run_gate(evidence)["status"] == "pass"
@@ -466,6 +480,7 @@ def test_final_smoke_evidence_gate_update_applies_operator_confirmations(tmp_pat
                 "--confirm-critical-replaced-stale-warning",
                 "--confirm-user-chat-quiet-window",
                 "--confirm-short-tts-single-line",
+                "--confirm-mode-domain-boundary",
             ]
         )
 
@@ -485,6 +500,12 @@ def test_final_smoke_evidence_gate_update_applies_operator_confirmations(tmp_pat
     }
     assert checks["short_tts_contract"]["status"] == "pass"
     assert checks["short_tts_contract"]["observed"]["continued_across_chunks"] is False
+    assert checks["mode_domain_boundary"]["status"] == "pass"
+    assert checks["mode_domain_boundary"]["observed"] == {
+        "fixed_wing_cues_air_only": True,
+        "ground_status_cues_ground_only": True,
+        "ground_status_not_critical_risk": True,
+    }
     assert final_smoke_evidence_gate.run_gate(evidence)["status"] == "pass"
 
 
@@ -492,7 +513,7 @@ def test_final_smoke_evidence_gate_merges_safe_transcript_metrics(tmp_path):
     from neko_warthunder.tools import final_smoke_evidence_gate
 
     payload = _passing_evidence()
-    for index in [1, 2, 3]:
+    for index in [1, 2, 3, 4]:
         payload["runtime_focus_checks"][index]["status"] = "pending"
     payload["runtime_focus_checks"][1]["observed"] = {
         "critical_replaced_stale_warning": False,
@@ -539,7 +560,9 @@ def test_final_smoke_evidence_gate_merges_safe_transcript_metrics(tmp_path):
     out = io.StringIO()
 
     with contextlib.redirect_stdout(out):
-        rc = final_smoke_evidence_gate.main([str(evidence), "--safe-transcript", str(transcript)])
+        rc = final_smoke_evidence_gate.main(
+            [str(evidence), "--safe-transcript", str(transcript), "--confirm-mode-domain-boundary"]
+        )
 
     updated = json.loads(evidence.read_text(encoding="utf-8"))
     checks = {item["id"]: item for item in updated["runtime_focus_checks"]}
@@ -548,6 +571,7 @@ def test_final_smoke_evidence_gate_merges_safe_transcript_metrics(tmp_path):
     assert checks["critical_replaces_stale_warning"]["status"] == "pass"
     assert checks["user_chat_quiet_window"]["status"] == "pass"
     assert checks["short_tts_contract"]["status"] == "pass"
+    assert checks["mode_domain_boundary"]["status"] == "pass"
     assert updated["safe_transcript_observations"] == {
         "source": "safe_transcript_metrics",
         "samples": 2,

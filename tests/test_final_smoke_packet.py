@@ -87,6 +87,7 @@ def test_final_smoke_packet_without_sample_requires_offline_gate_by_default():
     assert "--safe-transcript local_test_logs\\safe_transcript_metrics.json" in payload["commands"][
         "evidence_from_monitor_and_transcript"
     ]
+    assert "--confirm-mode-domain-boundary" in payload["commands"]["evidence_from_monitor_and_transcript"]
     assert payload["commands"]["evidence_from_transcript"].endswith(
         "--safe-transcript local_test_logs\\safe_transcript_metrics.json"
     )
@@ -94,12 +95,14 @@ def test_final_smoke_packet_without_sample_requires_offline_gate_by_default():
         "uv run python tools\\final_smoke_evidence_gate.py local_test_logs\\final_smoke_evidence.json --update"
     )
     assert "--confirm-user-chat-quiet-window" in payload["commands"]["evidence_confirm"]
+    assert "--confirm-mode-domain-boundary" in payload["commands"]["evidence_confirm"]
     assert payload["commands"]["evidence_gate"].endswith("local_test_logs\\final_smoke_evidence.json")
     assert [item["id"] for item in payload["runtime_focus_checks"]] == [
         "real_output_freshness",
         "critical_replaces_stale_warning",
         "user_chat_quiet_window",
         "short_tts_contract",
+        "mode_domain_boundary",
     ]
     assert all(item["priority"] == "P1" for item in payload["runtime_focus_checks"])
     assert payload["safety_boundary"] == {
@@ -145,6 +148,8 @@ def test_final_smoke_packet_with_sample_lists_v2_and_free_text_actions_without_r
     assert "death or critical output replaces older warning cues" in text
     assert "P1 user_chat_quiet_window" in text
     assert "battle_reply_contract=short_tts_line" in json.dumps(payload, ensure_ascii=False)
+    assert "P1 mode_domain_boundary" in text
+    assert "fixed-wing safety cues stay air-only" in text
     assert "| enemy_nearby | needs_live_sample | 0/0 | safe_generic_after_final_smoke | generic_enemy_proximity_events |" in text
     assert "| enemy_on_six | needs_live_sample | 1/0 | dry_run_until_live_evidence | enemy_on_six_trigger |" in text
     assert "| tailing_risk | needs_live_sample | 0/0 | dry_run_until_live_evidence | rear_close_threat_candidates |" in text
@@ -182,7 +187,9 @@ def test_final_smoke_packet_cli_json_is_machine_readable():
     assert "--record-safe-transcript" in payload["commands"]["safe_transcript_record"]
     assert "--from-live-monitor" in payload["commands"]["evidence_from_monitor_and_transcript"]
     assert "--safe-transcript" in payload["commands"]["evidence_from_monitor_and_transcript"]
+    assert "--confirm-mode-domain-boundary" in payload["commands"]["evidence_from_monitor_and_transcript"]
     assert "--safe-transcript" in payload["commands"]["evidence_from_transcript"]
     assert "--confirm-critical-replaced-stale-warning" in payload["commands"]["evidence_confirm"]
+    assert "--confirm-mode-domain-boundary" in payload["commands"]["evidence_confirm"]
     assert payload["commands"]["evidence_gate"].startswith("uv run python tools\\final_smoke_evidence_gate.py")
     assert payload["runtime_focus_checks"][0]["id"] == "real_output_freshness"
