@@ -23,6 +23,8 @@
 | `overheat` | flags `engine_overheat`/`engine_overheat_critical`（OR `oil_overheat*`）；或 `hud_notices.feed[].code=engine_overheat/oil_overheat` | flags 走边沿+debounce；hud_notices 按 id 去重（不抢占） | temp_c；或 safe notice code |
 | `low_fuel` | flags `fuel_low`/`fuel_critical` | 同上（仅 IN_FLIGHT） | fuel_fraction, fuel_remaining_sec |
 | `low_alt_danger` | flags `altitude_low`/`altitude_critical` + `radio_altitude_m`（AGL，优先） | 同上；`altitude_m` 仅作为 MSL/海拔上下文，不作为优先离地判断 | radio_altitude_m, altitude_m, climb_ms |
+| `ground_gunner_disabled` | flag `gunner_disabled` | 陆战域下边沿+debounce；只消费数据层明确岗位失能事实 | gunner_state, domain |
+| `ground_driver_disabled` | flag `driver_disabled` | 陆战域下边沿+debounce；只消费数据层明确岗位失能事实 | driver_state, domain |
 | `spawn` | `state` not_in_battle→in_battle / 新 `vehicle_type` | 边沿一次 | vehicle_type |
 | `you_died` | `combat.feed[].is_my_death == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；不回退到 `vehicle_valid` 死亡播报 | cause, killer_name, killer_vehicle |
 | `you_killed` | `combat.feed[].is_my_kill == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；多杀合并 | victim, victim_vehicle |

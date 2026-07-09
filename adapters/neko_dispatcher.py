@@ -38,6 +38,8 @@ FLEX_STYLE_EVENTS = frozenset(
         "low_fuel",
         "ground_laser_warning",
         "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
         "ground_ammo_empty",
         "ground_ammo_low",
         "enemy_nearby",
@@ -56,6 +58,8 @@ PLUGIN_OWNED_DIRECT_EVENTS = frozenset(
         "low_fuel",
         "ground_laser_warning",
         "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
         "ground_ammo_empty",
         "ground_ammo_low",
         "ground_target_nearby",
@@ -79,6 +83,8 @@ REPEAT_COLLAPSE_EVENT_IDS = frozenset(
         "low_fuel",
         "ground_laser_warning",
         "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
         "ground_ammo_empty",
         "ground_ammo_low",
         "ground_target_nearby",
@@ -105,6 +111,8 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "overheat": 6.0,
     "ground_laser_warning": 4.0,
     "ground_crew_loss": 6.0,
+    "ground_gunner_disabled": 6.0,
+    "ground_driver_disabled": 6.0,
     "ground_ammo_empty": 8.0,
     "ground_ammo_low": 8.0,
     # Kill/death/battle-end can tolerate a little more host latency, but still
@@ -128,6 +136,8 @@ _INTENT: dict[str, str] = {
     "low_fuel": "油不多了，提醒 {MASTER_NAME} 留油返航",
     "ground_laser_warning": "陆战激光告警，提醒 {MASTER_NAME} 可能被测距或锁定，短促说一句找掩体或动一下",
     "ground_crew_loss": "陆战乘员损失，提醒 {MASTER_NAME} 车组受损，短促说一句收住、找掩体或别贪",
+    "ground_gunner_disabled": "陆战炮手失能，提醒 {MASTER_NAME} 暂时别硬拼输出，短促说一句先缩回去",
+    "ground_driver_disabled": "陆战驾驶员失能，提醒 {MASTER_NAME} 机动受限，短促说一句先找掩体",
     "ground_ammo_empty": "陆战一级弹药打空，提醒 {MASTER_NAME} 装填会变慢，短促说一句别硬拼",
     "ground_ammo_low": "陆战一级弹药偏少，提醒 {MASTER_NAME} 后续装填会慢，短促说一句规划节奏",
     "ground_target_nearby": "报任务目标点接近，提醒 {MASTER_NAME} 看方位",
@@ -371,7 +381,14 @@ def _reply_style_contract(event: BattleEvent) -> str:
         return "Style: one short Chinese line; situational cue; no takeover."
     if event.event_id == "ground_target_nearby":
         return "Style: one short Chinese line; target/nav cue only; no takeover."
-    if event.event_id in {"ground_laser_warning", "ground_crew_loss", "ground_ammo_empty", "ground_ammo_low"}:
+    if event.event_id in {
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
+        "ground_ammo_empty",
+        "ground_ammo_low",
+    }:
         return "Style: one short Chinese line; ground crew cue; no takeover."
     if event.event_id == "overheat":
         return "Style: one short Chinese line; situational cue; no repeated wording."
@@ -438,9 +455,9 @@ def _domain_prompt_contract(event: BattleEvent) -> str:
         return ""
     domain = _event_domain(event)
     if domain == "air":
-        return "当前模式：空战/飞行；角色：后座或僚机；"
+        return "当前模式：空战/飞行；角色：后座或僚机；只用本域语境；"
     if domain == "heli":
-        return "当前模式：直升机/旋翼机；角色：机组搭档；"
+        return "当前模式：直升机/旋翼机；角色：机组搭档；只用本域语境；"
     if domain == "ground":
         return "当前模式：陆战/地面载具；角色：车组搭档；只用本域语境；"
     if domain == "naval":
@@ -503,6 +520,10 @@ def _recommended_reply_line(event: BattleEvent) -> str:
         return "被照了，找掩体！"
     if event.event_id == "ground_crew_loss":
         return "车组受损，先收一下！"
+    if event.event_id == "ground_gunner_disabled":
+        return "炮手没了，先别硬拼！"
+    if event.event_id == "ground_driver_disabled":
+        return "驾驶没了，找掩体！"
     if event.event_id == "ground_ammo_empty":
         return "一级弹药空了，别硬拼！"
     if event.event_id == "ground_ammo_low":
@@ -528,6 +549,8 @@ def _copilot_role_boundary(event: BattleEvent) -> str:
         "ground_target_nearby",
         "ground_laser_warning",
         "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
         "ground_ammo_empty",
         "ground_ammo_low",
     }:
@@ -577,6 +600,29 @@ def _prompt_reply_contract(event: BattleEvent) -> str:
     return "一句短话；不反问、不续聊。"
 
 
+def _output_shape_contract(event: BattleEvent) -> str:
+    if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
+        tone = "紧急事件优先动作词"
+    elif event.event_id in {"you_killed", "spawn", "battle_end"}:
+        tone = "轻松事件可以有一点情绪"
+    else:
+        tone = "提醒事件自然像同伴开口"
+    return f"输出：一句中文台词，28字内；{tone}；不复述规则/字段，不加前缀或引号。"
+
+
+def _domain_vocab_contract(event: BattleEvent) -> str:
+    domain = _spawn_domain(event) if event.event_id == "spawn" else _event_domain(event)
+    if domain == "air":
+        return "语境：只用空战飞行词，不串其他载具域。"
+    if domain == "heli":
+        return "语境：只用直升机机组词，不串其他载具域。"
+    if domain == "ground":
+        return "语境：只用陆战车组词，不串其他载具域。"
+    if domain == "naval":
+        return "语境：只用海战舰艇词，不串其他载具域。"
+    return "语境：未知载具域只泛化打气，不猜载具动作。"
+
+
 def _prompt_style_hint(event: BattleEvent) -> str:
     if event.event_id == "you_killed":
         domain = _event_domain(event)
@@ -598,7 +644,14 @@ def _prompt_style_hint(event: BattleEvent) -> str:
         return "风格：一句短话；只报态势，不接管武器。"
     if event.event_id == "ground_target_nearby":
         return "风格：短话为主；像导航或观察提醒，不接管操作。"
-    if event.event_id in {"ground_laser_warning", "ground_crew_loss", "ground_ammo_empty", "ground_ammo_low"}:
+    if event.event_id in {
+        "ground_laser_warning",
+        "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
+        "ground_ammo_empty",
+        "ground_ammo_low",
+    }:
         return "风格：一句短话；像车组提醒，不接管操作，不展开分析。"
     if event.event_id == "overheat":
         return "风格：短话为主；提醒处置，可带一点紧张感。"
@@ -780,6 +833,10 @@ def _ground_vehicle_fact(event_id: str, payload: dict[str, Any]) -> str:
         return "陆战激光告警"
     if event_id == "ground_crew_loss":
         return "陆战车组受损"
+    if event_id == "ground_gunner_disabled":
+        return "陆战炮手失能"
+    if event_id == "ground_driver_disabled":
+        return "陆战驾驶员失能"
     if event_id == "ground_ammo_empty":
         return "一级弹药打空"
     if event_id == "ground_ammo_low":
@@ -839,8 +896,8 @@ class NekoDispatcher:
         lines.append(f"[要求] {domain_contract}{intent}。{_prompt_reply_contract(event)}")
         if _plugin_reply_hint_enabled(self.plugin) and recommended_reply:
             lines[-1] = f"{lines[-1]} 建议台词：{recommended_reply}"
-        lines.append(_copilot_role_boundary(event))
-        lines.append(_prompt_style_hint(event))
+        lines.append(f"{_copilot_role_boundary(event)} {_domain_vocab_contract(event)}")
+        lines.append(f"{_output_shape_contract(event)} {_prompt_style_hint(event)}")
         return "\n".join(lines)
 
     def push_event(self, event: BattleEvent, *, dry_run: bool) -> str:

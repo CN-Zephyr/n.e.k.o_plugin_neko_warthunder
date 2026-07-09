@@ -19,6 +19,7 @@ exclude_dirs = [
     "tools",
     "local_samples",
     "local_test_logs",
+    "N.E.K.O",
     "data_layer/data process/captures",
     "data_layer/data process/records",
     "data_layer/data process/maps",
@@ -28,6 +29,7 @@ exclude_files = [
     "README.md",
     "PROJECT_STATUS.md",
     "uv.lock",
+    ".runtime_state.json",
     "data_layer/.gitignore",
 ]
 exclude = [

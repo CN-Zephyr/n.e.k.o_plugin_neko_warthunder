@@ -87,6 +87,8 @@ class ProcessedData:
     ammo_first_stage: float | None = None
     gun_stabilizer: bool | None = None
     gear_position: int | None = None  # 档位：>0前进档 / 0空挡 / <0倒车档
+    gunner_state: float | None = None
+    driver_state: float | None = None
     # 直升机派生
     rotor_rpm: float | None = None
     radio_altitude_m: float | None = None
@@ -504,11 +506,15 @@ class TelemetryProcessor:
         ammo = getattr(indicators, "first_stage_ammo", None)
         stab = getattr(indicators, "stabilizer", None)
         lws = getattr(indicators, "lws", None)
+        gunner_state = getattr(indicators, "gunner_state", None)
+        driver_state = getattr(indicators, "driver_state", None)
 
         result.crew_current = crew_cur
         result.crew_total = crew_tot
         result.ammo_first_stage = ammo
         result.gun_stabilizer = (stab is not None and stab >= 0.5)
+        result.gunner_state = gunner_state
+        result.driver_state = driver_state
 
         # 档位：gear - gear_neutral（>0前进 / 0空挡 / <0倒车）
         gear = getattr(indicators, "gear", None)
@@ -524,6 +530,12 @@ class TelemetryProcessor:
             elif crew_cur < crew_tot:
                 self._add(result, "crew_loss", "warning",
                           f"乘员阵亡 {crew_tot - crew_cur:.0f} 人（{crew_cur:.0f}/{crew_tot:.0f}）", crew_cur)
+
+        # 乘员岗位状态：实测为 0/1；只把明确的 0 视为对应岗位失能，避免未知值误报。
+        if gunner_state == 0:
+            self._add(result, "gunner_disabled", "warning", "炮手失能，开火能力受影响", gunner_state)
+        if driver_state == 0:
+            self._add(result, "driver_disabled", "warning", "驾驶员失能，机动能力受影响", driver_state)
 
         # 一级弹药（炮塔待发弹仓）：打空后再开火需从备弹长装填。
         # 各车满弹量不同，用本架次见过的最大值作满弹估计，按比例自适应告警。

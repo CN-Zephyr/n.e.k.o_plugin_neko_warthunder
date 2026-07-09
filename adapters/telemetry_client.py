@@ -97,6 +97,8 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
             bool(processed.get("gun_stabilizer")) if processed.get("gun_stabilizer") is not None else None
         ),
         gear_position=(int(gear) if (gear := _num(processed.get("gear_position"))) is not None else None),
+        gunner_state=_num(processed.get("gunner_state")),
+        driver_state=_num(processed.get("driver_state")),
         hud_events=list(payload.get("hud_events") or []) if isinstance(payload.get("hud_events"), list) else [],
         hud_notices=list(hud_notices.get("feed") or []) if isinstance(hud_notices.get("feed"), list) else [],
         combat=payload.get("combat") if isinstance(payload.get("combat"), dict) else {},

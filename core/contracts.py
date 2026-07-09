@@ -86,6 +86,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "low_fuel":       EventSpec("low_fuel", CAT_SAFETY_MINOR, 4, False, -1, 3, 4),
     "ground_laser_warning": EventSpec("ground_laser_warning", CAT_SAFETY_IMPORTANT, 7, False, 10, 6, 7),
     "ground_crew_loss": EventSpec("ground_crew_loss", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 7),
+    "ground_gunner_disabled": EventSpec("ground_gunner_disabled", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 5),
+    "ground_driver_disabled": EventSpec("ground_driver_disabled", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 5),
     "ground_ammo_empty": EventSpec("ground_ammo_empty", CAT_SAFETY_IMPORTANT, 5, False, 25, 5, 5),
     "ground_ammo_low": EventSpec("ground_ammo_low", CAT_SAFETY_MINOR, 3, False, 45, 2, 2),
     "ground_target_nearby": EventSpec("ground_target_nearby", CAT_MAP_AWARENESS, 2, False, 35, 2, 2),
@@ -270,6 +272,8 @@ class BattleState:
     ammo_first_stage: float | None = None
     gun_stabilizer: bool | None = None
     gear_position: int | None = None
+    gunner_state: float | None = None
+    driver_state: float | None = None
 
     # 离散来源
     hud_events: list[dict[str, Any]] = field(default_factory=list)

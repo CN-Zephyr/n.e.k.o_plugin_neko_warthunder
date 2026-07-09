@@ -13,6 +13,8 @@ _EVENT_LABELS: dict[str, str] = {
     "low_fuel": "低油量",
     "ground_laser_warning": "激光告警",
     "ground_crew_loss": "车组受损",
+    "ground_gunner_disabled": "炮手失能",
+    "ground_driver_disabled": "驾驶员失能",
     "ground_ammo_empty": "一级弹药耗尽",
     "ground_ammo_low": "一级弹药偏少",
     "ground_target_nearby": "任务目标接近",

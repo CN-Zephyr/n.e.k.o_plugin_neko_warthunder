@@ -122,7 +122,15 @@ def test_parse_ground_processed_fields_from_v18_contract():
             "ammo_first_stage": 0,
             "gun_stabilizer": True,
             "gear_position": -1,
-            "flags": {"crew_critical": True, "ammo_empty": True, "laser_warning": True},
+            "gunner_state": 0,
+            "driver_state": 0,
+            "flags": {
+                "crew_critical": True,
+                "ammo_empty": True,
+                "laser_warning": True,
+                "gunner_disabled": True,
+                "driver_disabled": True,
+            },
         }
     )
 
@@ -134,9 +142,13 @@ def test_parse_ground_processed_fields_from_v18_contract():
     assert s.ammo_first_stage == 0
     assert s.gun_stabilizer is True
     assert s.gear_position == -1
+    assert s.gunner_state == 0
+    assert s.driver_state == 0
     assert s.flag("crew_critical")
     assert s.flag("ammo_empty")
     assert s.flag("laser_warning")
+    assert s.flag("gunner_disabled")
+    assert s.flag("driver_disabled")
 
 
 def test_parse_hud_notices_feed_without_losing_raw_contract():

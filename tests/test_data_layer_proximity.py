@@ -56,6 +56,45 @@ def test_proximity_thresholds_use_profile_without_type_error():
     )
 
 
+def test_ground_role_state_flags_are_emitted_only_for_disabled_roles():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+    disabled = processor.process(
+        _vehicle(),
+        _indicators(
+            army="tank",
+            vehicle_type="germ_pzkpfw_VI_ausf_h1_tiger",
+            crew_total=5,
+            crew_current=5,
+            gunner_state=0,
+            driver_state=0,
+        ),
+        timestamp=100.0,
+    )
+
+    assert disabled.gunner_state == 0
+    assert disabled.driver_state == 0
+    assert disabled.flags["gunner_disabled"] is True
+    assert disabled.flags["driver_disabled"] is True
+
+    active = processor.process(
+        _vehicle(),
+        _indicators(
+            army="tank",
+            vehicle_type="germ_pzkpfw_VI_ausf_h1_tiger",
+            crew_total=5,
+            crew_current=5,
+            gunner_state=1,
+            driver_state=1,
+        ),
+        timestamp=101.0,
+    )
+
+    assert "gunner_disabled" not in active.flags
+    assert "driver_disabled" not in active.flags
+
+
 def test_vehicle_profile_exact_entries_keep_precise_overspeed_limits():
     from wt_processor import TelemetryProcessor, _merge_profile
 

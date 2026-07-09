@@ -50,6 +50,8 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
         "low_fuel": {"fuel_fraction": 0.07},
         "ground_laser_warning": {"domain": "ground"},
         "ground_crew_loss": {"domain": "ground", "crew_current": 1, "crew_total": 4},
+        "ground_gunner_disabled": {"domain": "ground", "gunner_state": 0},
+        "ground_driver_disabled": {"domain": "ground", "driver_state": 0},
         "ground_ammo_empty": {"domain": "ground", "ammo_first_stage": 0},
         "ground_ammo_low": {"domain": "ground", "ammo_first_stage": 3},
         "ground_target_nearby": {"grid": "B4", "distance_m": 2400},

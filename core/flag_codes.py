@@ -21,6 +21,8 @@ CONDITION_FLAG_GROUPS: dict[str, list[tuple[str, str]]] = {
     "low_fuel": [("fuel_low", "fuel_critical")],
     "low_alt_danger": [("altitude_low", "altitude_critical")],
     "ground_crew_loss": [("crew_loss", "crew_critical")],
+    "ground_gunner_disabled": [("gunner_disabled", "")],
+    "ground_driver_disabled": [("driver_disabled", "")],
     "ground_ammo_low": [("ammo_low", "")],
     "ground_ammo_empty": [("ammo_empty", "")],
     "ground_laser_warning": [("", "laser_warning")],

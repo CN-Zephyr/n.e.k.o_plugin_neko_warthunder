@@ -343,16 +343,22 @@ def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain()
         flags={
             "laser_warning": True,
             "crew_critical": True,
+            "gunner_disabled": True,
+            "driver_disabled": True,
             "ammo_empty": True,
         },
         crew_current=1,
         crew_total=4,
+        gunner_state=0,
+        driver_state=0,
         ammo_first_stage=0,
     )
 
     assert [event.event_id for event in engine.feed(prev, cur)] == [
         "ground_laser_warning",
         "ground_crew_loss",
+        "ground_gunner_disabled",
+        "ground_driver_disabled",
     ]
     events = engine.feed(cur, cur)
     assert [event.event_id for event in events] == ["ground_ammo_empty"]
@@ -363,6 +369,8 @@ def test_ground_status_flags_are_suppressed_outside_ground_domain():
     flags = {
         "laser_warning": True,
         "crew_critical": True,
+        "gunner_disabled": True,
+        "driver_disabled": True,
         "ammo_empty": True,
         "ammo_low": True,
     }

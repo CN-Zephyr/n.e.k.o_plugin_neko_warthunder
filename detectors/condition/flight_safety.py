@@ -74,6 +74,14 @@ def _pl_ground_crew(s: BattleState) -> dict[str, Any]:
     return _drop_none({"crew_current": s.crew_current, "crew_total": s.crew_total, "domain": s.domain})
 
 
+def _pl_ground_gunner(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"gunner_state": s.gunner_state, "domain": s.domain})
+
+
+def _pl_ground_driver(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"driver_state": s.driver_state, "domain": s.domain})
+
+
 def _pl_ground_ammo(s: BattleState) -> dict[str, Any]:
     return _drop_none({"ammo_first_stage": s.ammo_first_stage, "domain": s.domain})
 
@@ -148,6 +156,22 @@ def build_condition_detectors() -> list[ConditionDetector]:
             confirm_enter=1,
             confirm_exit=3,
             payload_fn=_pl_ground_crew,
+            predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "ground_gunner_disabled",
+            g["ground_gunner_disabled"],
+            confirm_enter=1,
+            confirm_exit=3,
+            payload_fn=_pl_ground_gunner,
+            predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "ground_driver_disabled",
+            g["ground_driver_disabled"],
+            confirm_enter=1,
+            confirm_exit=3,
+            payload_fn=_pl_ground_driver,
             predicate=_is_ground,
         ),
         ConditionDetector(

@@ -36,6 +36,8 @@ AIR_ONLY_FLAGS = {
 GROUND_ONLY_FLAGS = {
     "laser_warning": True,
     "crew_critical": True,
+    "gunner_disabled": True,
+    "driver_disabled": True,
     "ammo_empty": True,
     "ammo_low": True,
 }
@@ -52,6 +54,8 @@ EXPECTED_AIR_EVENTS = {
 EXPECTED_GROUND_EVENTS = {
     "ground_laser_warning",
     "ground_crew_loss",
+    "ground_gunner_disabled",
+    "ground_driver_disabled",
     "ground_ammo_empty",
     "ground_ammo_low",
 }
@@ -89,6 +93,8 @@ def _ground_pressure_state(domain: str) -> BattleState:
         flags=dict(GROUND_ONLY_FLAGS),
         crew_current=1,
         crew_total=4,
+        gunner_state=0,
+        driver_state=0,
         ammo_first_stage=0,
     )
 

@@ -115,6 +115,8 @@ def test_ground_vehicle_prompts_use_ground_facts_without_air_wording():
     events = [
         BattleEvent("ground_laser_warning", level="critical", payload={"domain": "ground"}),
         BattleEvent("ground_crew_loss", level="critical", payload={"domain": "ground", "crew_current": 1, "crew_total": 4}),
+        BattleEvent("ground_gunner_disabled", payload={"domain": "ground", "gunner_state": 0}),
+        BattleEvent("ground_driver_disabled", payload={"domain": "ground", "driver_state": 0}),
         BattleEvent("ground_ammo_empty", payload={"domain": "ground", "ammo_first_stage": 0}),
         BattleEvent("ground_ammo_low", payload={"domain": "ground", "ammo_first_stage": 3}),
     ]
@@ -341,6 +343,8 @@ def test_naval_kill_prompt_uses_ship_wording_instead_of_air_wording():
 def test_persistent_context_is_not_air_battle_only():
     assert "War Thunder）空战" not in WT_CONTEXT_INSTRUCTIONS
     assert "每条事件若写了\"当前模式\"" in WT_CONTEXT_INSTRUCTIONS
+    assert "只输出给玩家的一句中文短话" in WT_CONTEXT_INSTRUCTIONS
+    assert "不复述插件的[当前]、[要求]、规则、字段名或编号" in WT_CONTEXT_INSTRUCTIONS
     assert "空战像后座/僚机" in WT_CONTEXT_INSTRUCTIONS
     assert "直升机像机组搭档" in WT_CONTEXT_INSTRUCTIONS
     assert "陆战像车组搭档" in WT_CONTEXT_INSTRUCTIONS
@@ -394,6 +398,10 @@ def test_spawn_prompt_forbids_invented_target_or_radar_cues():
     assert "当前模式：空战/飞行" in prompt
     assert "角色：后座或僚机" in prompt
     assert "可用语境：上机、升空、跟上、护住你" in prompt
+    assert "语境：只用空战飞行词，不串其他载具域" in prompt
+    assert "输出：一句中文台词，28字内" in prompt
+    assert "不复述规则/字段" in prompt
+    assert "不加前缀或引号" in prompt
     assert "可活泼即兴" in prompt
     assert "建议台词：" not in prompt
     assert "别报敌情/方位/锁定/击杀/威胁" in prompt
@@ -407,6 +415,7 @@ def test_spawn_prompt_uses_ground_opening_terms():
     assert "当前模式：陆战/地面载具" in prompt
     assert "角色：车组搭档" in prompt
     assert "可用语境：上车、出击、车组、装填、掩体、看路" in prompt
+    assert "语境：只用陆战车组词，不串其他载具域" in prompt
     assert "建议台词：" not in prompt
     for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
         assert air_term not in prompt
@@ -418,6 +427,7 @@ def test_spawn_prompt_uses_helicopter_opening_terms():
     assert "当前模式：直升机/旋翼机" in prompt
     assert "角色：机组搭档" in prompt
     assert "可用语境：起飞、贴地、悬停、看高度、跟上" in prompt
+    assert "语境：只用直升机机组词，不串其他载具域" in prompt
     assert "建议台词：" not in prompt
     for fixed_wing_or_ground_term in ("后座", "僚机", "机翼", "拉杆", "车组", "装填", "掩体", "舰桥"):
         assert fixed_wing_or_ground_term not in prompt
@@ -429,6 +439,7 @@ def test_spawn_prompt_uses_naval_opening_terms():
     assert "当前模式：海战/舰艇" in prompt
     assert "角色：舰桥观察员" in prompt
     assert "可用语境：上舰、出航、舰桥、航向、海面" in prompt
+    assert "语境：只用海战舰艇词，不串其他载具域" in prompt
     assert "建议台词：" not in prompt
     for non_naval_term in ("空战", "飞行", "升空", "后座", "云霄", "坦克", "装填手", "履带"):
         assert non_naval_term not in prompt
@@ -652,5 +663,5 @@ def test_common_battle_prompts_stay_compact():
 
     for event in events:
         prompt = dispatcher.build_prompt(event)
-        assert len(prompt) <= 220
+        assert len(prompt) <= 300
         assert len(prompt.splitlines()) <= 4

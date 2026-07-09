@@ -10,6 +10,8 @@ def test_event_display_label_maps_internal_ids_to_plugin_language():
     assert display_event_id("you_died") == "被击毁"
     assert display_event_id("low_alt_danger") == "低空危险"
     assert display_event_id("ground_target_nearby") == "任务目标接近"
+    assert display_event_id("ground_gunner_disabled") == "炮手失能"
+    assert display_event_id("ground_driver_disabled") == "驾驶员失能"
     assert display_event_id("enemy_on_six") == "后方威胁"
     assert display_event_id("tailing_risk") == "持续尾随风险"
     assert display_event_key("overspeed/critical") == "超速风险 / critical"
