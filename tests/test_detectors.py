@@ -10,6 +10,7 @@ from neko_warthunder.detectors.discrete.lifecycle import DeathDetector, KillDete
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
 from neko_warthunder.detectors.discrete.notices import HudNoticeDetector
 from neko_warthunder.detectors.discrete.proximity import ProximityDetector
+from neko_warthunder.detectors.discrete.radio import RadioCommandDetector
 from neko_warthunder.detectors.discrete.situation import AirSituationDetector, GroundTargetDetector
 
 
@@ -230,6 +231,62 @@ def test_free_text_activity_detector_ignores_owned_combat_feed_and_technical_not
     )
 
     assert det.feed(C.BattleState(), cur) is None
+
+
+def _radio_state(chat: list[dict], *, self_source: str = "manual", sender_name: str = "Pilot") -> C.BattleState:
+    return C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="ground",
+        timestamp=500.0,
+        chat=chat,
+        combat={
+            "player_name": sender_name,
+            "self": {"name": sender_name, "source": self_source, "confidence": 1.0},
+        },
+    )
+
+
+def test_radio_command_detector_emits_self_fixed_message_without_raw_text():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 7, "sender": "Pilot", "msg": "进攻 D 点！"}])
+
+    ev = det.feed(C.BattleState(), cur)
+
+    assert ev is not None
+    assert ev.event_id == "player_radio_command"
+    assert ev.payload == {"command": "attack_point", "point": "D", "domain": "ground", "source": "self_radio"}
+    assert "进攻" not in repr(ev.payload)
+    assert "Pilot" not in repr(ev.payload)
+
+
+def test_radio_command_detector_ignores_teammate_sender():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 8, "sender": "Teammate", "msg": "进攻 D 点！"}])
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_requires_manual_identity():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 9, "sender": "Pilot", "msg": "进攻 D 点！"}], self_source="auto")
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_ignores_unrecognized_own_chat():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 10, "sender": "Pilot", "msg": "猫娘先别回答我的普通聊天"}])
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_deduplicates_chat_id():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 11, "sender": "Pilot", "msg": "Cover me!"}])
+
+    assert det.feed(C.BattleState(), cur) is not None
+    assert det.feed(cur, cur) is None
 
 
 def test_overspeed_warn_and_critical_flags_emit_events():

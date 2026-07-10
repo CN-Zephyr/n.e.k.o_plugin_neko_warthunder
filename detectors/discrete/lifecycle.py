@@ -16,6 +16,7 @@ from .._base import DiscreteDetector
 from .free_text import FreeTextActivityDetector
 from .notices import HudNoticeDetector
 from .proximity import ProximityDetector
+from .radio import RadioCommandDetector
 from .situation import AirSituationDetector, GroundTargetDetector
 
 _END_STATUSES = frozenset({"win", "won", "victory", "fail", "failed", "lost", "defeat", "left", "ended", "finished"})
@@ -194,6 +195,7 @@ def build_discrete_detectors(player_name: str) -> list[DiscreteDetector]:
         BattleEndDetector(),
         KillDetector(player_name),
         HudNoticeDetector(),
+        RadioCommandDetector(),
         FreeTextActivityDetector(),
         ProximityDetector(),
         AirSituationDetector(),

@@ -28,6 +28,7 @@ def _sample() -> dict:
             "fuel_fraction": 0.42, "g_now": 4.5, "water_temp_c": 112.0,
         },
         "hud_events": [{"id": 1, "kind": "damage", "msg": "x"}],
+        "chat": [{"id": 2, "sender": "Me", "msg": "进攻 D 点！"}],
         "combat": {"player_name": "Me", "my": {"kills": 2, "deaths": 0}, "feed": []},
         "mission_status": "running",
         "meta": {"fast": {"age_sec": 0.1}},
@@ -43,6 +44,7 @@ def test_parse_in_battle():
     assert s.flag("stall_warning") and s.flag("altitude_low")
     assert s.any_critical_flag() is False  # 只有 warning 级
     assert s.fuel_fraction == 0.42 and s.water_temp_c == 112.0
+    assert s.chat == [{"id": 2, "sender": "Me", "msg": "进攻 D 点！"}]
 
 
 def test_parse_offline():
