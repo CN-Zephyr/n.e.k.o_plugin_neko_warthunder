@@ -182,3 +182,18 @@ def test_combat_stress_reasons_expire_independently():
     assert r.resolve(_alive(hud_events=[{"id": 3, "kind": "damage"}]), 1012.0, 6) == C.COMBAT_STRESS
     assert r.current_stress_reasons(1012.0) == frozenset({"maneuver", "damage"})
     assert r.current_stress_reasons(1016.5) == frozenset({"damage"})
+
+
+def test_domain_change_clears_mode_stress_but_preserves_damage():
+    r = ScenarioResolver()
+    r.resolve(_alive(), 1000.0, 6)
+    r.resolve(_alive(), 1007.0, 6)
+    stressed = _alive(g_now=6.0, hud_events=[{"id": 3, "kind": "damage"}])
+
+    assert r.resolve(stressed, 1008.0, 6) == C.COMBAT_STRESS
+    assert r.current_stress_reasons(1008.0) == frozenset({"maneuver", "damage"})
+
+    ground = _alive(domain="ground", indicators_valid=True, has_player=True)
+    assert r.resolve(ground, 1009.0, 6) == C.COMBAT_STRESS
+    assert r.current_stress_reasons(1009.0) == frozenset({"damage"})
+    assert r.resolve(ground, 1016.1, 6) == C.IN_FLIGHT

@@ -51,14 +51,7 @@ EXPECTED_AIR_EVENTS = {
     "low_fuel",
 }
 
-EXPECTED_GROUND_EVENTS = {
-    "ground_laser_warning",
-    "ground_crew_loss",
-    "ground_gunner_disabled",
-    "ground_driver_disabled",
-    "ground_ammo_empty",
-    "ground_ammo_low",
-}
+EXPECTED_GROUND_EVENTS = {"ground_laser_warning"}
 
 
 def _condition_engine() -> DetectorEngine:

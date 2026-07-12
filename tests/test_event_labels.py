@@ -14,6 +14,7 @@ def test_event_display_label_maps_internal_ids_to_plugin_language():
     assert display_event_id("ground_driver_disabled") == "驾驶员失能"
     assert display_event_id("enemy_on_six") == "后方威胁"
     assert display_event_id("tailing_risk") == "持续尾随风险"
+    assert display_event_id("player_radio_command") == "玩家无线电"
     assert display_event_key("overspeed/critical") == "超速风险 / critical"
     assert display_event_key("air_threat_nearby/warning") == "空中威胁接近 / warning"
 

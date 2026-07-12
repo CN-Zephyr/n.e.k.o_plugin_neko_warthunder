@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
 from neko_warthunder.detectors._base import ConditionDetector, DetectorEngine
@@ -10,6 +12,7 @@ from neko_warthunder.detectors.discrete.lifecycle import DeathDetector, KillDete
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
 from neko_warthunder.detectors.discrete.notices import HudNoticeDetector
 from neko_warthunder.detectors.discrete.proximity import ProximityDetector
+from neko_warthunder.detectors.discrete.radio import RadioCommandDetector, parse_radio_command
 from neko_warthunder.detectors.discrete.situation import AirSituationDetector, GroundTargetDetector
 
 
@@ -232,6 +235,74 @@ def test_free_text_activity_detector_ignores_owned_combat_feed_and_technical_not
     assert det.feed(C.BattleState(), cur) is None
 
 
+def _radio_state(chat: list[dict], *, self_source: str = "manual", sender_name: str = "Pilot") -> C.BattleState:
+    return C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="ground",
+        timestamp=500.0,
+        chat=chat,
+        combat={
+            "player_name": sender_name,
+            "self": {"name": sender_name, "source": self_source, "confidence": 1.0},
+        },
+    )
+
+
+def test_radio_command_detector_emits_self_fixed_message_without_raw_text():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 7, "sender": "Pilot", "msg": "进攻 D 点！"}])
+
+    ev = det.feed(C.BattleState(), cur)
+
+    assert ev is not None
+    assert ev.event_id == "player_radio_command"
+    assert ev.payload == {"command": "attack_point", "point": "D", "domain": "ground", "source": "self_radio"}
+    assert "进攻" not in repr(ev.payload)
+    assert "Pilot" not in repr(ev.payload)
+
+
+def test_radio_command_detector_ignores_teammate_sender():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 8, "sender": "Teammate", "msg": "进攻 D 点！"}])
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_requires_manual_identity():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 9, "sender": "Pilot", "msg": "进攻 D 点！"}], self_source="auto")
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_ignores_unrecognized_own_chat():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 10, "sender": "Pilot", "msg": "猫娘先别回答我的普通聊天"}])
+
+    assert det.feed(C.BattleState(), cur) is None
+
+
+def test_radio_command_detector_deduplicates_chat_id():
+    det = RadioCommandDetector()
+    cur = _radio_state([{"id": 11, "sender": "Pilot", "msg": "Cover me!"}])
+
+    assert det.feed(C.BattleState(), cur) is not None
+    assert det.feed(cur, cur) is None
+
+
+def test_radio_command_parser_supports_acknowledge_reject_and_praise():
+    cases = {
+        "收到！": "affirmative",
+        "拒绝！": "negative",
+        "干得好！": "well_done",
+        "干得漂亮！": "well_done",
+    }
+
+    for text, command in cases.items():
+        assert parse_radio_command(text) == {"command": command}
+
+
 def test_overspeed_warn_and_critical_flags_emit_events():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="air")
@@ -333,7 +404,7 @@ def test_fixed_wing_safety_flags_are_suppressed_outside_air_domain():
         assert engine.feed(state, state) == []
 
 
-def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain():
+def test_ground_status_flags_emit_only_real_laser_warning_for_ground_domain():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground")
     cur = C.BattleState(
@@ -354,15 +425,10 @@ def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain()
         ammo_first_stage=0,
     )
 
-    assert [event.event_id for event in engine.feed(prev, cur)] == [
-        "ground_laser_warning",
-        "ground_crew_loss",
-        "ground_gunner_disabled",
-        "ground_driver_disabled",
-    ]
-    events = engine.feed(cur, cur)
-    assert [event.event_id for event in events] == ["ground_ammo_empty"]
-    assert events[0].payload == {"ammo_first_stage": 0, "domain": "ground"}
+    events = engine.feed(prev, cur)
+    assert [event.event_id for event in events] == ["ground_laser_warning"]
+    assert events[0].payload == {"domain": "ground"}
+    assert engine.feed(cur, cur) == []
 
 
 def test_ground_status_flags_are_suppressed_outside_ground_domain():
@@ -811,6 +877,42 @@ def test_air_situation_detector_suppresses_non_air_domains_and_dead_state():
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="air", dead=True, situation=situation)) is None
 
 
+@pytest.mark.parametrize(
+    "interruption",
+    [
+        C.BattleState(in_battle=True, indicators_valid=True, has_player=True, domain="ground"),
+        C.BattleState(in_battle=False, vehicle_valid=True, domain="air"),
+    ],
+)
+def test_air_situation_detector_rearms_after_mode_interruption(interruption):
+    det = AirSituationDetector()
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"enemies": [{"type": "aircraft", "distance_m": 4200, "relative_deg": 15}]},
+    )
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, interruption) is None
+    assert det.feed(interruption, active) is not None
+
+
+def test_air_situation_detector_does_not_rearm_on_transient_empty_frame():
+    det = AirSituationDetector()
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"enemies": [{"type": "aircraft", "distance_m": 4200, "relative_deg": 15}]},
+    )
+    empty = C.BattleState(in_battle=True, vehicle_valid=True, domain="air", situation=None)
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, empty) is None
+    assert det.feed(empty, active) is None
+
+
 def test_ground_target_detector_emits_safe_objective_awareness_once():
     det = GroundTargetDetector(distance_m=3000)
     cur = C.BattleState(
@@ -854,3 +956,39 @@ def test_ground_target_detector_suppresses_ground_domain_and_dead_state():
 
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="ground", situation=situation)) is None
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="air", dead=True, situation=situation)) is None
+
+
+@pytest.mark.parametrize(
+    "interruption",
+    [
+        C.BattleState(in_battle=True, indicators_valid=True, has_player=True, domain="ground"),
+        C.BattleState(in_battle=False, vehicle_valid=True, domain="air"),
+    ],
+)
+def test_ground_target_detector_rearms_after_mode_interruption(interruption):
+    det = GroundTargetDetector(distance_m=3000)
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"ground_targets": [{"kind": "bombing_point", "grid": "C2", "distance_m": 900}]},
+    )
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, interruption) is None
+    assert det.feed(interruption, active) is not None
+
+
+def test_ground_target_detector_does_not_rearm_on_transient_empty_frame():
+    det = GroundTargetDetector(distance_m=3000)
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"ground_targets": [{"kind": "bombing_point", "grid": "C2", "distance_m": 900}]},
+    )
+    empty = C.BattleState(in_battle=True, vehicle_valid=True, domain="air", situation=None)
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, empty) is None
+    assert det.feed(empty, active) is None

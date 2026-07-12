@@ -70,22 +70,6 @@ def _pl_overspeed(s: BattleState) -> dict[str, Any]:
     return _drop_none({"domain": s.domain, "ias_kmh": s.ias_kmh, "mach": s.mach})
 
 
-def _pl_ground_crew(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"crew_current": s.crew_current, "crew_total": s.crew_total, "domain": s.domain})
-
-
-def _pl_ground_gunner(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"gunner_state": s.gunner_state, "domain": s.domain})
-
-
-def _pl_ground_driver(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"driver_state": s.driver_state, "domain": s.domain})
-
-
-def _pl_ground_ammo(s: BattleState) -> dict[str, Any]:
-    return _drop_none({"ammo_first_stage": s.ammo_first_stage, "domain": s.domain})
-
-
 def _pl_ground_laser(s: BattleState) -> dict[str, Any]:
     return _drop_none({"domain": s.domain})
 
@@ -148,46 +132,6 @@ def build_condition_detectors() -> list[ConditionDetector]:
             confirm_enter=1,
             confirm_exit=2,
             payload_fn=_pl_ground_laser,
-            predicate=_is_ground,
-        ),
-        ConditionDetector(
-            "ground_crew_loss",
-            g["ground_crew_loss"],
-            confirm_enter=1,
-            confirm_exit=3,
-            payload_fn=_pl_ground_crew,
-            predicate=_is_ground,
-        ),
-        ConditionDetector(
-            "ground_gunner_disabled",
-            g["ground_gunner_disabled"],
-            confirm_enter=1,
-            confirm_exit=3,
-            payload_fn=_pl_ground_gunner,
-            predicate=_is_ground,
-        ),
-        ConditionDetector(
-            "ground_driver_disabled",
-            g["ground_driver_disabled"],
-            confirm_enter=1,
-            confirm_exit=3,
-            payload_fn=_pl_ground_driver,
-            predicate=_is_ground,
-        ),
-        ConditionDetector(
-            "ground_ammo_empty",
-            g["ground_ammo_empty"],
-            confirm_enter=2,
-            confirm_exit=3,
-            payload_fn=_pl_ground_ammo,
-            predicate=_is_ground,
-        ),
-        ConditionDetector(
-            "ground_ammo_low",
-            g["ground_ammo_low"],
-            confirm_enter=3,
-            confirm_exit=4,
-            payload_fn=_pl_ground_ammo,
             predicate=_is_ground,
         ),
     ]

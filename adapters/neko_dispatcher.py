@@ -42,6 +42,7 @@ FLEX_STYLE_EVENTS = frozenset(
         "ground_driver_disabled",
         "ground_ammo_empty",
         "ground_ammo_low",
+        "player_radio_command",
         "enemy_nearby",
         "ground_target_nearby",
         "battle_end",
@@ -115,6 +116,7 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "ground_driver_disabled": 6.0,
     "ground_ammo_empty": 8.0,
     "ground_ammo_low": 8.0,
+    "player_radio_command": 10.0,
     # Kill/death/battle-end can tolerate a little more host latency, but still
     # should not be replayed as old news.
     "you_killed": 30.0,
@@ -146,6 +148,7 @@ _INTENT: dict[str, str] = {
     "enemy_on_six": "报后方威胁，提醒 {MASTER_NAME} 别让对面贴住",
     "tailing_risk": "报后方持续贴近，提醒 {MASTER_NAME} 立刻改出",
     "free_text_activity": "提醒 {MASTER_NAME} 检测到战场文字来源，只做安全泛化提示，不复读原文",
+    "player_radio_command": "听到 {MASTER_NAME} 发出的固定无线电口令；只按标准化口令短回应，不引用聊天原文",
     "you_killed": "确认刚才战果；按载具域一句短话，可不夸，不套固定话",
     "you_died": "按事实安抚 {MASTER_NAME}，准备重整",
     "spawn": (
@@ -506,6 +509,23 @@ def _recommended_reply_line(event: BattleEvent) -> str:
         return ""
     if event.event_id == "you_killed":
         return ""
+    if event.event_id == "player_radio_command":
+        command = str(p.get("command") or "")
+        point = _radio_point(p)
+        replies = {
+            "cover_me": "收到，我看着你。",
+            "need_help": "收到，先别硬撑。",
+            "attack_point": f"收到，看{point}点。" if point else "收到，看目标点。",
+            "defend_point": f"收到，守{point}点。" if point else "收到，守住节奏。",
+            "return_to_base": "好，先活着回去。",
+            "repairing": "收到，先躲稳。",
+            "follow_me": "嗯，我跟着你。",
+            "thanks": "哼，知道就好。",
+            "affirmative": "收到，跟你走。",
+            "negative": "收到，先不冒险。",
+            "well_done": "哼，那当然。",
+        }
+        return replies.get(command, "收到。")
     if event.event_id == "stall_risk":
         return "加速，快失速了！"
     if event.event_id == "high_aoa":
@@ -605,6 +625,8 @@ def _output_shape_contract(event: BattleEvent) -> str:
         tone = "紧急事件优先动作词"
     elif event.event_id in {"you_killed", "spawn", "battle_end"}:
         tone = "轻松事件可以有一点情绪"
+    elif event.event_id == "player_radio_command":
+        tone = "玩家主动口令可以像顺手应一声"
     else:
         tone = "提醒事件自然像同伴开口"
     return f"输出：一句中文台词，28字内；{tone}；不复述规则/字段，不加前缀或引号。"
@@ -636,6 +658,8 @@ def _prompt_style_hint(event: BattleEvent) -> str:
         return "风格：短话为主；可安抚、吐槽或打气，不复盘。"
     if event.event_id == "spawn":
         return "风格：短话为主；活泼一点，可有小情绪，只打出场招呼。"
+    if event.event_id == "player_radio_command":
+        return "风格：短话为主；像听到队内无线电后的回应，不复述无线电原文。"
     if event.event_id in URGENT_REPLACE_EVENTS or event.level == "critical":
         return "风格：一句短话；急促指令，不闲聊。"
     if event.event_id in {"air_threat_nearby", "enemy_nearby", "enemy_on_six", "tailing_risk"}:
@@ -707,6 +731,7 @@ def _fact_line(event: BattleEvent) -> str:
     objective_fact = _objective_fact(event.event_id, p)
     ground_fact = _ground_vehicle_fact(event.event_id, p)
     free_text_fact = _free_text_fact(event.event_id, p)
+    radio_fact = _radio_command_fact(event.event_id, p)
     has_radio_altitude = p.get("radio_altitude_m") is not None
     order = [
         ("ias_kmh", "IAS {:.0f}km/h"),
@@ -733,6 +758,8 @@ def _fact_line(event: BattleEvent) -> str:
         bits.append(ground_fact)
     if free_text_fact:
         bits.append(free_text_fact)
+    if radio_fact:
+        bits.append(radio_fact)
     if has_radio_altitude:
         try:
             bits.append("AGL {:.0f}m".format(p["radio_altitude_m"]))
@@ -867,6 +894,38 @@ def _free_text_fact(event_id: str, payload: dict[str, Any]) -> str:
     if isinstance(code, str) and code:
         detail.append(code)
     return label if not detail else f"{label}（{'，'.join(detail)}）"
+
+
+def _radio_point(payload: dict[str, Any]) -> str:
+    point = str(payload.get("point") or "").strip().upper()
+    return point if point in {"A", "B", "C", "D"} else ""
+
+
+def _radio_command_label(payload: dict[str, Any]) -> str:
+    command = str(payload.get("command") or "")
+    point = _radio_point(payload)
+    if command == "attack_point":
+        return f"进攻{point}点" if point else "进攻目标点"
+    if command == "defend_point":
+        return f"防守{point}点" if point else "防守目标点"
+    labels = {
+        "cover_me": "掩护我",
+        "need_help": "需要支援",
+        "return_to_base": "返回基地",
+        "repairing": "正在维修",
+        "follow_me": "跟着我",
+        "thanks": "感谢",
+        "affirmative": "肯定",
+        "negative": "否定",
+        "well_done": "干得好",
+    }
+    return labels.get(command, "无线电口令")
+
+
+def _radio_command_fact(event_id: str, payload: dict[str, Any]) -> str:
+    if event_id != "player_radio_command":
+        return ""
+    return f"玩家无线电：{_radio_command_label(payload)}"
 
 
 class NekoDispatcher:

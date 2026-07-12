@@ -4,7 +4,8 @@
 
 ## 当前结论
 
-- 离线逻辑基线：`445/445 passed`。
+- 最后一次完整 pytest 基线：`457 passed`。
+- 2026-07-10 发布状态：**ground data-layer fix complete; live revalidation pending**。陆战状态输出已进一步收缩为只播真实激光告警；重新打包前需验证其余陆战状态保持静默。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。
 - `tools/replay_gate.py` 已作为 replay 降级发布门禁，证明 `replay=true` 帧不会产生 Detector candidate、prompt 或真实 `push_message`。
 - `tools/ownership_replay_gate.py` 已作为第三方旧样本 ownership 门禁，证明手动 identity + 显式 opt-in 推断才能把旧 `combat.feed` 标为 owned kill/death，且干扰 combat feed 保持非我方。
@@ -104,6 +105,11 @@ This output separates `sample_unproven_items`, `blocked_release_items`, `remaini
 - 可选：加 `--include-local-sample` 时运行 `sample_replay`、`offline_report`、`live_test_plan` 等本地样本检查
 
 ## 已知限制
+
+- `gunner_state/driver_state` 已按多值合同修复，但当前产品策略不为任何岗位状态生成猫娘播报。
+- LWS 已改为仅 `lws == 1` 触发；仍需带 LWS 载具完成待机、真实受照和设备损坏真机样本复验。
+- 一级弹药仍保留正数基线和重生保护供数据展示，但不再生成猫娘播报候选。
+- 自己的固定无线电已验证；队友同口令不触发仍缺真机反例。
 
 - 真机 airport spawn / takeoff / respawn rollout 仍需要最终回归，尤其是 AGL 可用/缺失两条路径下的低空抑制和贴地滑跑超速抑制。
 - `replay=true` 已有离线 gate，但真实 replay 样本仍需要补。

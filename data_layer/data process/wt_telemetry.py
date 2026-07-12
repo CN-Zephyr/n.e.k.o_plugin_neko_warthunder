@@ -130,11 +130,11 @@ class Indicators:
     crew_total: float | None = None      # 乘员总数
     crew_current: float | None = None    # 存活乘员数
     cruise_control: float | None = None  # 定速巡航档
-    lws: float | None = None             # 激光告警接收（-1=无设备/未被照射）
+    lws: float | None = None             # 激光告警：-1无设备 / 0待机 / 1告警 / 2损坏
     ircm: float | None = None            # 红外对抗
     has_speed_warning: float | None = None  # 超速/转向告警
-    gunner_state: float | None = None    # 炮手状态
-    driver_state: float | None = None    # 驾驶员状态
+    gunner_state: float | None = None    # 炮手：0正常 / 1无人补位 / 2补位中 / 3未确认
+    driver_state: float | None = None    # 驾驶员：0正常 / 1无人补位 / 2补位中 / 3未确认
     # 直升机字段；固定翼/地面为 None
     is_helicopter: bool = False          # 是否直升机（运行时按字段特征判定）
     prop_rpm: float | None = None        # 旋翼转速（直升机）/ 螺旋桨转速
