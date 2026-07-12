@@ -41,14 +41,11 @@
 
 ## 陆战已接事件
 
-数据层已提供、插件已提升为正式播报候选的陆战事件：
+数据层提供多类陆战状态，但插件只把真实激光告警提升为播报候选：
 
 - `ground_laser_warning`：来自 `laser_warning`，提示可能被测距或锁定。
-- `ground_crew_loss`：来自 `crew_loss` / `crew_critical`，提示车组受损。
-- `ground_ammo_empty`：来自 `ammo_empty`，提示一级弹药打空、装填节奏变慢。
-- `ground_ammo_low`：来自 `ammo_low`，提示一级弹药偏少。
 
-这些事件只允许 `domain == "ground"` 触发，且不进入固定翼 `CRITICAL_RISK` 集合。它们的提示词只能描述安全事实，不编敌情、锁定结果、击毁结果、载具损伤或玩家名。
+乘员减少、岗位失能/补位和一级弹药数量仍保留在 8112 DTO 与面板中，但不生成 Detector 候选，不进入仲裁和猫娘输出。激光告警只允许 `domain == "ground"` 触发，且不进入固定翼 `CRITICAL_RISK` 集合；提示词只能描述安全事实，不编敌情、锁定结果、击毁结果、载具损伤或玩家名。
 
 ## 提示词与输出边界
 

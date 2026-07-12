@@ -10,7 +10,7 @@ from neko_warthunder.detectors.discrete.lifecycle import DeathDetector, KillDete
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
 from neko_warthunder.detectors.discrete.notices import HudNoticeDetector
 from neko_warthunder.detectors.discrete.proximity import ProximityDetector
-from neko_warthunder.detectors.discrete.radio import RadioCommandDetector
+from neko_warthunder.detectors.discrete.radio import RadioCommandDetector, parse_radio_command
 from neko_warthunder.detectors.discrete.situation import AirSituationDetector, GroundTargetDetector
 
 
@@ -289,6 +289,18 @@ def test_radio_command_detector_deduplicates_chat_id():
     assert det.feed(cur, cur) is None
 
 
+def test_radio_command_parser_supports_acknowledge_reject_and_praise():
+    cases = {
+        "收到！": "affirmative",
+        "拒绝！": "negative",
+        "干得好！": "well_done",
+        "干得漂亮！": "well_done",
+    }
+
+    for text, command in cases.items():
+        assert parse_radio_command(text) == {"command": command}
+
+
 def test_overspeed_warn_and_critical_flags_emit_events():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="air")
@@ -390,7 +402,7 @@ def test_fixed_wing_safety_flags_are_suppressed_outside_air_domain():
         assert engine.feed(state, state) == []
 
 
-def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain():
+def test_ground_status_flags_emit_only_real_laser_warning_for_ground_domain():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground")
     cur = C.BattleState(
@@ -411,15 +423,10 @@ def test_ground_status_flags_emit_ground_vehicle_events_only_for_ground_domain()
         ammo_first_stage=0,
     )
 
-    assert [event.event_id for event in engine.feed(prev, cur)] == [
-        "ground_laser_warning",
-        "ground_crew_loss",
-        "ground_gunner_disabled",
-        "ground_driver_disabled",
-    ]
-    events = engine.feed(cur, cur)
-    assert [event.event_id for event in events] == ["ground_ammo_empty"]
-    assert events[0].payload == {"ammo_first_stage": 0, "domain": "ground"}
+    events = engine.feed(prev, cur)
+    assert [event.event_id for event in events] == ["ground_laser_warning"]
+    assert events[0].payload == {"domain": "ground"}
+    assert engine.feed(cur, cur) == []
 
 
 def test_ground_status_flags_are_suppressed_outside_ground_domain():

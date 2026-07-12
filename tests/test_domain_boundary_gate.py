@@ -22,12 +22,7 @@ def test_domain_boundary_gate_passes_with_synthetic_states():
         "overspeed",
         "low_fuel",
     }
-    assert set(result["results"]["ground_emit_events"]) >= {
-        "ground_laser_warning",
-        "ground_crew_loss",
-        "ground_ammo_empty",
-        "ground_ammo_low",
-    }
+    assert set(result["results"]["ground_emit_events"]) == {"ground_laser_warning"}
 
 
 def test_domain_boundary_gate_cli_outputs_json():

@@ -635,6 +635,19 @@ def test_radio_command_prompt_uses_safe_command_without_raw_chat_or_sender():
     assert "ignore previous instructions" not in prompt
 
 
+def test_radio_command_prompt_supports_praise_without_raw_text():
+    prompt = NekoDispatcher(None).build_prompt(
+        BattleEvent(
+            "player_radio_command",
+            payload={"command": "well_done", "domain": "air", "raw_text": "干得好！"},
+        )
+    )
+
+    assert "玩家无线电：干得好" in prompt
+    assert "建议台词：哼，那当然。" in prompt
+    assert "干得好！" not in prompt
+
+
 def test_free_text_activity_keeps_dry_run_observable_but_suppresses_real_push():
     plugin = FakePlugin()
     timeline = RuntimeTimeline()

@@ -192,6 +192,8 @@ class TelemetryService:
         self._hud_drain_pending = True
         # 进入战局的时间戳（用于开局告警抑制窗口）；离开战局清空。
         self._battle_entry_ts: float | None = None
+        # 本次出生的时间戳；同局重生时刷新，用于重新开启出生告警抑制。
+        self._life_entry_ts: float | None = None
         # 回放检测：本局是否判定为录像回放（锁定式，进/出战局复位）。
         self._replay = False
         self._last_game_time: float | None = None  # 上一帧游戏内时间(秒)，用于倒退检测
@@ -277,10 +279,12 @@ class TelemetryService:
             if state is not ConnectionState.IN_BATTLE and prev is ConnectionState.IN_BATTLE:
                 self._reset_battle_cache_locked()
                 self._battle_entry_ts = None
+                self._life_entry_ts = None
             # 进入战局 -> 标记需排空 hud 积压（丢弃上一局/连接前的残留事件）+ 记录进局时刻
             if state is ConnectionState.IN_BATTLE and prev is not ConnectionState.IN_BATTLE:
                 self._hud_drain_pending = True
                 self._battle_entry_ts = now
+                self._life_entry_ts = now
                 self._replay = False
                 self._last_game_time = None
                 self._mission_running_seen = False
@@ -292,15 +296,21 @@ class TelemetryService:
             if state is ConnectionState.IN_BATTLE and not self._replay:
                 self._detect_replay_locked(ind, now)
             # 阵亡待命态检测（仅战局内）
+            respawned = False
             if state is ConnectionState.IN_BATTLE:
-                self._update_dead_state_locked(ind, processed, now)
+                respawned = self._update_dead_state_locked(ind, processed, now)
+            if respawned:
+                # 当前 processed 在复活判定前生成，仍可能携带上一条命的弹药基线。
+                # 立即重置处理器并压掉当前帧；下一帧从新载具重新建立基线。
+                self.processor.reset()
+                self._life_entry_ts = now
             # 开局抑制窗口：进局前 _SPAWN_SUPPRESS_SEC 秒清空告警（保留派生量/数值），
             # 压掉 air RB 空中生成的失速/低高度等瞬态假警。
             # 阵亡待命态同样抑制告警（死车残骸/观战冻结会刷失速/乘员损失等假警）。
             if (processed is not None and (
                     self._dead
-                    or (self._battle_entry_ts is not None
-                        and now - self._battle_entry_ts < _SPAWN_SUPPRESS_SEC))):
+                    or (self._life_entry_ts is not None
+                        and now - self._life_entry_ts < _SPAWN_SUPPRESS_SEC))):
                 processed = {**processed, "alerts": [], "flags": {}}
             self._processed = processed
         # 录制（调试开关）：按记录间隔转存一帧快照；未开启录制时近乎零开销
@@ -419,7 +429,7 @@ class TelemetryService:
             self._replay = True
 
     def _update_dead_state_locked(self, ind: Indicators, processed: dict[str, Any] | None,
-                                  now: float) -> None:
+                                  now: float) -> bool:
         """更新阵亡待命态（调用方需已持锁，且仅在战局内调用）。
 
         进入：combat.my.deaths 较上次增加（解析到本人新阵亡）。
@@ -428,6 +438,8 @@ class TelemetryService:
               - 乘员恢复满员（地面坦克 crew_total>=2 且 crew_current>=crew_total）= 新车。
         “先静止再活跃”的两段式可正确区分“死亡俯冲(高速但已死)”与“重生”，避免在
         坠落途中误判复活而提前解除抑制。
+
+        返回 True 表示本帧确认由阵亡态进入新一次出生，调用方需重置处理器状态。
         """
         combat = self._combat
         deaths = 0
@@ -439,7 +451,7 @@ class TelemetryService:
             self._dead_inert_seen = False
         self._last_deaths = deaths
         if not self._dead:
-            return
+            return False
         ias = processed.get("ias_kmh") if isinstance(processed, dict) else None
         gspeed = getattr(ind, "speed", None)
         inert = ((ias is None or ias < _DEAD_INERT_IAS_KMH)
@@ -455,6 +467,8 @@ class TelemetryService:
         if self._dead_inert_seen and (moving or crew_full):
             self._dead = False
             self._dead_since = None
+            return True
+        return False
 
     def _reset_battle_cache_locked(self) -> None:
         """离开战局时清空本局相关缓存（调用方需已持锁）。"""
@@ -481,6 +495,7 @@ class TelemetryService:
         self._map_ext = None
         self._map_gen = None
         self._replay = False
+        self._life_entry_ts = None
         self._last_game_time = None
         self._mission_running_seen = False
         self._dead = False

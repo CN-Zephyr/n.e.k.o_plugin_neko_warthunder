@@ -56,11 +56,12 @@ def test_proximity_thresholds_use_profile_without_type_error():
     )
 
 
-def test_ground_role_state_flags_are_emitted_only_for_disabled_roles():
+def test_ground_role_state_flags_follow_confirmed_multistate_contract():
     from wt_processor import TelemetryProcessor
 
     processor = TelemetryProcessor()
-    disabled = processor.process(
+
+    normal = processor.process(
         _vehicle(),
         _indicators(
             army="tank",
@@ -72,13 +73,10 @@ def test_ground_role_state_flags_are_emitted_only_for_disabled_roles():
         ),
         timestamp=100.0,
     )
+    assert "gunner_disabled" not in normal.flags
+    assert "driver_disabled" not in normal.flags
 
-    assert disabled.gunner_state == 0
-    assert disabled.driver_state == 0
-    assert disabled.flags["gunner_disabled"] is True
-    assert disabled.flags["driver_disabled"] is True
-
-    active = processor.process(
+    unavailable = processor.process(
         _vehicle(),
         _indicators(
             army="tank",
@@ -86,13 +84,137 @@ def test_ground_role_state_flags_are_emitted_only_for_disabled_roles():
             crew_total=5,
             crew_current=5,
             gunner_state=1,
-            driver_state=1,
+            driver_state=2,
         ),
         timestamp=101.0,
     )
+    assert unavailable.flags["gunner_disabled"] is True
+    assert unavailable.flags["driver_disabled"] is True
 
-    assert "gunner_disabled" not in active.flags
-    assert "driver_disabled" not in active.flags
+    unknown = processor.process(
+        _vehicle(),
+        _indicators(
+            army="tank",
+            vehicle_type="germ_pzkpfw_VI_ausf_h1_tiger",
+            crew_total=5,
+            crew_current=1,
+            gunner_state=3,
+            driver_state=3,
+        ),
+        timestamp=102.0,
+    )
+    assert "gunner_disabled" not in unknown.flags
+    assert "driver_disabled" not in unknown.flags
+
+
+def test_ground_lws_warns_only_for_active_illumination_state():
+    from wt_processor import TelemetryProcessor
+
+    for index, lws in enumerate((-1, 0, 2, 3)):
+        result = TelemetryProcessor().process(
+            _vehicle(),
+            _indicators(army="tank", vehicle_type="test_tank", lws=lws),
+            timestamp=100.0 + index,
+        )
+        assert "laser_warning" not in result.flags
+
+    active = TelemetryProcessor().process(
+        _vehicle(),
+        _indicators(army="tank", vehicle_type="test_tank", lws=1),
+        timestamp=110.0,
+    )
+    assert active.flags["laser_warning"] is True
+
+
+def test_ground_ammo_requires_positive_baseline_and_resets_on_unavailable_data():
+    from wt_processor import TelemetryProcessor
+
+    processor = TelemetryProcessor()
+
+    for timestamp, ammo in ((100.0, -1), (101.0, 0), (102.0, 6)):
+        result = processor.process(
+            _vehicle(),
+            _indicators(army="tank", vehicle_type="test_tank", first_stage_ammo=ammo),
+            timestamp=timestamp,
+        )
+        assert "ammo_empty" not in result.flags
+
+    empty = processor.process(
+        _vehicle(),
+        _indicators(army="tank", vehicle_type="test_tank", first_stage_ammo=0),
+        timestamp=103.0,
+    )
+    assert empty.flags["ammo_empty"] is True
+
+    processor.process(
+        _vehicle(),
+        _indicators(army="tank", vehicle_type="test_tank", first_stage_ammo=-1),
+        timestamp=104.0,
+    )
+    after_unavailable = processor.process(
+        _vehicle(),
+        _indicators(army="tank", vehicle_type="test_tank", first_stage_ammo=0),
+        timestamp=105.0,
+    )
+    assert "ammo_empty" not in after_unavailable.flags
+
+
+def test_same_match_respawn_resets_processor_and_suppresses_first_frame():
+    import time
+
+    from wt_server import TelemetryService
+    from wt_telemetry import ConnectionState, Indicators, MapInfo, VehicleState
+
+    current_indicators = Indicators(
+        valid=True,
+        army="tank",
+        vehicle_type="test_tank",
+        speed=6.0,
+        crew_total=4,
+        crew_current=4,
+        first_stage_ammo=0,
+        gunner_state=0,
+        driver_state=0,
+        lws=-1,
+    )
+
+    class FakeClient:
+        def get_indicators(self):
+            return ConnectionState.IN_BATTLE, current_indicators, MapInfo(valid=True)
+
+        def get_state(self):
+            return VehicleState(valid=True, ias_kmh=0, load_factor=1)
+
+    service = TelemetryService(FakeClient())
+    service._state = ConnectionState.IN_BATTLE
+    service._battle_entry_ts = time.time() - 60
+    service._life_entry_ts = time.time() - 60
+    service._dead = True
+    service._dead_inert_seen = True
+    service._last_deaths = 1
+    service._combat = {"my": {"deaths": 1}}
+
+    service.processor.process(
+        VehicleState(valid=True, load_factor=1),
+        Indicators(
+            valid=True,
+            army="tank",
+            vehicle_type="test_tank",
+            first_stage_ammo=6,
+        ),
+        timestamp=time.time() - 1,
+    )
+    assert service.processor._ammo_baseline_seen is True
+
+    service._poll_fast()
+
+    assert service._dead is False
+    assert service._processed is not None
+    assert service._processed["flags"] == {}
+    assert service._processed["alerts"] == []
+    assert service.processor._ammo_baseline_seen is False
+    assert service._life_entry_ts is not None
+    assert time.time() - service._life_entry_ts < 1
 
 
 def test_vehicle_profile_exact_entries_keep_precise_overspeed_limits():

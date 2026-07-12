@@ -249,7 +249,14 @@ class TelemetryProcessor:
         self._ab_elapsed = 0.0
         self._g_max: float | None = None
         self._g_min: float | None = None
-        self._ammo_max: float | None = None        # 本架次见过的最大一级弹（满弹估计）
+        self._reset_ammo_tracking()
+
+    def _reset_ammo_tracking(self) -> None:
+        """清空本次出生的一级弹药基线。"""
+        self._ammo_max: float | None = None        # 本次出生见过的最大一级弹（满弹估计）
+        self._ammo_last_valid: float | None = None
+        self._ammo_baseline_seen = False
+        self._ammo_empty_latched = False
 
     # -- 主处理 ------------------------------------------------------------
 
@@ -531,28 +538,42 @@ class TelemetryProcessor:
                 self._add(result, "crew_loss", "warning",
                           f"乘员阵亡 {crew_tot - crew_cur:.0f} 人（{crew_cur:.0f}/{crew_tot:.0f}）", crew_cur)
 
-        # 乘员岗位状态：实测为 0/1；只把明确的 0 视为对应岗位失能，避免未知值误报。
-        if gunner_state == 0:
-            self._add(result, "gunner_disabled", "warning", "炮手失能，开火能力受影响", gunner_state)
-        if driver_state == 0:
-            self._add(result, "driver_disabled", "warning", "驾驶员失能，机动能力受影响", driver_state)
+        # 8111 岗位状态不是布尔值：0=正常，1=无人补位，2=正在补位；3 的语义尚未确认。
+        # 1/2 期间岗位均暂不可用，未知值只保留原始数值，不派生告警。
+        if gunner_state in (1, 2):
+            message = "炮手正在补位，暂时无法开火" if gunner_state == 2 else "炮手失能，暂无乘员补位"
+            self._add(result, "gunner_disabled", "warning", message, gunner_state)
+        if driver_state in (1, 2):
+            message = "驾驶员正在补位，暂时无法机动" if driver_state == 2 else "驾驶员失能，暂无乘员补位"
+            self._add(result, "driver_disabled", "warning", message, driver_state)
 
         # 一级弹药（炮塔待发弹仓）：打空后再开火需从备弹长装填。
         # 各车满弹量不同，用本架次见过的最大值作满弹估计，按比例自适应告警。
-        if ammo is not None:
+        if ammo is None or ammo < 0:
+            # -1/缺失是不可用哨兵值。丢失有效性后必须重新观察正数基线。
+            self._reset_ammo_tracking()
+        elif ammo > 0:
+            self._ammo_baseline_seen = True
+            self._ammo_empty_latched = False
             if self._ammo_max is None or ammo > self._ammo_max:
                 self._ammo_max = ammo
             ratio = cfg.get("ammo_low_ratio", 0.3)
             low_thr = (self._ammo_max or 0) * ratio
-            if ammo <= 0:
-                self._add(result, "ammo_empty", "warning",
-                          "一级弹药耗尽，装填变慢", ammo)
-            elif self._ammo_max and self._ammo_max > 3 and ammo <= low_thr:
+            if self._ammo_max and self._ammo_max > 3 and ammo <= low_thr:
                 self._add(result, "ammo_low", "info",
                           f"一级弹药偏少：剩 {ammo:.0f}/{self._ammo_max:.0f} 发", ammo)
+            self._ammo_last_valid = ammo
+        else:
+            # 只有本次出生先见过正数，并明确从正数降到 0，才锁存“耗尽”。
+            if self._ammo_baseline_seen and self._ammo_last_valid is not None and self._ammo_last_valid > 0:
+                self._ammo_empty_latched = True
+            if self._ammo_empty_latched:
+                self._add(result, "ammo_empty", "warning",
+                          "一级弹药耗尽，装填变慢", ammo)
+            self._ammo_last_valid = ammo
 
-        # 被激光照射（LWS：-1 表示无设备/未被照射，>=0 视为告警；语义待进一步确认）
-        if lws is not None and lws >= 0 and cfg.get("laser_warning_enable", True):
+        # LWS：-1=无设备，0=待机，1=正在告警，2=设备损坏。
+        if lws == 1 and cfg.get("laser_warning_enable", True):
             self._add(result, "laser_warning", "critical",
                       "遭激光照射（可能被锁定/测距）", lws)
 

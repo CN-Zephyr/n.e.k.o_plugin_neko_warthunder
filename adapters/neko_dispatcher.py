@@ -523,6 +523,7 @@ def _recommended_reply_line(event: BattleEvent) -> str:
             "thanks": "哼，知道就好。",
             "affirmative": "收到，跟你走。",
             "negative": "收到，先不冒险。",
+            "well_done": "哼，那当然。",
         }
         return replies.get(command, "收到。")
     if event.event_id == "stall_risk":
@@ -916,6 +917,7 @@ def _radio_command_label(payload: dict[str, Any]) -> str:
         "thanks": "感谢",
         "affirmative": "肯定",
         "negative": "否定",
+        "well_done": "干得好",
     }
     return labels.get(command, "无线电口令")
 

@@ -1,6 +1,6 @@
-# D-B5｜事件 → 输入字段需求清单（v1 · RB 空战）
+# D-B5｜事件 → 输入字段需求清单（v1 + 已接入 V2 / 多载具域）
 
-> 状态：v0.2（汇合后已重画边界）· 范围：v1 RB 空战，不含陆战/海战，不碰 map/PNG
+> 状态：v0.3（2026-07-10 真机同步）· 范围：v1 主链路 + 已接入的陆战/无线电/V2 态势边界；插件不直接解析 map/PNG
 > 用途：① 事件 → 数据层来源(flag/字段) 映射；② DTO 直接采用数据层接口文档
 > 关联：数据层 `../data_layer/data process/后端接口文档.md`（插件内 vendored）
 
@@ -23,8 +23,8 @@
 | `overheat` | flags `engine_overheat`/`engine_overheat_critical`（OR `oil_overheat*`）；或 `hud_notices.feed[].code=engine_overheat/oil_overheat` | flags 走边沿+debounce；hud_notices 按 id 去重（不抢占） | temp_c；或 safe notice code |
 | `low_fuel` | flags `fuel_low`/`fuel_critical` | 同上（仅 IN_FLIGHT） | fuel_fraction, fuel_remaining_sec |
 | `low_alt_danger` | flags `altitude_low`/`altitude_critical` + `radio_altitude_m`（AGL，优先） | 同上；`altitude_m` 仅作为 MSL/海拔上下文，不作为优先离地判断 | radio_altitude_m, altitude_m, climb_ms |
-| `ground_gunner_disabled` | flag `gunner_disabled` | 陆战域下边沿+debounce；只消费数据层明确岗位失能事实 | gunner_state, domain |
-| `ground_driver_disabled` | flag `driver_disabled` | 陆战域下边沿+debounce；只消费数据层明确岗位失能事实 | driver_state, domain |
+| `ground_gunner_disabled` | flag `gunner_disabled` | 兼容目录项；数据层保留状态，但插件不注册 Detector、不播报 | gunner_state, domain |
+| `ground_driver_disabled` | flag `driver_disabled` | 兼容目录项；数据层保留状态，但插件不注册 Detector、不播报 | driver_state, domain |
 | `spawn` | `state` not_in_battle→in_battle / 新 `vehicle_type` | 边沿一次 | vehicle_type |
 | `you_died` | `combat.feed[].is_my_death == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；不回退到 `vehicle_valid` 死亡播报 | cause, killer_name, killer_vehicle |
 | `you_killed` | `combat.feed[].is_my_kill == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；多杀合并 | victim, victim_vehicle |
@@ -33,6 +33,7 @@
 | `air_threat_nearby` | `proximity.events[].is_air == true` OR `situation.nearest_air_threat` / `situation.enemies[]` 空中目标进入 5000m | V2：边沿事实按 id 去重，连续态势按距离段/钟点去重；可在 IN_FLIGHT / COMBAT_STRESS 下提示 | distance_m, compass, clock, relative_deg |
 | `enemy_on_six` | `proximity.events[]` OR `situation.enemies[]` 中 `clock in 5/6/7` 或后向 `relative_deg` 且进入 5000m | V2：低置信后方威胁，不等同完整尾随判定 | distance_m, clock, relative_deg |
 | `tailing_risk` | 连续近距离后方 `proximity.events[]` OR 连续近距离后方 `situation.enemies[]` | V2+：保守持续后方威胁；不是完整 `being_tailed` | distance_m, clock, relative_deg |
+| `player_radio_command` | `chat[]` + `combat.self.source=manual` | 只接收手动身份匹配的自己发出的固定无线电口令；按 chat id 去重；不把 sender/msg/raw text 放进事件 payload | command, point, domain, source |
 
 ### 本次拍板
 - **overspeed → 合作者补进 `vehicle_profiles`**（never-exceed 逐机），我们消费其 flag。
@@ -42,6 +43,11 @@
 - `overspeed_warn` / `overspeed_critical` 已由数据层 v1.6 提供；2026-06-23 真机 dry_run 已验证字段名、触发节奏和 Arbiter 优先级基础链路。
 - `combat.feed`、`hud_notices`、ownership flag 已由数据层 v1.6 提供；插件侧已用真机 dry_run 验证 owned kill/death 字段可出现。2026-06-28 发现 `you_killed` 在 `CRITICAL_RISK` 下会被旧策略 scenario-gated，现已改为延迟保留并在危急解除后补播；后续仍需复测 id 单调性和 T-Safety prompt 合同。
 - `/api/identity` 已作为 player_name 注入方式；插件侧 Hosted UI/context/action seam 已完成，2026-06-23 真机已验证它能驱动 `combat.self.source=manual` 与 `is_my_kill` / `is_my_death` owned 路径。
+- 固定无线电互动已消费 `/api/telemetry.chat[]`，且 2026-07-10 已用两条自己发送的固定无线电完成真机 dry-run：chat id 递增、sender 与手动 identity 匹配、`进攻 D 点` 被标准化为 `attack_point/D`，raw sender/msg 未进入 payload/prompt。仍需由队友发送同口令，补“只接收自己”的反例验证。
+- 固定口令标准化已覆盖 `收到 -> affirmative`、`拒绝 -> negative`、`干得好/干得漂亮 -> well_done`；仍只处理手动 identity 匹配的自己消息。
+- 2026-07-10 陆战真机确认：`crew_current/crew_total` 可作为乘员损失事实；岗位字段不是布尔值。数据层现按 `0` 正常、`1` 无人补位、`2` 正在补位处理，`3` 只透传。
+- 数据层已把 LWS 收紧为仅 `lws == 1` 告警，并为一级弹药增加正数基线、负数无效处理和同局重生重置；离线回归 `457 passed`，下一步是真机 dry-run 复验。
+- 输出策略进一步收缩：乘员、岗位和一级弹药只作为 DTO/面板事实，不生成猫娘播报候选；陆战状态播报只保留真实激光告警。
 
 ### 待你确认
 - **两级 severity**：数据层已给 warning/critical 两级。建议顺势采用两级（critical→高 severity+可抢占；warning→中 severity），**推翻早期"v1 单级"暂定**。待你点头。

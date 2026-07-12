@@ -21,7 +21,8 @@ _SIMPLE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("follow_me", ("跟着我", "跟随我", "followme")),
     ("thanks", ("谢谢", "感谢", "thanks", "thankyou")),
     ("affirmative", ("收到", "是", "肯定", "affirmative", "yes")),
-    ("negative", ("不行", "否定", "negative", "no")),
+    ("negative", ("拒绝", "不行", "否定", "negative", "no")),
+    ("well_done", ("干得好", "干得漂亮", "干得不错", "welldone", "goodjob", "nicework")),
 )
 
 
