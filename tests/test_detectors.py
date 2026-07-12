@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
 from neko_warthunder.detectors._base import ConditionDetector, DetectorEngine
@@ -875,6 +877,42 @@ def test_air_situation_detector_suppresses_non_air_domains_and_dead_state():
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="air", dead=True, situation=situation)) is None
 
 
+@pytest.mark.parametrize(
+    "interruption",
+    [
+        C.BattleState(in_battle=True, indicators_valid=True, has_player=True, domain="ground"),
+        C.BattleState(in_battle=False, vehicle_valid=True, domain="air"),
+    ],
+)
+def test_air_situation_detector_rearms_after_mode_interruption(interruption):
+    det = AirSituationDetector()
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"enemies": [{"type": "aircraft", "distance_m": 4200, "relative_deg": 15}]},
+    )
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, interruption) is None
+    assert det.feed(interruption, active) is not None
+
+
+def test_air_situation_detector_does_not_rearm_on_transient_empty_frame():
+    det = AirSituationDetector()
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"enemies": [{"type": "aircraft", "distance_m": 4200, "relative_deg": 15}]},
+    )
+    empty = C.BattleState(in_battle=True, vehicle_valid=True, domain="air", situation=None)
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, empty) is None
+    assert det.feed(empty, active) is None
+
+
 def test_ground_target_detector_emits_safe_objective_awareness_once():
     det = GroundTargetDetector(distance_m=3000)
     cur = C.BattleState(
@@ -918,3 +956,39 @@ def test_ground_target_detector_suppresses_ground_domain_and_dead_state():
 
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="ground", situation=situation)) is None
     assert det.feed(C.BattleState(), C.BattleState(in_battle=True, vehicle_valid=True, domain="air", dead=True, situation=situation)) is None
+
+
+@pytest.mark.parametrize(
+    "interruption",
+    [
+        C.BattleState(in_battle=True, indicators_valid=True, has_player=True, domain="ground"),
+        C.BattleState(in_battle=False, vehicle_valid=True, domain="air"),
+    ],
+)
+def test_ground_target_detector_rearms_after_mode_interruption(interruption):
+    det = GroundTargetDetector(distance_m=3000)
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"ground_targets": [{"kind": "bombing_point", "grid": "C2", "distance_m": 900}]},
+    )
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, interruption) is None
+    assert det.feed(interruption, active) is not None
+
+
+def test_ground_target_detector_does_not_rearm_on_transient_empty_frame():
+    det = GroundTargetDetector(distance_m=3000)
+    active = C.BattleState(
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        situation={"ground_targets": [{"kind": "bombing_point", "grid": "C2", "distance_m": 900}]},
+    )
+    empty = C.BattleState(in_battle=True, vehicle_valid=True, domain="air", situation=None)
+
+    assert det.feed(C.BattleState(), active) is not None
+    assert det.feed(active, empty) is None
+    assert det.feed(empty, active) is None

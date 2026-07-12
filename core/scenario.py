@@ -26,6 +26,7 @@ _NAVAL_CONTACT_WINDOW_SECONDS = 20.0
 _GROUND_CONTACT_FALLBACK_M = 800.0
 _NAVAL_CONTACT_FALLBACK_M = 2500.0
 _AIR_CONTACT_FALLBACK_M = 5000.0
+_DOMAIN_STRESS_REASONS = frozenset({"maneuver", "air_contact", "surface_contact"})
 
 
 class ScenarioResolver:
@@ -35,6 +36,7 @@ class ScenarioResolver:
         self._stress_until: float = 0.0
         self._stress_reason_until: dict[str, float] = {}
         self._last_hud_id: int = -1
+        self._stress_domain: str | None = None
 
     def reset(self) -> None:
         self._prev_alive = False
@@ -42,6 +44,7 @@ class ScenarioResolver:
         self._stress_until = 0.0
         self._stress_reason_until.clear()
         self._last_hud_id = -1
+        self._stress_domain = None
 
     def resolve(self, state: BattleState, now: float, grace_seconds: float) -> str:
         scenario = self._classify(state, now, grace_seconds)
@@ -70,6 +73,9 @@ class ScenarioResolver:
             self._clear_runtime_stress()
             return OUT_OF_BATTLE
 
+        domain = _normalize_stress_domain(state.domain)
+        self._handle_domain_change(domain)
+
         if state.dead:
             return DEAD
 
@@ -97,10 +103,11 @@ class ScenarioResolver:
         self._stress_until = 0.0
         self._stress_reason_until.clear()
         self._last_hud_id = -1
+        self._stress_domain = None
 
     def _combat_stress(self, state: BattleState, now: float) -> bool:
-        domain = (state.domain or "").lower()
-        if domain in {"air", "heli"}:
+        domain = _normalize_stress_domain(state.domain)
+        if domain == "air":
             if state.g_now is not None and abs(state.g_now) >= _STRESS_G_THRESHOLD:
                 self._extend_stress("maneuver", now, _AIR_STRESS_WINDOW_SECONDS)
             if _has_close_air_contact(state):
@@ -132,6 +139,15 @@ class ScenarioResolver:
         self._expire_stress_reasons(now)
         return now < self._stress_until
 
+    def _handle_domain_change(self, domain: str) -> None:
+        if not domain:
+            return
+        if self._stress_domain is not None and domain != self._stress_domain:
+            for reason in _DOMAIN_STRESS_REASONS:
+                self._stress_reason_until.pop(reason, None)
+            self._stress_until = max(self._stress_reason_until.values(), default=0.0)
+        self._stress_domain = domain
+
     def _extend_stress(self, reason: str, now: float, seconds: float) -> None:
         until = now + seconds
         self._stress_until = max(self._stress_until, until)
@@ -149,6 +165,13 @@ def _damage_stress_window_seconds(domain: str) -> float:
     if domain == "naval":
         return _NAVAL_CONTACT_WINDOW_SECONDS
     return _AIR_STRESS_WINDOW_SECONDS
+
+
+def _normalize_stress_domain(domain: str | None) -> str:
+    normalized = (domain or "").lower()
+    if normalized == "heli":
+        return "air"
+    return normalized if normalized in {"air", "ground", "naval"} else ""
 
 
 def _has_close_air_contact(state: BattleState) -> bool:

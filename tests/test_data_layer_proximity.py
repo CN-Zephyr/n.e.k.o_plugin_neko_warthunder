@@ -42,6 +42,23 @@ def _indicators(**overrides):
     return SimpleNamespace(**data)
 
 
+def _assert_no_fixed_wing_derivatives(result):
+    assert result.fuel_kg is None
+    assert result.fuel_fraction is None
+    assert result.fuel_burn_rate_kgs is None
+    assert result.fuel_remaining_sec is None
+    assert result.afterburner_active is False
+    assert result.afterburner_elapsed_sec == 0.0
+    assert result.afterburner_max_sec is None
+    assert result.ias_kmh is None
+    assert result.aoa_deg is None
+    assert result.altitude_m is None
+    assert result.radio_altitude_m is None
+    assert result.g_now is None
+    assert result.g_max is None
+    assert result.g_min is None
+
+
 def test_proximity_thresholds_use_profile_without_type_error():
     from wt_proximity import resolve_proximity_thresholds
 
@@ -124,6 +141,79 @@ def test_ground_lws_warns_only_for_active_illumination_state():
         timestamp=110.0,
     )
     assert active.flags["laser_warning"] is True
+
+
+def test_ground_keeps_dto_fields_without_consuming_residual_flight_data():
+    from wt_processor import TelemetryProcessor
+
+    result = TelemetryProcessor().process(
+        _vehicle(
+            fuel_kg=1,
+            fuel_full_kg=100,
+            ias_kmh=2000,
+            aoa_deg=40,
+            altitude_m=10,
+            load_factor=15,
+            mach=3,
+        ),
+        _indicators(
+            army="tank",
+            vehicle_type="germ_pzkpfw_VI_ausf_h1_tiger",
+            throttle=1.2,
+            radio_altitude=5,
+            crew_total=5,
+            crew_current=5,
+            first_stage_ammo=6,
+            stabilizer=1,
+            gear=3,
+            gear_neutral=1,
+            gunner_state=0,
+            driver_state=0,
+            lws=1,
+        ),
+        timestamp=100.0,
+    )
+
+    assert result.vehicle_class == "ground"
+    assert result.crew_total == 5
+    assert result.crew_current == 5
+    assert result.ammo_first_stage == 6
+    assert result.gun_stabilizer is True
+    assert result.gear_position == 2
+    assert result.gunner_state == 0
+    assert result.driver_state == 0
+    assert result.flags == {"laser_warning": True}
+    _assert_no_fixed_wing_derivatives(result)
+
+
+def test_naval_and_unknown_ignore_residual_flight_data():
+    from wt_processor import TelemetryProcessor
+
+    for army, expected_class in (("ship", "naval"), ("unsupported", "unknown")):
+        result = TelemetryProcessor().process(
+            _vehicle(
+                fuel_kg=1,
+                fuel_full_kg=100,
+                ias_kmh=2000,
+                aoa_deg=40,
+                altitude_m=10,
+                load_factor=15,
+                mach=3,
+            ),
+            _indicators(
+                army=army,
+                vehicle_type="su_30mk2v_venezuela",
+                throttle=1.2,
+                radio_altitude=5,
+            ),
+            timestamp=100.0,
+        )
+
+        assert result.vehicle_class == expected_class
+        assert result.flags == {}
+        assert result.alerts == []
+        assert result.level == "info"
+        _assert_no_fixed_wing_derivatives(result)
 
 
 def test_ground_ammo_requires_positive_baseline_and_resets_on_unavailable_data():

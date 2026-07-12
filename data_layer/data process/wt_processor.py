@@ -241,6 +241,7 @@ class TelemetryProcessor:
     def reset(self) -> None:
         """清空跨调用的会话状态（切换载具 / 离开战局时调用）。"""
         self._cur_type: str | None = None
+        self._cur_class: str | None = None
         self._last_ts: float | None = None
         self._last_fuel: float | None = None      # 上次“燃油发生变化”时的油量
         self._last_fuel_ts: float | None = None    # 对应时间戳
@@ -269,10 +270,11 @@ class TelemetryProcessor:
         if is_heli:  # army 同为 air，但直升机单独归类，避免套用固定翼告警
             vehicle_class = "heli"
 
-        # 换载具 -> 重置会话状态（避免油耗/加力计时串味）
-        if vtype != self._cur_type:
+        # 换载具或类别 -> 重置会话状态（避免残留字段让跨域油耗/加力计时串味）
+        if vtype != self._cur_type or vehicle_class != self._cur_class:
             self.reset()
             self._cur_type = vtype
+            self._cur_class = vehicle_class
 
         cfg, matched, source, family = _merge_profile(
             self.profiles, vtype, army, self._family_rules
@@ -290,42 +292,41 @@ class TelemetryProcessor:
             profile_family=family,
             army=army,
             vehicle_class=vehicle_class,
-            fuel_kg=getattr(vehicle, "fuel_kg", None),
-            ias_kmh=getattr(vehicle, "ias_kmh", None),
-            aoa_deg=getattr(vehicle, "aoa_deg", None),
-            altitude_m=getattr(vehicle, "altitude_m", None),
-            radio_altitude_m=getattr(indicators, "radio_altitude", None),
-            afterburner_max_sec=cfg.get("afterburner_max_sec"),
         )
 
         if vehicle_class == "heli":
             # 直升机：燃油几乎用不完、过载拉不大、无加力，均禁用；
             # 失速/攻角/高度为固定翼概念不适用；改用涡环状态(VRS)告警。
             self._process_helicopter(vehicle, indicators, cfg, result)
-        else:
+        elif vehicle_class == "air":
+            result.fuel_kg = getattr(vehicle, "fuel_kg", None)
+            result.ias_kmh = getattr(vehicle, "ias_kmh", None)
+            result.aoa_deg = getattr(vehicle, "aoa_deg", None)
+            result.altitude_m = getattr(vehicle, "altitude_m", None)
+            result.radio_altitude_m = getattr(indicators, "radio_altitude", None)
+            result.afterburner_max_sec = cfg.get("afterburner_max_sec")
+
             self._process_fuel(vehicle, cfg, timestamp, result)
             self._process_afterburner(indicators, cfg, dt, result)
-            self._process_gforce(vehicle, cfg, result, enable_alerts=(vehicle_class == "air"))
-            # 失速 / 攻角 / 高度 / 发动机温度：仅对固定翼有意义
-            if vehicle_class == "air":
-                self._process_engine_temp(indicators, cfg, result)
-                # 超速不受起落架抑制（放起落架/襟翼时更易超速撕裂，反而更危险）
-                self._process_overspeed(vehicle, cfg, result)
-                # 起落架放下 = 起降构型（低空低速是有意为之），抑制失速/迎角/低高度告警，
-                # 避免着陆补给/起飞滑跑时刷假警。优先用可靠的 gear_state（指示灯归并），
-                # 因为部分机型（实测 J-15T）原始 gears 恒为 0.5，> 0.5 判据永不成立。
-                gear_state = getattr(indicators, "gear_state", None)
-                gears = getattr(indicators, "gears", None)
-                gear_down = bool(cfg.get("suppress_when_gear_down")) and (
-                    gear_state == "down"
-                    or (gear_state is None and gears is not None and gears > 0.5)
-                )
-                if not gear_down:
-                    self._process_stall(vehicle, cfg, result)
-                    self._process_aoa(vehicle, cfg, result)
-                    self._process_altitude(vehicle, cfg, result)
-            elif vehicle_class == "ground":
-                self._process_ground(indicators, cfg, result)
+            self._process_gforce(vehicle, cfg, result, enable_alerts=True)
+            self._process_engine_temp(indicators, cfg, result)
+            # 超速不受起落架抑制（放起落架/襟翼时更易超速撕裂，反而更危险）
+            self._process_overspeed(vehicle, cfg, result)
+            # 起落架放下 = 起降构型（低空低速是有意为之），抑制失速/迎角/低高度告警，
+            # 避免着陆补给/起飞滑跑时刷假警。优先用可靠的 gear_state（指示灯归并），
+            # 因为部分机型（实测 J-15T）原始 gears 恒为 0.5，> 0.5 判据永不成立。
+            gear_state = getattr(indicators, "gear_state", None)
+            gears = getattr(indicators, "gears", None)
+            gear_down = bool(cfg.get("suppress_when_gear_down")) and (
+                gear_state == "down"
+                or (gear_state is None and gears is not None and gears > 0.5)
+            )
+            if not gear_down:
+                self._process_stall(vehicle, cfg, result)
+                self._process_aoa(vehicle, cfg, result)
+                self._process_altitude(vehicle, cfg, result)
+        elif vehicle_class == "ground":
+            self._process_ground(indicators, cfg, result)
 
         # 计算最高等级
         for a in result.alerts:
