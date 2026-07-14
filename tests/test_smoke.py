@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
+import string
 import tomllib
 
 
@@ -40,27 +42,53 @@ def test_plugin_manifest_declares_hosted_ui_surface_and_files_exist():
     assert (_ROOT / "ui" / "panel.tsx").is_file()
 
 
+def test_plugin_manifest_locales_have_matching_keys_and_placeholders():
+    manifest = _manifest()
+    i18n = manifest["plugin"]["i18n"]
+    locale_dir = _ROOT / i18n["locales_dir"]
+    locale_names = {"en", "ja", "ko", "zh-CN", "zh-TW", "ru", "pt", "es"}
+    formatter = string.Formatter()
+
+    assert i18n["default_locale"] == "zh-CN"
+    assert {path.stem for path in locale_dir.glob("*.json")} == locale_names
+
+    bundles = {
+        locale: json.loads((locale_dir / f"{locale}.json").read_text(encoding="utf-8"))
+        for locale in locale_names
+    }
+    expected_keys = set(bundles[i18n["default_locale"]])
+    assert expected_keys == {"name", "description"}
+
+    for locale, bundle in bundles.items():
+        assert set(bundle) == expected_keys, locale
+        for key, value in bundle.items():
+            assert isinstance(value, str) and value.strip(), f"{locale}:{key}"
+            placeholders = {field for _, field, _, _ in formatter.parse(value) if field}
+            default_placeholders = {
+                field
+                for _, field, _, _ in formatter.parse(bundles[i18n["default_locale"]][key])
+                if field
+            }
+            assert placeholders == default_placeholders, f"{locale}:{key}"
+
+
 def test_hosted_ui_panel_groups_operator_state_in_chinese():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 
-    for section in ["连接状态", "战场状态", "飞行诊断", "起飞保护", "接近感知", "安全控制", "最近决策", "最近输出", "玩家身份"]:
+    for section in ["当前战局", "最近活动", "播报插话规则", "运行链路", "高级详情"]:
         assert section in panel
 
     for label in [
-        "模拟模式",
-        "场景",
-        "风险等级",
-        "雷达高度",
-        "当前 flags",
-        "当前压制",
-        "接近事件数",
-        "任务目标",
-        "最近目标网格",
-        "手动暂停",
-        "自动暂停",
-        "失败次数",
-        "插话策略",
-        "当前玩家",
+        "战雷游戏昵称",
+        "播报插话规则",
+        "战雷客户端",
+        "数据服务",
+        "插件识别",
+        "输出策略",
+        "猫娘接收",
+        "播报未启动",
+        "急停",
+        "安全保护",
     ]:
         assert label in panel
 
@@ -68,8 +96,107 @@ def test_hosted_ui_panel_groups_operator_state_in_chinese():
 def test_hosted_ui_panel_keeps_existing_actions_available():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 
-    for action_id in ["set_dry_run", "set_dialogue_intrusion_mode", "set_identity", "pause", "resume", "test_say"]:
+    for action_id in ["set_dry_run", "set_dialogue_intrusion_mode", "set_identity", "complete_onboarding", "pause", "resume", "test_say"]:
         assert action_id in panel
 
-    for label in ["急停", "恢复", "测试开口", "刷新状态", "不打断当前对话", "仅危急可打断", "允许打断当前对话", "保存", "清除"]:
+    for label in [
+        "开启战斗播报",
+        "输出模式",
+        "战斗播报",
+        "急停",
+        "恢复",
+        "测试开口",
+        "不打断当前对话",
+        "仅危急情况可打断",
+        "允许打断当前对话",
+        "保存昵称",
+        "清除昵称",
+    ]:
         assert label in panel
+
+
+def test_hosted_ui_panel_keeps_normal_and_emergency_broadcast_controls_visible():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert 'const detectOnly = state.dry_run !== false' in panel
+    assert "onClick={() => setDryRun(!detectOnly)}" in panel
+    assert '{detectOnly ? "开启战斗播报" : "停止战斗播报"}' in panel
+    assert 'const broadcastPaused = summary.kind === "paused" || summary.kind === "safety"' in panel
+    assert 'className="wt-emergency-control"' in panel
+    assert 'className="wt-emergency-stop"' in panel
+    assert 'ActionButton action={pauseAction} actionId="pause" tone="danger">急停</ActionButton>' in panel
+    assert 'ActionButton action={resumeAction} actionId="resume" tone="success">恢复</ActionButton>' in panel
+    assert "立即暂停新的战斗播报" in panel
+    assert 'className="wt-mode-toggle"' not in panel
+    assert 'className="wt-test-sound-action"' in panel
+    assert 'RefreshButton label="刷新状态"' in panel
+    assert "重新检测" not in panel
+
+    status_actions = panel.split("const statusActions = (", 1)[1].split("const bottomBar = (", 1)[0]
+    diagnostics = panel.split("const diagnostics = (", 1)[1]
+    assert "test_say" not in status_actions
+    assert "pauseAction" not in status_actions
+    assert "resumeAction" not in status_actions
+    assert status_actions.index("刷新状态") < status_actions.index("开启战斗播报")
+    assert "停止战斗播报" in status_actions
+    assert 'className="wt-diagnostics-summary"' in diagnostics
+    assert 'RefreshButton label="重新检查"' in diagnostics
+    assert 'className="wt-diagnostic-check"' in diagnostics
+    assert 'className="wt-advanced-details"' in diagnostics
+    assert "系统已待命，等待进入战局" in panel
+    assert "测试开口" in diagnostics
+    advanced_safety = diagnostics.split('title="安全控制"', 1)[1].split("/>", 1)[0]
+    assert "ButtonGroup" not in advanced_safety
+    assert "pauseAction" not in advanced_safety
+    assert "resumeAction" not in advanced_safety
+
+
+def test_hosted_ui_panel_follows_theme_and_keeps_footer_in_layout():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert "color-scheme: light dark" in panel
+    assert "@media (prefers-color-scheme: dark)" in panel
+    assert "grid-template-rows: 72px minmax(0, 1fr) auto" in panel
+    assert ".wt-content { min-height: 0; overflow-x: hidden; overflow-y: auto" in panel
+    assert ".wt-bottom { position: fixed" not in panel
+    assert "@media (max-width: 760px)" in panel
+
+
+def test_hosted_ui_panel_has_reopenable_first_run_onboarding_with_identity_setup():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert 'const onboardingRequired = state.onboarding?.required === true' in panel
+    assert 'useState(onboardingRequired)' in panel
+    assert 'props.api.call("complete_onboarding", { skipped })' in panel
+    assert "if (!onboardingRequired || onboardingAutoOpened) return" in panel
+    assert 'className="wt-settings-trigger"' in panel
+    assert 'aria-label="设置"' in panel
+    assert 'title="设置"' in panel
+    assert '重新查看教程' in panel
+    assert 'title={`新手教程 · ${onboardingTitles[onboardingStep]}`}' in panel
+    assert 'const onboardingTitles = ["设置昵称", "认识按钮"]' in panel
+    assert "先设置你的战雷游戏昵称" in panel
+    assert 'label="战雷游戏昵称"' in panel
+    assert "保存昵称并继续" in panel
+    assert "saveIdentityAndContinueOnboarding" in panel
+    assert "常用按钮都在固定位置" in panel
+    assert "开启 / 停止战斗播报" in panel
+    assert "急停 / 恢复" in panel
+    assert "测试开口" in panel
+    assert "刷新状态" in panel
+    assert "右上角齿轮" in panel
+    assert "进入任意一局 War Thunder" not in panel
+    assert "确认插件识别到第一条活动" not in panel
+
+
+def test_hosted_ui_panel_uses_truthful_output_and_identity_language():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert "已交给猫娘" in panel
+    assert "已播报" not in panel
+    assert "已开口" not in panel
+    assert "不是邮箱、数字账号 ID 或 Steam 名称" in panel
+    assert "不会选择其他玩家" in panel
+    assert 'safetyStatus === "tripped"' in panel
+    assert 'dataLayerMode === "starting"' in panel
+    assert "正在准备战雷数据服务" in panel

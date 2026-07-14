@@ -733,15 +733,14 @@ def test_free_text_sources_are_observed_as_blocked_and_dry_run_candidate_without
         module.time.time = original_time
 
 
-def test_test_say_is_blocked_by_dry_run():
+def test_test_say_is_allowed_by_explicit_user_action_during_dry_run():
     plugin = _plugin_for_action_tests()
     plugin.cfg.dry_run = True
 
     result = asyncio.run(plugin.test_say("hello"))
 
-    assert result["pushed"] is False
-    assert result["blocked"] == "dry_run"
-    assert plugin.pushed_messages == []
+    assert result["pushed"] is True
+    assert plugin.pushed_messages
 
 
 def test_test_say_is_blocked_by_manual_pause():
@@ -822,6 +821,42 @@ def test_dashboard_identity_uses_saved_player_name_before_combat_frame():
 
     assert payload["identity"]["player_name"] == "CN-Zephyr"
     assert payload["identity"]["saved_player_name"] == "CN-Zephyr"
+
+
+def test_dashboard_requires_onboarding_only_after_first_plugin_start(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    before_start = plugin._dashboard_payload(plugin.state)
+    plugin._startup_completed = True
+    after_start = plugin._dashboard_payload(plugin.state)
+
+    assert before_start["onboarding"] == {
+        "completed": False,
+        "required": False,
+        "trigger": "first_plugin_start",
+    }
+    assert after_start["onboarding"] == {
+        "completed": False,
+        "required": True,
+        "trigger": "first_plugin_start",
+    }
+
+
+def test_complete_onboarding_persists_first_start_dismissal(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin._startup_completed = True
+
+    result = asyncio.run(plugin.complete_onboarding(skipped=True))
+    payload = plugin._dashboard_payload(plugin.state)
+    saved = json.loads(plugin._runtime_state_path.read_text(encoding="utf-8"))
+
+    assert result["onboarding"]["completed"] is True
+    assert result["onboarding"]["skipped"] is True
+    assert payload["onboarding"]["required"] is False
+    assert saved["onboarding_completed_v1"] is True
+    assert saved["onboarding_skipped_v1"] is True
 
 
 def test_set_dialogue_intrusion_mode_persists_no_interrupt_policy(tmp_path):

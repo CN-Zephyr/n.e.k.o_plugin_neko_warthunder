@@ -2,6 +2,13 @@
 
 War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:8112`，把连续遥测整理成 Battle Awareness 事件，再经 Scenario / Arbiter / Safety / Dispatcher 决定是否让猫娘开口。
 
+## 兼容性
+
+- 插件 SDK：`>=0.1.0,<0.3.0`，推荐 `>=0.1.0,<0.2.0`。
+- N.E.K.O 宿主：面板使用 Hosted TSX UI，需要 N.E.K.O `v0.8.0` 或更新版本。
+- 显示环境：支持浅色/深色主题、桌面窗口、窄窗口和低高度窗口；主内容独立滚动，底部播报控制不会覆盖内容。
+- 当前面板以简体中文为主要操作语言；插件名称与简介已提供 8 个宿主 locale，完整面板国际化不属于本轮范围。
+
 ## 当前状态
 
 - M1 scaffold + M2 Battle Awareness 主链路已实现。
@@ -34,6 +41,7 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 - `you_killed` 已接入轻量多杀合并：owned kill 会合成一条带 `kill_count` 的 generic prompt；合并窗口按最近一次击杀滚动，连续战果先不抢话，等安静满 `kill_coalesce_window_seconds` 后再输出，并用 3 倍窗口作为最长等待兜底，避免长连杀永远不播；`CRITICAL_RISK` 下 owned kill 不抢播也不丢弃，会记录 `kill_deferred_critical_risk` 并在危急解除后按 `kill_coalesced` 补播；`COMBAT_STRESS` 下会按压力来源和载具域处理，空战/直升机或 `damage` 压力继续等，陆战/海战纯 `maneuver` 压力可在合并窗口后输出；死亡/critical 抢占仍可清空待播击杀。
 - L9 调参已接入起飞/滑跑保护：离地/低空判断仍优先使用 `radio_altitude_m`（AGL），`altitude_m` 只作海拔事实展示；但固定翼可能不稳定提供 AGL，因此出生/机场起飞仍保留 `takeoff_low_alt_grace_seconds=45` 的低空保护。AGL 可用时按 `takeoff_radio_altitude_enter_m=10` / `takeoff_radio_altitude_exit_m=40` 做贴地迟滞；AGL 不可用时，滑跑超速只在保护期内且起落架放下/运动中时压制，避免空中出生或收轮后真实超速被误压。不压 `stall_risk`、`overheat`、`low_fuel`、`you_died`。
 - Hosted UI 面板已完成一轮信息架构整理和中文化：连接状态、战场状态、安全控制、最近决策、最近输出分区清晰，主要状态标签、风险等级、场景、数据层模式和身份识别来源均显示中文。
+- 首次启动教程已精简为两步：先在教程内直接保存战雷游戏昵称，再说明开启/停止播报、急停/恢复、测试开口、刷新状态和设置入口的用途；用户可以跳过，也可以从设置中重新打开教程。
 - `tools/live_monitor.py` 的 Summary / Observe 摘要会保留 `kill_coalesced` 决策原因，并在输出被压住、过期丢弃或重复折叠时直接显示 `output_backpressure` / `event_expired` / `repeated_event_collapsed`；`observe.last_output_status` 还会带 `event_age_seconds` / `event_expires_at` / `target_lanlan` / `battle_reply_contract` / `live_reply_contract` / `max_reply_chars` / `plugin_owned_output` 等输出元数据。Decision detail / Output detail 会把 `selected`、`dry_run_enabled`、`kill_coalesced`、`output_backpressure`、`event_expired` 等原因翻译成中文可读解释，方便下一轮真机判断“没播/晚播”是合并、背压、过期丢弃、重复折叠、fallback session、短播报合同未被宿主消费，还是其他门控导致。
 - kill/death ownership 已完成真机 dry_run 与 `dry_run=false` 真实 push 验证；2026-06-23 已验证手动 identity 会反映到 `combat.self.source=manual`，空战 / 陆战 owned combat.feed 均可产生 `is_my_kill=true` 或 `is_my_death=true`，插件可生成 `you_killed` / `you_died` 并经 Arbiter / Dispatcher 输出。hudmsg / awards 等其他自由文本真实播报仍需单独 dry_run 安全验证。stall/low_alt/overheat/overspeed/low_fuel 等数值安全事件不被 T-Safety 阻塞，且本轮已观察到 dry_run 正向链路。
 - recovery 已评估并暂缓；当前不要打开 `wants_recovery`。
