@@ -214,7 +214,7 @@ def test_kill_praise_does_not_use_plugin_owned_blind_template():
     assert "临场" in call["parts"][0]["text"]
 
 
-def test_critical_safety_event_uses_plugin_owned_blind_output_by_default():
+def test_critical_safety_event_uses_respond_by_default_so_tts_can_speak():
     plugin = FakePlugin()
     timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
 
@@ -225,17 +225,33 @@ def test_critical_safety_event_uses_plugin_owned_blind_output_by_default():
 
     assert result.startswith("pushed(")
     call = plugin.calls[0]
+    assert call["visibility"] == []
+    assert call["ai_behavior"] == "respond"
+    assert "{MASTER_NAME}" in call["parts"][0]["text"]
+    assert "建议台词：拉起来，要撞地了！" in call["parts"][0]["text"]
+    assert call["metadata"]["plugin_owned_output"] is False
+    assert call["metadata"]["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    status = timeline.snapshot()["last_output_status"]
+    assert status["ai_behavior"] == "respond"
+    assert status["visibility"] == []
+    assert status["plugin_owned_output"] is False
+
+
+def test_critical_safety_event_can_opt_into_plugin_owned_blind_output():
+    plugin = FakePlugin()
+    plugin.cfg.plugin_owned_urgent_output_enabled = True
+
+    result = NekoDispatcher(plugin).push_event(
+        BattleEvent("low_alt_danger", level="critical", payload={"radio_altitude_m": 8}),
+        dry_run=False,
+    )
+
+    assert result.startswith("pushed(")
+    call = plugin.calls[0]
     assert call["visibility"] == ["chat"]
     assert call["ai_behavior"] == "blind"
     assert call["parts"] == [{"type": "text", "text": "拉起来，要撞地了！"}]
-    assert "{MASTER_NAME}" not in call["parts"][0]["text"]
-    assert "建议台词：" not in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is True
-    assert call["metadata"]["plugin_recommended_reply"] == "拉起来，要撞地了！"
-    status = timeline.snapshot()["last_output_status"]
-    assert status["ai_behavior"] == "blind"
-    assert status["visibility"] == ["chat"]
-    assert status["plugin_owned_output"] is True
 
 
 def test_nonurgent_battle_event_uses_respond_by_default_so_tts_can_speak():

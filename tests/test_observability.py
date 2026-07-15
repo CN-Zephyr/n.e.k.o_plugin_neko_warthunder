@@ -73,6 +73,50 @@ def test_debug_timeline_ring_buffer_is_opt_in_and_bounded():
     assert [r["stage"] for r in records] == ["detector_candidate", "arbiter_allowed"]
 
 
+def test_safe_activity_history_is_available_without_debug_timeline_and_bounded():
+    RuntimeTimeline = _timeline_api()
+    timeline = RuntimeTimeline(observability_enabled=False, max_events=2)
+
+    timeline.record_stage(
+        stage="detector_candidate",
+        outcome="candidate",
+        reason="detected",
+        event_id="stall_risk",
+        raw_payload={"text": UNSAFE_RAW},
+    )
+    assert timeline.snapshot()["recent_activity"] == []
+
+    for index in range(24):
+        timeline.record_stage(
+            stage="dispatcher_dry_run",
+            outcome="dry_run",
+            reason="dry_run_enabled",
+            event_id="stall_risk" if index % 2 else "low_alt_danger",
+            raw_payload={"text": UNSAFE_RAW},
+            prompt=UNSAFE_RAW,
+            safe_summary=UNSAFE_RAW,
+        )
+
+    snapshot = timeline.snapshot()
+    assert snapshot["recent_timeline"] == []
+    assert len(snapshot["recent_activity"]) == 20
+    assert snapshot["recent_activity"][0]["seq"] == 6
+    assert snapshot["recent_activity"][-1]["seq"] == 25
+    assert set(snapshot["recent_activity"][-1]) <= {
+        "seq",
+        "ts",
+        "stage",
+        "outcome",
+        "reason",
+        "event_id",
+        "edge",
+        "level",
+        "dry_run",
+        "pushed",
+    }
+    assert UNSAFE_RAW not in repr(snapshot["recent_activity"])
+
+
 def test_observability_records_metadata_without_raw_payload_or_prompt():
     RuntimeTimeline = _timeline_api()
     timeline = RuntimeTimeline(
@@ -262,5 +306,6 @@ def test_dashboard_observe_context_shape_is_safe_and_minimal():
 
     assert context["observe"]["enabled"] is False
     assert context["observe"]["last_decision"]["reason"] == "cooldown_active"
+    assert context["observe"]["recent_activity"] == []
     assert context["observe"]["recent_timeline"] == []
     assert "raw_payload" not in repr(context)

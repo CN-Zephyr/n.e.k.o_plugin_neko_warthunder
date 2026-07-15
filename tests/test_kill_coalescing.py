@@ -315,3 +315,32 @@ def test_ground_kill_praise_waits_during_surface_contact_stress():
     assert chosen.event_id == "you_killed"
     assert chosen.payload["domain"] == "ground"
     assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)
+
+
+def test_ground_kill_praise_flushes_at_max_hold_during_persistent_surface_contact():
+    arb = _arbiter()
+
+    first, _ = arb.decide(
+        [
+            BattleEvent(
+                "you_killed",
+                payload={"victim": "A", "domain": "ground", "stress_reasons": ["surface_contact"]},
+                ts=100.0,
+            )
+        ],
+        COMBAT_STRESS,
+        100.0,
+    )
+    before_cap, before_chain = arb.decide([], COMBAT_STRESS, 105.9)
+    chosen, chain = arb.decide([], COMBAT_STRESS, 106.1)
+
+    assert first is None
+    assert before_cap is None
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "scenario_gated_deferred(COMBAT_STRESS)"
+        for item in before_chain
+    )
+    assert chosen is not None
+    assert chosen.event_id == "you_killed"
+    assert chosen.payload["domain"] == "ground"
+    assert any(item["result"] == "spoken" and item["reason"] == "kill_coalesced" for item in chain)

@@ -30,10 +30,10 @@ def test_output_freshness_gate_passes_required_contracts():
     assert real_push["event_expires_at"] == 101.0
     assert real_push["target_lanlan"] == "Lanlan"
     assert real_push["reply_contract"] == "short_tts_line"
-    assert real_push["ai_behavior"] == "blind"
-    assert real_push["visibility"] == ["chat"]
+    assert real_push["ai_behavior"] == "respond"
+    assert real_push["visibility"] == []
     assert real_push["dialogue_policy_owner"] == "plugin"
-    assert real_push["plugin_owned_output"] is True
+    assert real_push["plugin_owned_output"] is False
     assert real_push["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert real_push["replace_pending"] is True
     assert real_push["interrupt_battle_event"] is True

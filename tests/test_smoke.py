@@ -75,7 +75,7 @@ def test_plugin_manifest_locales_have_matching_keys_and_placeholders():
 def test_hosted_ui_panel_groups_operator_state_in_chinese():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 
-    for section in ["当前战局", "最近活动", "播报插话规则", "运行链路", "高级详情"]:
+    for section in ["当前战局", "最近活动", "活动记录", "播报插话规则", "运行链路", "高级详情"]:
         assert section in panel
 
     for label in [
@@ -96,7 +96,18 @@ def test_hosted_ui_panel_groups_operator_state_in_chinese():
 def test_hosted_ui_panel_keeps_existing_actions_available():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 
-    for action_id in ["set_dry_run", "set_dialogue_intrusion_mode", "set_identity", "complete_onboarding", "pause", "resume", "test_say"]:
+    for action_id in [
+        "set_dry_run",
+        "set_dialogue_intrusion_mode",
+        "set_broadcast_frequency",
+        "set_broadcast_category",
+        "reset_broadcast_preferences",
+        "set_identity",
+        "complete_onboarding",
+        "pause",
+        "resume",
+        "test_say",
+    ]:
         assert action_id in panel
 
     for label in [
@@ -111,8 +122,20 @@ def test_hosted_ui_panel_keeps_existing_actions_available():
         "允许打断当前对话",
         "保存昵称",
         "清除昵称",
+        "播报频率",
+        "播报内容",
+        "一般安全提醒",
+        "固定无线电互动",
+        "危急安全提醒和阵亡提醒始终开启",
+        "恢复推荐播报设置",
+        "不影响昵称、插话规则和播报开关",
     ]:
         assert label in panel
+
+    assert 'props.api.call("set_broadcast_frequency", { frequency })' in panel
+    assert 'props.api.call("set_broadcast_category", { category, enabled })' in panel
+    assert 'props.api.call("reset_broadcast_preferences", {})' in panel
+    assert 'const enabled = broadcastCategories[option.value] !== false' in panel
 
 
 def test_hosted_ui_panel_keeps_normal_and_emergency_broadcast_controls_visible():
@@ -141,6 +164,14 @@ def test_hosted_ui_panel_keeps_normal_and_emergency_broadcast_controls_visible()
     assert "停止战斗播报" in status_actions
     assert 'className="wt-diagnostics-summary"' in diagnostics
     assert 'RefreshButton label="重新检查"' in diagnostics
+    assert 'useClipboard()' in panel
+    assert 'buildSafeDiagnosticSummary(state)' in panel
+    assert 'copyDiagnosticSummary()' in diagnostics
+    assert '"复制诊断摘要"' in diagnostics
+    assert "不含昵称、聊天、HUD、目标、载具、URL、PID、错误原文" in panel
+    safe_summary = panel.split("function buildSafeDiagnosticSummary", 1)[1].split("type AdvancedDetailItem", 1)[0]
+    for unsafe_field in ["identity", "player_name", "last_error", "vehicle_type", "latest_proximity", "nearest_ground_target"]:
+        assert unsafe_field not in safe_summary
     assert 'className="wt-diagnostic-check"' in diagnostics
     assert 'className="wt-advanced-details"' in diagnostics
     assert "系统已待命，等待进入战局" in panel
@@ -160,6 +191,21 @@ def test_hosted_ui_panel_follows_theme_and_keeps_footer_in_layout():
     assert ".wt-content { min-height: 0; overflow-x: hidden; overflow-y: auto" in panel
     assert ".wt-bottom { position: fixed" not in panel
     assert "@media (max-width: 760px)" in panel
+
+
+def test_hosted_ui_panel_exposes_safe_filterable_activity_history():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert 'recent_activity?: ObserveRecord[]' in panel
+    assert 'const allActivityItems = buildActivityItems(state, 20)' in panel
+    assert 'activeTab === "activity"' in panel
+    assert '>活动</button>' in panel
+    assert 'aria-label="筛选活动记录"' in panel
+    for label in ["已提交", "仅记录", "未输出"]:
+        assert label in panel
+    for explanation in ["已按偏好关闭", "对话保护中", "重复提醒已合并", "回放静默"]:
+        assert explanation in panel
+    assert "不保存玩家昵称、聊天或 HUD 原文" in panel
 
 
 def test_hosted_ui_panel_has_reopenable_first_run_onboarding_with_identity_setup():
@@ -197,6 +243,7 @@ def test_hosted_ui_panel_uses_truthful_output_and_identity_language():
     assert "已开口" not in panel
     assert "不是邮箱、数字账号 ID 或 Steam 名称" in panel
     assert "不会选择其他玩家" in panel
-    assert 'safetyStatus === "tripped"' in panel
+    assert "function safetyIsTripped" in panel
+    assert 'state.safety?.status === "tripped"' in panel
     assert 'dataLayerMode === "starting"' in panel
     assert "正在准备战雷数据服务" in panel

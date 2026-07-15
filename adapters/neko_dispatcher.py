@@ -8,12 +8,13 @@ dry_run 时短路、绝不真投。常驻场景上下文走 push_context(ai_beha
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Callable
 from typing import Any
 
-from ..core.contracts import BattleEvent
+from ..core.contracts import BattleEvent, broadcast_frequency_multiplier
 from .runtime_timeline import RuntimeTimeline
 from .text_safety import sanitize_event_payload
 
@@ -165,9 +166,10 @@ _RECOVERY_INTENT = "刚才的危险解除了，跟 {MASTER_NAME} 说句'好险�
 def _output_backpressure_seconds(plugin: Any) -> float:
     cfg = getattr(plugin, "cfg", None)
     try:
-        return max(0.0, float(getattr(cfg, "output_backpressure_seconds", 20.0)))
+        configured = max(0.0, float(getattr(cfg, "output_backpressure_seconds", 20.0)))
     except (TypeError, ValueError):
         return 20.0
+    return configured * broadcast_frequency_multiplier(getattr(cfg, "broadcast_frequency", "standard"))
 
 
 def _output_event_max_age_seconds(plugin: Any, event: BattleEvent | None = None) -> float:
@@ -237,7 +239,7 @@ def _plugin_owned_battle_output_enabled(plugin: Any) -> bool:
 
 def _plugin_owned_urgent_output_enabled(plugin: Any) -> bool:
     cfg = getattr(plugin, "cfg", None)
-    return bool(getattr(cfg, "plugin_owned_urgent_output_enabled", True))
+    return bool(getattr(cfg, "plugin_owned_urgent_output_enabled", False))
 
 
 def _should_use_plugin_owned_output(plugin: Any, event: BattleEvent, recommended_reply: str) -> bool:
@@ -340,6 +342,7 @@ def _resolve_target_lanlan(plugin: Any, event: BattleEvent | None = None) -> str
             if target:
                 return target
     except Exception:
+        # Character lookup is optional; fall through to the empty target.
         pass
 
     return ""
@@ -366,7 +369,6 @@ def _reply_style_contract(event: BattleEvent) -> str:
             return (
                 "Style: exactly one natural Chinese line; lost vehicle but note the trade gently; no slogan, no analysis."
             )
-        kill_count = 1
         try:
             kill_count = int(event.payload.get("kill_count") or 1)
         except (TypeError, ValueError):
@@ -648,7 +650,6 @@ def _domain_vocab_contract(event: BattleEvent) -> str:
 def _prompt_style_hint(event: BattleEvent) -> str:
     if event.event_id == "you_killed":
         domain = _event_domain(event)
-        kill_count = 1
         try:
             kill_count = int(event.payload.get("kill_count") or 1)
         except (TypeError, ValueError):
@@ -764,6 +765,7 @@ def _fact_line(event: BattleEvent) -> str:
         try:
             bits.append("AGL {:.0f}m".format(p["radio_altitude_m"]))
         except (ValueError, TypeError):
+            # Ignore malformed optional telemetry and keep the remaining facts.
             pass
     for key, fmt in order:
         if key == "altitude_m" and has_radio_altitude:
@@ -772,6 +774,7 @@ def _fact_line(event: BattleEvent) -> str:
             try:
                 bits.append(fmt.format(p[key]))
             except (ValueError, TypeError):
+                # Ignore malformed optional telemetry and keep the remaining facts.
                 pass
     return "、".join(bits)
 
@@ -831,6 +834,7 @@ def _proximity_fact(event_id: str, payload: dict[str, Any]) -> str:
         if distance is not None:
             detail.append("距离{:.0f}m".format(float(distance)))
     except (TypeError, ValueError):
+        # Invalid optional distance does not invalidate the proximity event.
         pass
 
     return base if not detail else f"{base}（{'，'.join(detail)}）"
@@ -850,6 +854,7 @@ def _objective_fact(event_id: str, payload: dict[str, Any]) -> str:
         if distance is not None:
             detail.append("距离{:.0f}m".format(float(distance)))
     except (TypeError, ValueError):
+        # Invalid optional distance does not invalidate the objective event.
         pass
 
     return "任务目标点接近" if not detail else f"任务目标点接近（{'，'.join(detail)}）"
@@ -962,7 +967,6 @@ class NekoDispatcher:
     def push_event(self, event: BattleEvent, *, dry_run: bool) -> str:
         """把一个 BattleEvent 投给猫娘。dry_run 时只返回摘要、不真投。"""
         if dry_run:
-            text = self.build_prompt(event)
             if self.timeline:
                 self.timeline.record_stage(
                     stage="dispatcher_dry_run",
@@ -1158,11 +1162,16 @@ class NekoDispatcher:
             raise
         self._last_push_at = now
         self._last_push_priority = event.priority
-        self._last_event_push[event.event_id] = (now, event.level, recommended_reply)
+        self._last_event_push[event.event_id] = (
+            now,
+            event.level,
+            self._repeat_signature(event, recommended_reply),
+        )
         if ai_behavior == "respond" and self.plugin is not None:
             try:
                 setattr(self.plugin, "_last_battle_respond_at", now)
             except Exception:
+                # Host objects may reject optional bookkeeping attributes.
                 pass
         if self.timeline:
             self.timeline.record_stage(
@@ -1220,19 +1229,27 @@ class NekoDispatcher:
     def _is_repeated_event_collapsed(self, event: BattleEvent, recommended_reply: str, now: float) -> bool:
         if event.event_id not in REPEAT_COLLAPSE_EVENT_IDS:
             return False
-        last_at, last_level, last_reply = self._last_event_push.get(event.event_id, (-1e9, "", ""))
+        last_at, last_level, last_signature = self._last_event_push.get(event.event_id, (-1e9, "", ""))
         if now - last_at >= REPEAT_COLLAPSE_SECONDS:
             return False
         if event.level == "critical" and last_level != "critical":
             return False
-        return last_reply == recommended_reply
+        return last_signature == self._repeat_signature(event, recommended_reply)
+
+    @staticmethod
+    def _repeat_signature(event: BattleEvent, recommended_reply: str) -> str:
+        if recommended_reply:
+            return recommended_reply
+        keys = ("target_type", "distance_m", "clock", "grid", "temp_c", "temp_source", "domain", "source")
+        facts = {key: event.payload.get(key) for key in keys if event.payload.get(key) is not None}
+        return json.dumps(facts, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
     def _is_v2_live_evidence_gated(self, event: BattleEvent) -> bool:
         if event.event_id not in V2_LIVE_EVIDENCE_GATED_EVENTS:
             return False
         return not _v2_live_verified_real_output_enabled(self.plugin)
 
-    def push_context(self, text: str) -> None:
+    def push_context(self, text: str) -> bool:
         """注入/恢复常驻场景上下文（ai_behavior='read'，不触发回复）。"""
         target_lanlan = _resolve_target_lanlan(self.plugin)
         metadata = {"plugin": "neko_warthunder", "kind": "context"}
@@ -1260,6 +1277,7 @@ class NekoDispatcher:
                     safe_summary="context/read",
                     target_lanlan=target_lanlan,
                 )
+            return True
         except Exception as exc:  # noqa: BLE001 — 上下文注入失败不致命
             if self.timeline:
                 self.timeline.record_stage(
@@ -1273,3 +1291,4 @@ class NekoDispatcher:
                 )
             if self.logger:
                 self.logger.warning(f"push_context failed: {type(exc).__name__}")
+            return False

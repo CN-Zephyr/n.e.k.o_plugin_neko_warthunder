@@ -45,7 +45,7 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 
 ### 4-2 critical 是否抢占、怎么抢占
 - **抢占资格**：见 §2（危急集合 ∪ you_died，且数据层 critical）。
-- **怎么抢**：① **绕过全局限流**（`_last_output_at` 不拦它）；② **清空当前 warning 窗口缓冲**（被抢的 warning **丢弃、不补播**，避免抢占后补一串）；③ 仍受 Scenario 门控（但危急安全本就只在 IN_FLIGHT/COMBAT_STRESS 触发→入 CRITICAL_RISK）；④ 立即交给 dispatcher，按默认插件短句 `blind+plugin` 直出。
+- **怎么抢**：① **绕过全局限流**（`_last_output_at` 不拦它）；② **清空当前 warning 窗口缓冲**（被抢的 warning **丢弃、不补播**，避免抢占后补一串）；③ 仍受 Scenario 门控（但危急安全本就只在 IN_FLIGHT/COMBAT_STRESS 触发→入 CRITICAL_RISK）；④ 立即交给 dispatcher，默认走 bounded `respond` 短播报并进入 TTS，只有显式兼容开关才使用插件短句 `blind+plugin`。
 - **防抢占风暴**：两次 critical 之间至少隔 `critical_preempt_cooldown`（草稿 5s），**除非新 critical 的 priority 严格更高**（如 `you_died`(10) 可立刻打断正在播的 `stall_risk`(9)）。
 - **多 critical 同 tick**：按 priority 取最高 1 个（low_alt/stall=9、overspeed=8、you_died=10）。
 

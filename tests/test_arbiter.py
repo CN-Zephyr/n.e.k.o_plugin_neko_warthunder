@@ -111,6 +111,41 @@ def test_paused_suppresses_all():
     assert any(c["result"] == "suppressed" for c in chain)
 
 
+def test_disabled_general_safety_category_keeps_critical_safety_alerts():
+    config = WtConfig(broadcast_categories={"safety": False})
+    arb = Arbiter(SafetyGuard(config))
+
+    warning, warning_chain = arb.decide([BattleEvent("overheat", level="warning")], IN_FLIGHT, 1000.0)
+    critical, critical_chain = arb.decide([BattleEvent("stall_risk", level="critical")], CRITICAL_RISK, 1001.0)
+
+    assert warning is None
+    assert any(item["reason"] == "broadcast_category_disabled" for item in warning_chain)
+    assert critical is not None and critical.event_id == "stall_risk"
+    assert any(item["result"] == "spoken" for item in critical_chain)
+
+    buffered_config = WtConfig()
+    buffered_arb = Arbiter(SafetyGuard(buffered_config))
+    buffered_arb.decide([BattleEvent("low_fuel", level="warning")], IN_FLIGHT, 2000.0)
+    buffered_arb.decide([BattleEvent("overheat", level="warning")], IN_FLIGHT, 2001.0)
+    buffered_config.broadcast_categories = {"safety": False}
+    flushed, flush_chain = buffered_arb.decide([], IN_FLIGHT, 2013.0)
+    assert flushed is None
+    assert any(item["reason"] == "broadcast_category_disabled_on_flush" for item in flush_chain)
+
+
+def test_disabled_lifecycle_category_keeps_death_alert():
+    config = WtConfig(broadcast_categories={"lifecycle": False})
+    arb = Arbiter(SafetyGuard(config))
+
+    spawn, spawn_chain = arb.decide([BattleEvent("spawn")], SPAWNING, 1000.0)
+    death, death_chain = arb.decide([BattleEvent("you_died", level="critical")], DEAD, 1001.0)
+
+    assert spawn is None
+    assert any(item["reason"] == "broadcast_category_disabled" for item in spawn_chain)
+    assert death is not None and death.event_id == "you_died"
+    assert any(item["result"] == "spoken" for item in death_chain)
+
+
 def test_window_flush_dropped_if_scenario_changed():
     arb = _arb()
     a, _ = arb.decide([BattleEvent("overheat", level="warning")], IN_FLIGHT, 1000.0)

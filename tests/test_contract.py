@@ -214,3 +214,30 @@ def test_v2_live_verified_real_output_config_defaults_closed_and_can_be_enabled(
     assert WtConfig().v2_live_verified_real_output_enabled is False
     assert WtConfig.from_mapping({}).v2_live_verified_real_output_enabled is False
     assert WtConfig.from_mapping({"v2_live_verified_real_output_enabled": True}).v2_live_verified_real_output_enabled is True
+
+
+def test_broadcast_preferences_default_to_current_standard_behavior():
+    config = WtConfig.from_mapping({})
+
+    assert config.broadcast_frequency == "standard"
+    assert config.broadcast_categories == {
+        "safety": True,
+        "combat": True,
+        "radio": True,
+        "awareness": True,
+        "lifecycle": True,
+    }
+
+
+def test_broadcast_preferences_normalize_invalid_frequency_and_partial_categories():
+    config = WtConfig.from_mapping(
+        {
+            "broadcast_frequency": "unknown",
+            "broadcast_categories": {"radio": False, "unrecognized": False},
+        }
+    )
+
+    assert config.broadcast_frequency == "standard"
+    assert config.broadcast_categories["radio"] is False
+    assert config.broadcast_categories["safety"] is True
+    assert "unrecognized" not in config.broadcast_categories

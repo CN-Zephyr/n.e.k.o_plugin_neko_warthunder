@@ -61,7 +61,7 @@ Current plugin-owned dialogue behavior:
 
 - `plugin_reply_hint_enabled=true` by default: the plugin adds a deterministic short recommended line to the prompt and metadata so the LLM has a concrete one-line target.
 - `plugin_owned_battle_output_enabled=false` by default: non-urgent battle cues use bounded `respond` with `plugin_recommended_reply`, giving the host LLM room for short, domain-aware polish while keeping War Thunder facts and safety constraints plugin-owned.
-- `plugin_owned_urgent_output_enabled=true` by default: urgent safety cues still use plugin-owned direct output with `visibility=["chat"]` and `ai_behavior="blind"` to reduce latency for life-or-death warnings.
+- `plugin_owned_urgent_output_enabled=false` by default: urgent safety cues use `ai_behavior="respond"` so the catgirl response reaches TTS. Plugin-owned direct chat output remains an explicit opt-in for deployments that prefer lower latency over speech.
 - `plugin_owned_blind_output_enabled=false` by default: this remains the explicit force-all direct-output switch, while normal release behavior is split between bounded `respond` for non-urgent cues and plugin-owned direct output for urgent cues.
 - If `plugin_owned_battle_output_enabled=true`, deterministic non-urgent battle cues can also use the plugin-owned direct-output path for deliberate experiments or stricter no-polish deployments.
 

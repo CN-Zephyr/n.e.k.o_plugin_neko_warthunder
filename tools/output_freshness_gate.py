@@ -3,8 +3,10 @@
 This gate is synthetic and host-free. It proves that real battle-event
 ``push_message`` calls carry plugin-owned delivery and dialogue policy:
 queue coalescing, event age/expiry, target session, and the plugin-side short
-TTS prompt contract. It also proves expired events are dropped before real push
-and dry_run decisions remain side-effect-free.
+TTS prompt contract. Critical cues use host-generated speech by default so they
+reach TTS; plugin-owned blind output remains an explicit compatibility option.
+The gate also proves expired events are dropped before real push and dry_run
+decisions remain side-effect-free.
 """
 
 from __future__ import annotations
@@ -109,8 +111,8 @@ def _case_real_push_contract(failures: list[dict[str, str]]) -> dict[str, Any]:
     status = timeline.snapshot().get("last_output_status") or {}
     _expect_equal(failures, "real_push_contract", "call.coalesce_key", call.get("coalesce_key"), BATTLE_EVENT_COALESCE_KEY)
     _expect_equal(failures, "real_push_contract", "call.target_lanlan", call.get("target_lanlan"), "Lanlan")
-    _expect_equal(failures, "real_push_contract", "call.ai_behavior", call.get("ai_behavior"), "blind")
-    _expect_equal(failures, "real_push_contract", "call.visibility", call.get("visibility"), ["chat"])
+    _expect_equal(failures, "real_push_contract", "call.ai_behavior", call.get("ai_behavior"), "respond")
+    _expect_equal(failures, "real_push_contract", "call.visibility", call.get("visibility"), [])
     _expect_required_metadata(failures, "real_push_contract", metadata)
     _expect_required_status_metadata(failures, "real_push_contract.status", status)
     _expect_equal(failures, "real_push_contract", "metadata.event_age_seconds", metadata.get("event_age_seconds"), 3.0)
@@ -334,7 +336,7 @@ def _expect_required_metadata(failures: list[dict[str, str]], case: str, metadat
         "reply_contract": BATTLE_REPLY_CONTRACT,
         "reply_max_chars": BATTLE_REPLY_MAX_CHARS,
         "dialogue_policy_owner": "plugin",
-        "plugin_owned_output": True,
+        "plugin_owned_output": False,
         "plugin_quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
         "host_callback_contract_version": HOST_CALLBACK_CONTRACT_VERSION,
     }
@@ -372,7 +374,7 @@ def _expect_required_status_metadata(failures: list[dict[str, str]], case: str, 
         "reply_contract": BATTLE_REPLY_CONTRACT,
         "reply_max_chars": BATTLE_REPLY_MAX_CHARS,
         "dialogue_policy_owner": "plugin",
-        "plugin_owned_output": True,
+        "plugin_owned_output": False,
         "plugin_quiet_window_policy": HOST_QUIET_WINDOW_POLICY,
         "host_callback_contract_version": HOST_CALLBACK_CONTRACT_VERSION,
     }

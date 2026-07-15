@@ -13,7 +13,7 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 
 - M1 scaffold + M2 Battle Awareness 主链路已实现。
 - T1A Hosted UI Integration + T1B Minimal Panel 已完成，surface/context/action smoke 已通过。
-- T4 集成测试已完成；T-Safety output text sanitizer 已完成；T-Observe runtime decision timeline 已完成轻量实现；T-Live live monitor summary tool 已完成；T-Output output backpressure guard 已完成；T-Output-Freshness-Gate 输出新鲜度门禁已完成；T-Vehicle-Profile-ID-Audit 载具 id 口径门禁已完成；T-Host-Callback-Contract-Reservation 通用宿主 callback contract 预留已完成；T-Host-Contract-Gate 宿主短播报/用户聊天静默兼容门禁已完成（仅作为本地兼容/实验检查，不要求为本插件写入宿主专用核心逻辑）；T-Ownership-Replay-Gate 第三方样本 ownership 回放门禁已完成；T-Kill-Coalesce 多杀合并已完成；L8 data-layer subprocess orchestration 已完成最小编排；`/api/identity` Hosted UI/action 接缝已完成；V2 proximity / objective awareness 非真机依赖部分已完成，并新增 `tools/v2_readiness.py` / `tools/v2_release_matrix.py` / `tools/v2_output_policy_gate.py` / `tools/v2_completion_gate.py` / `tools/rc_handoff_report.py` 作为 V2 收口汇总、能力矩阵、真实输出策略、完成度门禁和 RC 交接报告入口；当前逻辑自检以 `445/445 passed` 为准。
+- T4 集成测试已完成；T-Safety output text sanitizer 已完成；T-Observe runtime decision timeline 已完成轻量实现；T-Safe-Activity 默认安全活动摘要与筛选页已完成；T-Safe-Diagnostics 白名单诊断摘要与一键复制已完成；T-Live live monitor summary tool 已完成；T-Output output backpressure guard 已完成；T-Output-Freshness-Gate 输出新鲜度门禁已完成；T-Vehicle-Profile-ID-Audit 载具 id 口径门禁已完成；T-Host-Callback-Contract-Reservation 通用宿主 callback contract 预留已完成；T-Host-Contract-Gate 宿主短播报/用户聊天静默兼容门禁已完成（仅作为本地兼容/实验检查，不要求为本插件写入宿主专用核心逻辑）；T-Ownership-Replay-Gate 第三方样本 ownership 回放门禁已完成；T-Kill-Coalesce 多杀合并已完成；L8 data-layer subprocess orchestration 已完成最小编排；`/api/identity` Hosted UI/action 接缝已完成；Hosted UI 设置页已加入安静/标准/活跃三档非危急播报频率，以及一般安全、战果、固定无线电、态势感知、开场收尾五类偏好开关，并支持一键恢复标准频率和全部普通类别；critical 安全和阵亡提醒始终保留；V2 proximity / objective awareness 非真机依赖部分已完成，并新增 `tools/v2_readiness.py` / `tools/v2_release_matrix.py` / `tools/v2_output_policy_gate.py` / `tools/v2_completion_gate.py` / `tools/rc_handoff_report.py` 作为 V2 收口汇总、能力矩阵、真实输出策略、完成度门禁和 RC 交接报告入口；当前逻辑自检以 `493/493 passed` 为准。
 - 2026-06-21 / 2026-06-23 真机 smoke 已通过：Hosted UI context/action、pause/resume 安全门、spawn、overspeed warning/critical、low_fuel warning/critical、low_alt warning/critical、stall warning/critical、overheat warning/critical、identity manual seam、owned kill/death ownership、`you_killed` / `you_died` dry_run 决策链路、`dry_run=false` 真实 push 输出均正常。
 - 数据层 `v1.6` 已合并到当前独立插件仓库，包含 `overspeed_warn` / `overspeed_critical`、增强 `combat.feed`、`is_my_kill` / `is_my_death`、`/api/identity`、`replay: true` 降级、`hud_notices`、`awards`。
 - 数据层字段缺口不再是“等待字段补齐”；插件侧已分项接入 `v1.6` DTO，剩余重点是真机 / 样本接缝验证。
@@ -37,10 +37,10 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 - `tools/release_readiness.py` 已作为离线汇总入口：不启动前后端、不依赖 War Thunder，默认只聚合 logic tests、pytest、RC 文档审计、vehicle profile id audit、release defaults gate、output freshness gate、host contract gate、free-text gate、replay gate、ownership replay gate、deferred HUD gate、mode/domain boundary gate、proximity gate、V2 readiness summary、V2 release matrix、final smoke packet、synthetic replay，以及宿主存在时的本地宿主兼容检查 / plugin check；需要把本地大样本报告也纳入时显式加 `--include-local-sample`。`release_scope` 会直接列出 `ship_status`、free-text 真实播报 blocker、样本未证明项和下一步动作，`handoff` / `handoff_status` 会合并 v1 发布状态与 V2 live evidence 缺口；通过后再进入最后一轮真机 smoke。
 - `T-Observe` 已接入 Hosted UI `observe` context：普通模式保留最近一次事件/决策/输出摘要，debug 模式才返回内存 ring buffer timeline。
 - 战雷上下文注入已改为遥测状态驱动：插件启动时不再立刻把猫娘切进战雷副驾驶语境；只有 `:8112 /api/telemetry` 从 `offline` 进入可用状态后才通过 `read` 注入战雷上下文，断开或回到 `offline` 后再通过 `read` 注入恢复日常聊天信号。状态面板会暴露 `game_context_active`，便于真机确认“插件启用”和“战雷语境启用”不是同一个开关。
-- `T-Output` 已在真实 `push_message` 前接入输出背压：`output_backpressure_seconds` 窗口内压住同优先级或更低优先级事件，避免主机回复队列堆积；`you_killed`、`you_died` 和 critical 安全事件可通过，避免击杀夸夸被普通过载提示吃掉。危急动作类默认用确定短句 `blind+plugin` 直出，降低生死级提醒延迟；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和战斗结束走 bounded `respond`，允许猫娘在短话范围内带一点情绪、玩笑或陪伴感，但不得编敌情、方位、锁定、击杀、威胁、损伤；态势/目标类只能说已观测到的方位、距离和目标类型，缺项别补。输出会带统一 `coalesce_key=neko_warthunder:battle_event`、事件年龄 / 过期时间 metadata（`event_age_seconds` / `event_expires_at`）、可解析到的 `target_lanlan`、短播报合同（`battle_reply_contract=short_tts_line` / `live_reply_contract=short_tts_line` / `max_reply_chars=28`），以及通用 `host_callback_contract` 预留块，方便真机排查 fallback session / 晚播来源；`output_event_max_age_seconds` 默认 8s，但低空/超速/接近/后方威胁/目标点等强时效战术提示会使用更短的新鲜度窗口，`you_killed` 使用 30s 专用窗口以覆盖脱战后合并补播，真实 push 前直接丢弃过期旧事件；同类安全提示短窗重复会记录为 `repeated_event_collapsed`，减少连续“松杆/过载”刷屏。
+- `T-Output` 已在真实 `push_message` 前接入输出背压：`output_backpressure_seconds` 窗口内压住同优先级或更低优先级事件，避免主机回复队列堆积；`you_killed`、`you_died` 和 critical 安全事件可通过，避免击杀夸夸被普通过载提示吃掉。危急动作类默认走 bounded `respond`，由宿主生成受 28 字短播报合同约束的回复并进入 TTS；仅显式开启 `plugin_owned_urgent_output_enabled` 时才使用 `blind+plugin` 固定短句兼容模式。`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和战斗结束同样走 bounded `respond`，允许猫娘在短话范围内带一点情绪、玩笑或陪伴感，但不得编敌情、方位、锁定、击杀、威胁、损伤；态势/目标类只能说已观测到的方位、距离和目标类型，缺项别补。输出会带统一 `coalesce_key=neko_warthunder:battle_event`、事件年龄 / 过期时间 metadata（`event_age_seconds` / `event_expires_at`）、可解析到的 `target_lanlan`、短播报合同（`battle_reply_contract=short_tts_line` / `live_reply_contract=short_tts_line` / `max_reply_chars=28`），以及通用 `host_callback_contract` 预留块，方便真机排查 fallback session / 晚播来源；`output_event_max_age_seconds` 默认 8s，但低空/超速/接近/后方威胁/目标点等强时效战术提示会使用更短的新鲜度窗口，`you_killed` 使用 30s 专用窗口以覆盖脱战后合并补播，真实 push 前直接丢弃过期旧事件；同类安全提示短窗重复会记录为 `repeated_event_collapsed`，减少连续“松杆/过载”刷屏。
 - `you_killed` 已接入轻量多杀合并：owned kill 会合成一条带 `kill_count` 的 generic prompt；合并窗口按最近一次击杀滚动，连续战果先不抢话，等安静满 `kill_coalesce_window_seconds` 后再输出，并用 3 倍窗口作为最长等待兜底，避免长连杀永远不播；`CRITICAL_RISK` 下 owned kill 不抢播也不丢弃，会记录 `kill_deferred_critical_risk` 并在危急解除后按 `kill_coalesced` 补播；`COMBAT_STRESS` 下会按压力来源和载具域处理，空战/直升机或 `damage` 压力继续等，陆战/海战纯 `maneuver` 压力可在合并窗口后输出；死亡/critical 抢占仍可清空待播击杀。
 - L9 调参已接入起飞/滑跑保护：离地/低空判断仍优先使用 `radio_altitude_m`（AGL），`altitude_m` 只作海拔事实展示；但固定翼可能不稳定提供 AGL，因此出生/机场起飞仍保留 `takeoff_low_alt_grace_seconds=45` 的低空保护。AGL 可用时按 `takeoff_radio_altitude_enter_m=10` / `takeoff_radio_altitude_exit_m=40` 做贴地迟滞；AGL 不可用时，滑跑超速只在保护期内且起落架放下/运动中时压制，避免空中出生或收轮后真实超速被误压。不压 `stall_risk`、`overheat`、`low_fuel`、`you_died`。
-- Hosted UI 面板已完成一轮信息架构整理和中文化：连接状态、战场状态、安全控制、最近决策、最近输出分区清晰，主要状态标签、风险等级、场景、数据层模式和身份识别来源均显示中文。
+- Hosted UI 面板已完成 RC 信息架构整理和中文化：概览负责日常状态与播报控制，诊断负责解释运行链路，设置负责昵称和教程；重复的插话规则入口已删除，概览底栏保留唯一常驻控制。连接状态、战场状态、安全控制、最近决策、最近输出分区清晰，主要状态标签、风险等级、场景、数据层模式和身份识别来源均显示中文。
 - 首次启动教程已精简为两步：先在教程内直接保存战雷游戏昵称，再说明开启/停止播报、急停/恢复、测试开口、刷新状态和设置入口的用途；用户可以跳过，也可以从设置中重新打开教程。
 - `tools/live_monitor.py` 的 Summary / Observe 摘要会保留 `kill_coalesced` 决策原因，并在输出被压住、过期丢弃或重复折叠时直接显示 `output_backpressure` / `event_expired` / `repeated_event_collapsed`；`observe.last_output_status` 还会带 `event_age_seconds` / `event_expires_at` / `target_lanlan` / `battle_reply_contract` / `live_reply_contract` / `max_reply_chars` / `plugin_owned_output` 等输出元数据。Decision detail / Output detail 会把 `selected`、`dry_run_enabled`、`kill_coalesced`、`output_backpressure`、`event_expired` 等原因翻译成中文可读解释，方便下一轮真机判断“没播/晚播”是合并、背压、过期丢弃、重复折叠、fallback session、短播报合同未被宿主消费，还是其他门控导致。
 - kill/death ownership 已完成真机 dry_run 与 `dry_run=false` 真实 push 验证；2026-06-23 已验证手动 identity 会反映到 `combat.self.source=manual`，空战 / 陆战 owned combat.feed 均可产生 `is_my_kill=true` 或 `is_my_death=true`，插件可生成 `you_killed` / `you_died` 并经 Arbiter / Dispatcher 输出。hudmsg / awards 等其他自由文本真实播报仍需单独 dry_run 安全验证。stall/low_alt/overheat/overspeed/low_fuel 等数值安全事件不被 T-Safety 阻塞，且本轮已观察到 dry_run 正向链路。
@@ -53,7 +53,7 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 
 先读：
 - PROJECT_STATUS.md
-- docs/handoff-20260707.md
+- docs/handoff-20260715.md
 - docs/实现计划-codex.md
 - docs/真机验证-checklist.md
 - docs/统一测试前-离线检查.md
@@ -67,13 +67,14 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 当前状态：
 - Hosted UI 完成。
 - T4 集成测试完成。
-- 逻辑自检 445/445 passed。
+- 逻辑自检与 pytest 当前均为 493 个通过用例；`tests/run_logic_tests.py` 已兼容当前简单参数化隔离用例。
 - v1 RC 离线汇总入口：`uv run python tools\release_readiness.py --run`。
 - 数据层 v1.6 已合并，插件侧已分项接入 kill/death、identity、replay 静默和 overheat HUD notice，仍需真机接缝验证。
 - 合作者 2026-06-20 真实样本已做离线 replay 聚合报告；`tools/sample_replay.py` 现在会输出 `session_summary`、分组 validation verdict、P1/P2 `live_test_plan`、V2 proximity/situation/ground target 覆盖率、逐能力 `capability_evidence` 和 `--json` 机器可读结果，并在样本含 `replay=true` 时证明 Detector suppressed / output blocked。当前 `sample_replay` 会合并 `records/*/proximity.jsonl*` 旁路流并统计连续 `situation.enemies` 空中/后方证据；2026-06-20 本地样本重放后已观察到 `proximity_events=5317`、`proximity_air_events=5300`、`proximity_rear_events=49`、`situation_rear_air_threat_live_items=1906`，并可触发 `enemy_on_six=149` / `tailing_risk=44`，不再把“无 proximity 后方边沿”误报成“无后方态势证据”；目标点样本仍尚未进入 `ground_target_nearby` 的 3000m 触发阈值；`tools/v2_readiness.py` 会汇总 V2 离线 gate、已实现事件、安全输出合同和本地样本证据，明确区分 `v2_offline_gate_complete` 与 `v2_live_evidence_complete`；`tools/v2_release_matrix.py` 会把 `enemy_nearby`、`air_threat_nearby`、`enemy_on_six`、`tailing_risk`、`ground_target_nearby` 拆成 code/offline/live-evidence/real-output-policy 能力矩阵，并显示每项能力的 observed/triggered 计数，明确哪些能力只差真机证据且保持 dry_run-first；`tools/final_smoke_packet.py` 会生成最后一轮真机 smoke 的 go/no-go、必跑命令、V2 缺口、逐能力矩阵、runtime focus checks、remaining live actions 和安全边界，`tools/final_smoke_evidence_gate.py` 会验收 smoke 后的 evidence JSON，也可用 `--from-live-monitor local_test_logs\live_monitor_final.json --output local_test_logs\final_smoke_evidence.json` 从安全 monitor JSON/JSONL 扫描 fresh pushed metadata 并预填新鲜度/短播报草稿；猫猫实际回复可先用 `--safe-transcript-template --output local_test_logs\safe_transcript_metrics.json` 生成无原文 metrics 模板，再用 `--safe-transcript local_test_logs\safe_transcript_metrics.json` 合并行数、字数、是否续写、用户聊天静默和 critical 替换观察；没有结构化 metrics 时仍可用 `--update --confirm-*` 显式合并人工确认的旧 warning 替换、用户聊天静默和短句单行结果；`release_readiness.py` / `preflight.py` 也可用 `--final-smoke-evidence <path>` 把该 evidence gate 纳入统一复验；`tools/rc_handoff_report.py` 会生成维护者可读 RC 交接报告，把 V1 offline gate、V2 code/offline 完成度、live evidence pending、安全边界和下一步动作放在一起；`tools/offline_report.py` 可生成安全 Markdown 或 compact JSON，并在 Markdown / JSON 中提供 Team brief、Next test focus、V2 capability evidence、Operator quick checklist 与 Next live-test plan，列出已观察事件、dry_run 输出、模块 readiness、剩余真机范围和下一步缺口；`tools/rc_gap_summary.py` 可生成机器可读 RC 缺口摘要，把 sample-unproven 项和真正 blocked release 项分开；`sample_replay` / `offline_report` / `live_test_plan` 三个出口都会带上 T-Output 背压与 T-Kill-Coalesce 多杀合并复测项，且 `next_steps` 也会列出这两个现场动作；`tools/live_test_plan.py` 可把待测项展开成 Operator quick checklist 和“操作 / 监控 / 通过 / 失败 / 数据层缺口”的真机操作清单；`tools/live_monitor.py` 可在真机测试中安全汇总 health、Hosted UI context、telemetry ownership 计数、free-text dry_run-only 状态与逐源 blocked 摘要、replay 降级状态、T-Observe last decision/output、新鲜度/短播报 metadata 和日志异常计数，并可用 `--output` 自动创建目录保存安全 JSON；`tools/preflight.py` dry-run 输出现在带 Quick read，`--run --report-output <path>` 可在统一预检时一并运行 runtime smoke、保存报告，并在通过/失败时给出下一步操作提示。
 - 最终真机 smoke 的推荐 evidence 入口是交接包中的 `evidence_from_monitor_and_transcript`：`--from-live-monitor` 与 `--safe-transcript` 可在一条命令里合成 `local_test_logs\final_smoke_evidence.json`，分步命令只作为排障/补录路径。
 - `safe_transcript_metrics.json` 推荐由交接包里的 `safe_transcript_record` 生成：`--record-safe-transcript --reply-chars <count>` 只记录数字和确认 flag，不保存猫猫回复原文。
 - 真机前可先跑交接包里的 `evidence_rehearsal`：`--rehearsal-output-dir local_test_logs\final_smoke_rehearsal` 只演练证据流程，输出带 `rehearsal_only=true`，不能替代最终真机 evidence。
+- 2026-07-15 离线 RC 包：`D:\Users\zheng\Desktop\code\N-E-K-O-Warthunder\dist\neko_warthunder-0.1.0-20260715-offline-rc.neko-plugin`，文件 SHA256 `7255DA8636F7B5B5880EB5CDDBE05DABC694EAAECA2429AC6EE51D3FC0BB82EA`；inspect、payload verify、`tools/package_artifact_gate.py` 内容边界和临时安装 smoke 均通过，包含播报偏好、推荐设置恢复、安全活动中心和白名单诊断摘要，`.ruff_cache`、`local_samples` 等开发/样本内容已从包中排除。该包跳过了本轮真机证据，只能标记为 offline RC，不能标记为最终公开发布。
 - 2026-07-07 交接包：`D:\Users\zheng\Documents\Code\N-E-K-O-Warthunder\dist\neko_warthunder-0.1.0.neko-plugin`，SHA256 `960C20E35D2A516A96D2C3BD408123C3577505156DD527786C89BDDBCF828F6F`；release check / inspect / payload hash verify 已通过，包内不包含 `local_samples`、`local_test_logs`、captures、records、maps、tests、docs 或 tools。
 - 真机 smoke 已完成多轮；2026-06-23 已观察到 `overspeed_warn` / `overspeed_critical`、`low_fuel`、`low_alt_danger`、`stall_risk`、`overheat`、`you_killed`、`you_died` 进入 Arbiter / Dispatcher，并验证手动 identity、owned combat.feed 归属字段和 `dry_run=false` 真实 push 输出。
 - T-Observe 已完成轻量实现；真机 dry_run 已验证 `observe.last_decision` / `observe.last_output_status` 能解释 allow / preempt / cooldown / dry_run 输出。
@@ -106,7 +107,10 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 ```powershell
 uv run python tools\preflight.py --run
 uv run python tools\release_readiness.py --run
+uv run python tools\build_release_candidate.py
 ```
+
+`build_release_candidate.py` 调用宿主官方 release check 构建包，再依次执行 `package_artifact_gate.py`、官方 payload hash verify 和隔离临时安装 smoke；只有全部通过才发布到 `dist`。它不替代源码侧 preflight，也不替代真机 smoke。已有同名文件时需显式加 `--force`，跳过重复 pytest 时需显式加 `--skip-tests`。
 
 本地大样本汇总是可选慢检查，按需运行：
 
@@ -177,7 +181,7 @@ neko_warthunder/
 ├─ detectors/    condition（flag 边沿 FSM）/ discrete（按 id/跳变去重）
 ├─ contract/     真实 /api/telemetry 样本与契约检查
 ├─ ui/           Hosted UI 中文化面板，按连接/战场/安全/最近决策/最近输出分区
-├─ i18n/         zh-CN 占位；完整 8 locale 待后续 UI 文案扩展
+├─ i18n/         8 个宿主 locale 的插件名称与简介；面板正文当前仍以中文为主
 ├─ tests/        契约 / Detector / Arbiter / Scenario / integration 测试
 ├─ docs/         D-B1~B5 / 实现计划 / 待办事项 / 真机验证 checklist / recovery 测试方案
 └─ data_layer/   合作者数据层，vendored，只通过 HTTP 消费

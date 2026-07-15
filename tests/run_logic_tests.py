@@ -35,11 +35,34 @@ def _load(path: pathlib.Path) -> types.ModuleType:
     return mod
 
 
-def _run_test_function(fn) -> None:
+def _parametrized_cases(fn) -> list[tuple[dict[str, object], str]]:
+    cases: list[tuple[dict[str, object], str]] = [({}, "")]
+    for mark in getattr(fn, "pytestmark", []):
+        if getattr(mark, "name", None) != "parametrize":
+            continue
+        names = [name.strip() for name in str(mark.args[0]).split(",")]
+        expanded: list[tuple[dict[str, object], str]] = []
+        for base_kwargs, base_label in cases:
+            for index, value in enumerate(mark.args[1]):
+                values = getattr(value, "values", None)
+                if values is None:
+                    values = (value,) if len(names) == 1 else tuple(value)
+                if len(values) != len(names):
+                    raise TypeError(f"parametrize value count does not match {names}")
+                kwargs = dict(base_kwargs)
+                kwargs.update(zip(names, values))
+                expanded.append((kwargs, f"{base_label}[{index}]"))
+        cases = expanded
+    return cases
+
+
+def _run_test_function(fn, supplied_kwargs: dict[str, object] | None = None) -> None:
     signature = inspect.signature(fn)
     with contextlib.ExitStack() as stack:
-        kwargs = {}
+        kwargs = dict(supplied_kwargs or {})
         for param in signature.parameters.values():
+            if param.name in kwargs:
+                continue
             if param.name == "tmp_path":
                 tmp_dir = stack.enter_context(tempfile.TemporaryDirectory())
                 kwargs[param.name] = pathlib.Path(tmp_dir)
@@ -62,14 +85,15 @@ def main() -> int:
             fn = getattr(mod, name)
             if not callable(fn):
                 continue
-            label = f"{f.stem}.{name}"
-            try:
-                _run_test_function(fn)
-                results.append(("PASS", label))
-            except Exception:
-                results.append(("FAIL", label))
-                print(f"--- FAIL {label} ---")
-                traceback.print_exc()
+            for kwargs, case_label in _parametrized_cases(fn):
+                label = f"{f.stem}.{name}{case_label}"
+                try:
+                    _run_test_function(fn, kwargs)
+                    results.append(("PASS", label))
+                except Exception:
+                    results.append(("FAIL", label))
+                    print(f"--- FAIL {label} ---")
+                    traceback.print_exc()
     passed = sum(1 for r, _ in results if r == "PASS")
     print()
     for r, label in results:

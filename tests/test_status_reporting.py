@@ -150,6 +150,7 @@ def _plugin_for_game_context_tests():
     class FakeDispatcher:
         def push_context(self, text):
             plugin.pushed_contexts.append(text)
+            return True
 
     plugin.dispatcher = FakeDispatcher()
     plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
@@ -180,6 +181,11 @@ def test_game_context_enters_when_telemetry_goes_online_once():
     assert plugin._instructions_injected is True
     stages = [item["stage"] for item in plugin.timeline.snapshot()["recent_timeline"]]
     assert "game_context_entered" in stages
+
+    failed_plugin = _plugin_for_game_context_tests()
+    failed_plugin.dispatcher.push_context = lambda _text: False
+    failed_plugin._sync_game_context(BattleState(), BattleState(connected=True, conn_state="not_in_battle"))
+    assert failed_plugin._instructions_injected is False
 
 
 def test_game_context_exits_when_telemetry_goes_offline_once():
@@ -912,6 +918,55 @@ def test_dashboard_reports_dialogue_intrusion_policy(tmp_path):
 
     assert payload["output_policy"]["dialogue_intrusion_mode"] == "no_interrupt"
     assert payload["output_policy"]["critical_bypass_quiet_window"] is False
+
+
+def test_broadcast_preference_actions_persist_and_report_dashboard_state(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    frequency_result = asyncio.run(plugin.set_broadcast_frequency("quiet"))
+    category_result = asyncio.run(plugin.set_broadcast_category("radio", False))
+    payload = plugin._dashboard_payload(plugin.state)
+    saved = json.loads(plugin._runtime_state_path.read_text(encoding="utf-8"))
+
+    assert frequency_result["broadcast_frequency"] == "quiet"
+    assert category_result["broadcast_categories"]["radio"] is False
+    assert payload["output_policy"]["broadcast_frequency"] == "quiet"
+    assert payload["output_policy"]["broadcast_categories"]["radio"] is False
+    assert payload["output_policy"]["critical_safety_always_enabled"] is True
+    assert saved["broadcast_frequency"] == "quiet"
+    assert saved["broadcast_categories"]["radio"] is False
+
+    reset_result = asyncio.run(plugin.reset_broadcast_preferences())
+    reset_payload = plugin._dashboard_payload(plugin.state)
+    reset_saved = json.loads(plugin._runtime_state_path.read_text(encoding="utf-8"))
+
+    assert reset_result["broadcast_frequency"] == "standard"
+    assert all(reset_result["broadcast_categories"].values())
+    assert reset_payload["output_policy"]["broadcast_frequency"] == "standard"
+    assert all(reset_payload["output_policy"]["broadcast_categories"].values())
+    assert reset_saved["broadcast_frequency"] == "standard"
+    assert all(reset_saved["broadcast_categories"].values())
+
+
+def test_reload_config_uses_saved_broadcast_preferences(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin._runtime_state_path.write_text(
+        json.dumps({"broadcast_frequency": "active", "broadcast_categories": {"awareness": False}}),
+        encoding="utf-8",
+    )
+
+    class EmptyConfig:
+        async def dump(self, timeout=5.0):
+            return {}
+
+    plugin.config = EmptyConfig()
+    asyncio.run(plugin._reload_config())
+
+    assert plugin.cfg.broadcast_frequency == "active"
+    assert plugin.cfg.broadcast_categories["awareness"] is False
+    assert plugin.cfg.broadcast_categories["radio"] is True
 
 
 def test_set_identity_clear_persists_empty_player_name(tmp_path):

@@ -77,7 +77,7 @@
 | 5 | 观察 awards / hud_notices / combat.feed 自由文本源。 | free_text_safety.status、source_details、prompt / dry_run 输出。 | free_text=dry_run_only，raw HUD / combat.feed / awards 原文不进入 prompt。 |
 | 6 | 若出现 replay，继续观察不要手动触发输出。 | replay=true、detector_suppressed/replay、output_blocked。 | replay 帧静默，live_monitor 显示 replay suppressed，不真实开口。 |
 | 7 | 条件允许时关闭 `dry_run`，复测数值安全或 generic kill/death。 | push_message、last_output_status、output_backpressure、event_expired、repeated_event_collapsed、event_age_seconds、event_expires_at、target_lanlan、battle_reply_contract、live_reply_contract、max_reply_chars、kill_coalesced、plugin_owned_output。 | 真实开口不刷屏，旧回复晚到减少，过期旧事件不真实 push，同类安全提示短窗折叠，击杀夸夸不被普通过载背压吃掉，目标会话不走 fallback session，短播报合同不丢失。 |
-| 7a | 真实开口或样本回放期间手动给猫发日常消息。 | 聊天窗口、用户输入后约 10 秒内的战雷 callback、battle_event metadata。 | 危急动作类默认以 `blind+plugin` 短句直出，不混入这轮日常回复；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和结算走 bounded `respond`；critical 危险仍可按插话策略插队。 |
+| 7a | 真实开口或样本回放期间手动给猫发日常消息。 | 聊天窗口、用户输入后约 10 秒内的战雷 callback、battle_event metadata。 | 危急动作类默认走 bounded `respond` 短播报并进入 TTS；显式兼容开关才使用 `blind+plugin`，且不能混入这轮日常回复；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和结算同样走 bounded `respond`；critical 危险仍可按插话策略插队。 |
 | 8 | 若出现动力故障 HUD 技术通知，不急着判断成播报事件。 | powertrain_failure、deferred_hud_notice、detector_suppressed、raw HUD 是否被阻断。 | 只显示 deferred 可观测记录，不真实开口，不泄漏 raw HUD 文本。 |
 
 ## Next live-test plan

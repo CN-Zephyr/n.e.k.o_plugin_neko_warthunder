@@ -115,10 +115,18 @@ STALE_BASELINES = [
     "405 passed",
     "442/442 passed",
     "442 passed",
+    "445/445 passed",
+    "445 passed",
+    "473/473 passed",
+    "473 passed",
+    "477/477 passed",
+    "477 passed",
+    "481/481 passed",
+    "481 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "445/445 passed",
+    "493/493 passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -133,6 +141,7 @@ REQUIRED_SNIPPETS = [
     "tools/final_smoke_packet.py",
     "runtime focus checks",
     "tools/final_smoke_evidence_gate.py",
+    "tools/build_release_candidate.py",
     "--rehearsal-output-dir",
     "evidence_rehearsal",
     "final_smoke_rehearsal",

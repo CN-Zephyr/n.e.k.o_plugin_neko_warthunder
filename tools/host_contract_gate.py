@@ -60,34 +60,36 @@ def run_gate(
 ) -> dict[str, Any]:
     host = pathlib.Path(host_root).resolve() if host_root is not None else (_BASE.parent / "N.E.K.O").resolve()
     plugin = pathlib.Path(plugin_root).resolve() if plugin_root is not None else _BASE.resolve()
-    core = host / "main_logic" / "core.py"
+    main_logic_root = host / "main_logic"
+    core_paths = sorted(path for path in main_logic_root.rglob("*.py") if path.is_file())
     runtime_plugin = host / "plugin" / "plugins" / "neko_warthunder"
     test_paths = (
         host / "tests" / "unit" / "test_core_game_route_memory_contract.py",
         host / "tests" / "unit" / "test_callback_instruction_origin.py",
         host / "tests" / "unit" / "test_proactive_sm_integration.py",
     )
-    if not core.exists():
+    if not core_paths:
         status = "fail" if require_host else "missing_host"
         return {
             "status": status,
             "host_root": str(host),
             "plugin_root": str(plugin),
-            "core_path": str(core),
+            "core_path": str(main_logic_root),
+            "core_paths": [],
             "runtime_plugin_path": str(runtime_plugin),
             "test_paths": [str(path) for path in test_paths],
             "requirements": [],
             "failures": [
                 {
                     "requirement": "host_checkout",
-                    "missing": str(core),
-                    "reason": "host core.py was not found",
+                    "missing": str(main_logic_root),
+                    "reason": "host main_logic Python sources were not found",
                 }
             ],
             "policy": _policy(require_host=require_host),
         }
 
-    texts = [core.read_text(encoding="utf-8", errors="replace")]
+    texts = [path.read_text(encoding="utf-8", errors="replace") for path in core_paths]
     for test_path in test_paths:
         if test_path.exists():
             texts.append(test_path.read_text(encoding="utf-8", errors="replace"))
@@ -126,7 +128,8 @@ def run_gate(
         "status": "pass" if not failures else "fail",
         "host_root": str(host),
         "plugin_root": str(plugin),
-        "core_path": str(core),
+        "core_path": str(main_logic_root),
+        "core_paths": [str(path) for path in core_paths],
         "runtime_plugin_path": str(runtime_plugin),
         "test_paths": [str(path) for path in test_paths],
         "requirements": checked,
@@ -178,7 +181,9 @@ def _check_runtime_plugin_path(runtime_plugin: pathlib.Path, plugin_root: pathli
         if not runtime_file.exists():
             stale_or_missing.append(f"{relative_path}: missing in host runtime copy")
             continue
-        if runtime_file.read_bytes() != plugin_file.read_bytes():
+        runtime_text = runtime_file.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+        plugin_text = plugin_file.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+        if runtime_text != plugin_text:
             stale_or_missing.append(f"{relative_path}: differs from standalone plugin")
 
     is_current_copy = not stale_or_missing
@@ -208,6 +213,7 @@ def render_text(payload: dict[str, Any]) -> str:
         f"host_root: {payload['host_root']}",
         f"plugin_root: {payload.get('plugin_root', '')}",
         f"core_path: {payload['core_path']}",
+        f"core_files: {len(payload.get('core_paths') or [])}",
         f"runtime_plugin_path: {payload.get('runtime_plugin_path', '')}",
         "test_paths: " + ", ".join(payload.get("test_paths") or []),
         "policy: static offline check; no service startup; no raw chat or telemetry read",

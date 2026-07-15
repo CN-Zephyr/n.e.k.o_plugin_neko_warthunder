@@ -30,7 +30,7 @@ def test_warthunder_user_chat_interference_allows_death_to_replace_stale_warning
 
 
 def _write_host_fixture(root, *, special_case: bool = False):
-    core = root / "N.E.K.O" / "main_logic" / "core.py"
+    core = root / "N.E.K.O" / "main_logic" / "core" / "manager.py"
     core.parent.mkdir(parents=True)
     core.write_text(
         _host_core_with_warthunder_special_case() if special_case else _host_core_text(),
@@ -91,6 +91,8 @@ def test_host_contract_gate_passes_synced_runtime_copy(tmp_path):
     runtime_plugin = tmp_path / "N.E.K.O" / "plugin" / "plugins" / "neko_warthunder"
     _write_runtime_sync_sentinels(standalone_plugin, host_contract_gate, marker="same")
     _write_runtime_sync_sentinels(runtime_plugin, host_contract_gate, marker="same")
+    crlf_file = runtime_plugin / "adapters" / "neko_dispatcher.py"
+    crlf_file.write_bytes(crlf_file.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
 
     payload = host_contract_gate.run_gate(
         tmp_path / "N.E.K.O",

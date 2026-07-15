@@ -39,10 +39,13 @@ def run_gate() -> dict[str, Any]:
             "debug_timeline_enabled": False,
             "plugin_reply_hint_enabled": True,
             "plugin_owned_battle_output_enabled": False,
-            "plugin_owned_urgent_output_enabled": True,
+            "plugin_owned_urgent_output_enabled": False,
             "plugin_owned_blind_output_enabled": False,
             "user_chat_quiet_window_enabled": True,
             "battle_output_quiet_window_enabled": True,
+            "broadcast_frequency": "standard",
+            "broadcast_categories_default_enabled": True,
+            "critical_safety_always_enabled": True,
             "raw_text_printed": False,
         },
     }
@@ -73,9 +76,9 @@ def _checks(defaults: WtConfig, empty_mapping: WtConfig) -> list[dict[str, Any]]
             and empty_mapping.plugin_owned_battle_output_enabled is False,
         ),
         _expect(
-            "plugin_owned_urgent_output_default_enabled",
-            defaults.plugin_owned_urgent_output_enabled is True
-            and empty_mapping.plugin_owned_urgent_output_enabled is True,
+            "plugin_owned_urgent_output_default_closed",
+            defaults.plugin_owned_urgent_output_enabled is False
+            and empty_mapping.plugin_owned_urgent_output_enabled is False,
         ),
         _expect(
             "plugin_owned_blind_output_default_closed",
@@ -100,6 +103,14 @@ def _checks(defaults: WtConfig, empty_mapping: WtConfig) -> list[dict[str, Any]]
         _expect(
             "battle_output_quiet_window_enabled",
             defaults.battle_output_quiet_window_seconds > 0 and empty_mapping.battle_output_quiet_window_seconds > 0,
+        ),
+        _expect(
+            "broadcast_frequency_default_standard",
+            defaults.broadcast_frequency == "standard" and empty_mapping.broadcast_frequency == "standard",
+        ),
+        _expect(
+            "broadcast_categories_default_enabled",
+            all(defaults.broadcast_categories.values()) and all(empty_mapping.broadcast_categories.values()),
         ),
         _expect(
             "takeoff_runway_guard_enabled",

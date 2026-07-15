@@ -43,6 +43,30 @@ def test_real_output_backpressure_suppresses_same_or_lower_priority_pushes():
     assert snapshot["last_output_status"]["reason"] == "output_backpressure"
 
 
+def test_active_frequency_shortens_noncritical_output_backpressure():
+    plugin = FakePlugin()
+    plugin.cfg.broadcast_frequency = "active"
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 114.0]))
+
+    dispatcher.push_event(BattleEvent("you_killed"), dry_run=False)
+    result = dispatcher.push_event(BattleEvent("spawn"), dry_run=False)
+
+    assert result.startswith("pushed(event=spawn/enter)")
+    assert len(plugin.calls) == 2
+
+
+def test_quiet_frequency_extends_noncritical_output_backpressure():
+    plugin = FakePlugin()
+    plugin.cfg.broadcast_frequency = "quiet"
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 125.0]))
+
+    dispatcher.push_event(BattleEvent("you_killed"), dry_run=False)
+    result = dispatcher.push_event(BattleEvent("spawn"), dry_run=False)
+
+    assert result == "suppressed(event=spawn/enter, reason=output_backpressure)"
+    assert len(plugin.calls) == 1
+
+
 def test_real_output_backpressure_allows_higher_priority_event_to_preempt_queue_guard():
     plugin = FakePlugin()
     dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
@@ -96,6 +120,21 @@ def test_repeated_urgent_safety_cue_collapses_inside_short_window():
     assert third.startswith("pushed(event=over_g/enter)")
     assert len(plugin.calls) == 2
     assert timeline.snapshot()["last_output_status"]["stage"] == "dispatcher_pushed"
+
+    fact_plugin = FakePlugin()
+    fact_plugin.cfg.output_backpressure_seconds = 0.0
+    fact_dispatcher = NekoDispatcher(fact_plugin, clock=_clock([200.0, 201.0]))
+    first_fact = fact_dispatcher.push_event(
+        BattleEvent("enemy_nearby", payload={"target_type": "tank", "distance_m": 500}),
+        dry_run=False,
+    )
+    changed_fact = fact_dispatcher.push_event(
+        BattleEvent("enemy_nearby", payload={"target_type": "tank", "distance_m": 300}),
+        dry_run=False,
+    )
+    assert first_fact.startswith("pushed(")
+    assert changed_fact.startswith("pushed(")
+    assert len(fact_plugin.calls) == 2
 
 
 def test_critical_upgrade_is_not_collapsed_after_warning():
@@ -329,12 +368,11 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert metadata["live_reply_contract"] == "short_tts_line"
     assert metadata["max_reply_chars"] == 28
     assert metadata["response_module_hint"] == "war_thunder_battle_event"
-    assert plugin.calls[0]["visibility"] == ["chat"]
-    assert plugin.calls[0]["ai_behavior"] == "blind"
-    assert plugin.calls[0]["parts"] == [{"type": "text", "text": "拉起来，要撞地了！"}]
-    assert "{MASTER_NAME}" not in plugin.calls[0]["parts"][0]["text"]
-    assert "建议台词：" not in plugin.calls[0]["parts"][0]["text"]
-    assert metadata["plugin_owned_output"] is True
+    assert plugin.calls[0]["visibility"] == []
+    assert plugin.calls[0]["ai_behavior"] == "respond"
+    assert "{MASTER_NAME}" in plugin.calls[0]["parts"][0]["text"]
+    assert "建议台词：拉起来，要撞地了！" in plugin.calls[0]["parts"][0]["text"]
+    assert metadata["plugin_owned_output"] is False
     assert metadata["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert metadata["reply_style_contract"].startswith("Style: one short Chinese line")
     assert metadata["dialogue_policy_owner"] == "plugin"
@@ -353,9 +391,9 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert status["live_reply_contract"] == "short_tts_line"
     assert status["max_reply_chars"] == 28
     assert status["response_module_hint"] == "war_thunder_battle_event"
-    assert status["ai_behavior"] == "blind"
-    assert status["visibility"] == ["chat"]
-    assert status["plugin_owned_output"] is True
+    assert status["ai_behavior"] == "respond"
+    assert status["visibility"] == []
+    assert status["plugin_owned_output"] is False
     assert status["plugin_recommended_reply"] == "拉起来，要撞地了！"
     assert status["reply_style_contract"].startswith("Style: one short Chinese line")
     assert status["dialogue_policy_owner"] == "plugin"
@@ -429,8 +467,9 @@ def test_context_push_uses_configured_target_lanlan():
     plugin.cfg.target_lanlan = "Lanlan"
     dispatcher = NekoDispatcher(plugin)
 
-    dispatcher.push_context("context")
+    result = dispatcher.push_context("context")
 
+    assert result is True
     assert plugin.calls[0]["target_lanlan"] == "Lanlan"
     assert plugin.calls[0]["metadata"]["target_lanlan"] == "Lanlan"
 
