@@ -123,10 +123,16 @@ STALE_BASELINES = [
     "477 passed",
     "481/481 passed",
     "481 passed",
+    "493/493 passed",
+    "493 passed",
+    "505/505 passed",
+    "505 passed",
+    "506/506 passed",
+    "506 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "493/493 passed",
+    "521/521 passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -195,6 +201,10 @@ REQUIRED_SNIPPETS = [
     "verify_user_chat_interference_quiet_window",
 ]
 
+REQUIRED_FILE_SNIPPETS = {
+    "PROJECT_STATUS.md": ["521/521 passed", "521 passed"],
+}
+
 FORBIDDEN_PHRASES = [
     "ui/panel.tsx 未实现",
     "数据层 blocker 未解决",
@@ -218,6 +228,18 @@ def audit_docs(root: str | pathlib.Path) -> dict[str, Any]:
     for snippet in REQUIRED_SNIPPETS:
         if snippet not in corpus:
             failures.append({"kind": "missing_required_snippet", "file": "-", "detail": snippet})
+
+    for rel, snippets in REQUIRED_FILE_SNIPPETS.items():
+        text = files.get(rel)
+        if text is None:
+            continue
+        for snippet in snippets:
+            if snippet not in text:
+                failures.append({
+                    "kind": "missing_required_file_snippet",
+                    "file": rel,
+                    "detail": snippet,
+                })
 
     for rel, text in files.items():
         for stale in STALE_BASELINES:

@@ -269,15 +269,17 @@ def test_same_match_respawn_resets_processor_and_suppresses_first_frame():
     )
 
     class FakeClient:
-        def get_indicators(self):
-            return ConnectionState.IN_BATTLE, current_indicators, MapInfo(valid=True)
+        def get_indicators_with_status(self):
+            return True, ConnectionState.IN_BATTLE, current_indicators, MapInfo(valid=True)
 
-        def get_state(self):
-            return VehicleState(valid=True, ias_kmh=0, load_factor=1)
+        def get_state_with_status(self):
+            return True, VehicleState(valid=True, ias_kmh=0, load_factor=1)
 
     service = TelemetryService(FakeClient())
     service._state = ConnectionState.IN_BATTLE
     service._battle_entry_ts = time.time() - 60
+    service._battle_id = "battle-1"
+    service._life_index = 1
     service._life_entry_ts = time.time() - 60
     service._dead = True
     service._dead_inert_seen = True
@@ -299,12 +301,141 @@ def test_same_match_respawn_resets_processor_and_suppresses_first_frame():
     service._poll_fast()
 
     assert service._dead is False
-    assert service._processed is not None
-    assert service._processed["flags"] == {}
-    assert service._processed["alerts"] == []
+    assert service._processed is None
     assert service.processor._ammo_baseline_seen is False
     assert service._life_entry_ts is not None
     assert time.time() - service._life_entry_ts < 1
+    snapshot = service.get_snapshot()
+    assert snapshot["battle_id"] == "battle-1"
+    assert snapshot["life_index"] == 2
+    assert snapshot["confirmed_respawns"] == 1
+
+
+def test_battle_identity_survives_respawn_and_changes_after_confirmed_exit():
+    from neko_warthunder.adapters.telemetry_client import parse_telemetry
+    from wt_server import TelemetryService
+    from wt_telemetry import ConnectionState, Indicators, MapInfo, VehicleState
+
+    class BoundaryClient:
+        in_battle = True
+
+        def get_indicators_with_status(self):
+            if self.in_battle:
+                return (
+                    True,
+                    ConnectionState.IN_BATTLE,
+                    Indicators(valid=True, army="tank", speed=0.0),
+                    MapInfo(valid=True),
+                )
+            return (
+                True,
+                ConnectionState.NOT_IN_BATTLE,
+                Indicators(valid=False),
+                MapInfo(valid=False),
+            )
+
+        def get_state_with_status(self):
+            return True, VehicleState(valid=True)
+
+    client = BoundaryClient()
+    service = TelemetryService(client)
+    service._poll_fast()
+    first = service.get_snapshot()
+    battle_id = first["battle_id"]
+    assert isinstance(battle_id, str) and battle_id
+    assert first["life_index"] == 1
+    assert first["confirmed_respawns"] == 0
+
+    service._combat = {"my": {"deaths": 1}}
+    with service._lock:
+        assert not service._update_dead_state_locked(
+            Indicators(valid=True, army="tank", speed=0.0, crew_current=0, crew_total=4),
+            {"ias_kmh": 0.0},
+            10.0,
+        )
+        assert service._update_dead_state_locked(
+            Indicators(valid=True, army="tank", speed=8.0, crew_current=4, crew_total=4),
+            {"ias_kmh": 0.0},
+            11.0,
+        )
+
+    respawned = service.get_snapshot()
+    assert respawned["battle_id"] == battle_id
+    assert respawned["life_index"] == 2
+    assert respawned["confirmed_respawns"] == 1
+
+    parsed = parse_telemetry(respawned)
+    assert parsed.battle_id == battle_id
+    assert parsed.life_index == 2
+    assert parsed.confirmed_respawns == 1
+
+    client.in_battle = False
+    service._poll_fast()
+    assert service.get_snapshot()["battle_id"] is None
+
+    client.in_battle = True
+    service._poll_fast()
+    next_battle = service.get_snapshot()
+    assert next_battle["battle_id"] != battle_id
+    assert next_battle["life_index"] == 1
+
+
+def test_death_entry_cannot_respawn_from_stale_full_crew_in_the_same_frame():
+    from wt_server import TelemetryService
+    from wt_telemetry import Indicators
+
+    class DummyClient:
+        pass
+
+    service = TelemetryService(DummyClient())
+    service._battle_id = "battle-1"
+    service._life_index = 1
+    service._combat = {"my": {"deaths": 1}}
+
+    with service._lock:
+        respawned = service._update_dead_state_locked(
+            Indicators(
+                valid=True,
+                army="tank",
+                speed=0.0,
+                crew_current=4,
+                crew_total=4,
+            ),
+            {"ias_kmh": 0.0},
+            100.0,
+        )
+
+    assert respawned is False
+    assert service._dead is True
+    assert service._life_index == 1
+
+
+def test_ground_respawn_requires_a_prior_depleted_crew_frame_before_full_crew_recovery():
+    from wt_server import TelemetryService
+    from wt_telemetry import Indicators
+
+    class DummyClient:
+        pass
+
+    service = TelemetryService(DummyClient())
+    service._battle_id = "battle-1"
+    service._life_index = 1
+    service._combat = {"my": {"deaths": 1}}
+
+    with service._lock:
+        assert service._update_dead_state_locked(
+            Indicators(valid=True, army="tank", speed=0.0, crew_current=1, crew_total=4),
+            {"ias_kmh": 0.0},
+            100.0,
+        ) is False
+        assert service._update_dead_state_locked(
+            Indicators(valid=True, army="tank", speed=0.0, crew_current=4, crew_total=4),
+            {"ias_kmh": 0.0},
+            101.0,
+        ) is True
+
+    assert service._dead is False
+    assert service._life_index == 2
 
 
 def test_vehicle_profile_exact_entries_keep_precise_overspeed_limits():

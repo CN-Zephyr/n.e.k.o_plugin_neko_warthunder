@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import importlib.util
+import ipaddress
+import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import os
-import shutil
-import importlib.util
-import threading
 from pathlib import Path
-from typing import Any, Callable, IO
+from typing import IO, Any, Callable
 
 from ..core.contracts import WtConfig
 
@@ -21,6 +22,7 @@ from ..core.contracts import WtConfig
 HealthCheck = Callable[[str, float], bool]
 PopenFactory = Callable[..., Any]
 SleepFn = Callable[[float], None]
+DATA_LAYER_BIND_HOST = "127.0.0.1"
 
 
 def check_data_layer_health(base_url: str, timeout: float) -> bool:
@@ -38,6 +40,20 @@ def _port_from_url(base_url: str) -> str:
     if parsed.port is not None:
         return str(parsed.port)
     return "443" if parsed.scheme == "https" else "80"
+
+
+def _bind_host_from_url(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(base_url)
+    host = str(parsed.hostname or "").strip().lower()
+    if host == "localhost":
+        return host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and address.is_loopback:
+        return host
+    raise ValueError("managed_data_layer_requires_loopback_url")
 
 
 def _looks_like_python(executable: str | None) -> bool:
@@ -110,6 +126,7 @@ class EmbeddedDataLayerProcess:
     def terminate(self) -> None:
         self._terminated = True
         self.httpd.shutdown()
+        self.httpd.server_close()
         self.service.stop()
 
     def kill(self) -> None:
@@ -137,7 +154,7 @@ def _load_wt_server_module(data_process_dir: Path):
         sys.path[:] = old_path
 
 
-def _spawn_embedded_data_layer(data_process_dir: Path, *, port: int) -> EmbeddedDataLayerProcess:
+def _spawn_embedded_data_layer(data_process_dir: Path, *, host: str, port: int) -> EmbeddedDataLayerProcess:
     wt_server = _load_wt_server_module(data_process_dir)
     recorder = wt_server.SessionRecorder(
         root_dir=str(data_process_dir / "records"),
@@ -160,7 +177,7 @@ def _spawn_embedded_data_layer(data_process_dir: Path, *, port: int) -> Embedded
     )
     service.start()
     try:
-        httpd = wt_server.ThreadingHTTPServer(("0.0.0.0", port), wt_server._Handler)
+        httpd = wt_server.create_http_server(host, port)
         httpd.service = service
     except Exception:
         service.stop()
@@ -230,6 +247,7 @@ class DataLayerProcessManager:
             self._started_by_plugin = False
             self._mode = "failed"
             self._last_error = f"{type(exc).__name__}: {exc}"
+            self._close_log_handles()
             return self.snapshot()
 
         deadline = time.monotonic() + self.config.data_layer_startup_timeout_seconds
@@ -253,6 +271,7 @@ class DataLayerProcessManager:
 
     def stop(self) -> dict[str, Any]:
         if not self._started_by_plugin or self._process is None:
+            self._close_log_handles()
             return self.snapshot()
 
         proc = self._process
@@ -271,6 +290,28 @@ class DataLayerProcessManager:
             self._last_health = False
             self._close_log_handles()
         return self.snapshot()
+
+    def observe_health(self, healthy: bool) -> None:
+        """Refresh runtime health from the plugin's normal telemetry poll."""
+
+        self._last_health = bool(healthy)
+        if self._started_by_plugin and self._process is not None:
+            returncode = self._process.poll()
+            if returncode is not None:
+                self._mode = "failed"
+                self._last_error = self._format_exit_error(returncode)
+                self._process = None
+                self._started_by_plugin = False
+                self._close_log_handles()
+                return
+            self._mode = "managed"
+            if healthy:
+                self._last_error = None
+            return
+
+        if healthy:
+            self._mode = "external"
+            self._last_error = None
 
     def snapshot(self) -> dict[str, Any]:
         pid = getattr(self._process, "pid", None) if self._process is not None else None
@@ -293,20 +334,28 @@ class DataLayerProcessManager:
         if not script.exists():
             raise FileNotFoundError(str(script))
 
-        self._prepare_log_files()
-        assert self._stdout_handle is not None
-        assert self._stderr_handle is not None
-
+        bind_host = _bind_host_from_url(self.config.data_layer_url)
         python_prefixes = _python_command_prefixes()
         if not python_prefixes:
             self._python_cmd = ["embedded"]
             return _spawn_embedded_data_layer(
                 data_process_dir,
+                host=bind_host,
                 port=int(_port_from_url(self.config.data_layer_url)),
             )
 
+        self._prepare_log_files()
+        assert self._stdout_handle is not None
+        assert self._stderr_handle is not None
         self._python_cmd = python_prefixes[0]
-        cmd = [*self._python_cmd, "wt_server.py", "--port", _port_from_url(self.config.data_layer_url)]
+        cmd = [
+            *self._python_cmd,
+            "wt_server.py",
+            "--host",
+            bind_host,
+            "--port",
+            _port_from_url(self.config.data_layer_url),
+        ]
         kwargs: dict[str, Any] = {
             "cwd": str(data_process_dir),
             "stdout": self._stdout_handle,
@@ -336,6 +385,7 @@ class DataLayerProcessManager:
                 try:
                     handle.close()
                 except OSError:
+                    # Cleanup is best-effort; the process has already released the handle.
                     pass
         self._stdout_handle = None
         self._stderr_handle = None

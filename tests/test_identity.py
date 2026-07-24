@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+from neko_warthunder.adapters import identity_client as module
+
 from neko_warthunder.adapters.identity_client import (
     build_identity_url,
     identity_summary_from_combat,
@@ -31,6 +35,37 @@ def test_set_identity_uses_fetcher_and_returns_identity_response():
     assert calls == [("http://127.0.0.1:8112/api/identity?name=Pilot", 1.25)]
     assert result["player_name"] == "Pilot"
     assert result["self"]["source"] == "manual"
+
+
+def test_fetch_identity_sends_action_header():
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"player_name": "Pilot"}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["headers"] = dict(request.header_items())
+        captured["timeout"] = timeout
+        return Response()
+
+    original_urlopen = module.urllib.request.urlopen
+    module.urllib.request.urlopen = fake_urlopen
+    try:
+        result = module.fetch_identity("http://127.0.0.1:8112/api/identity?name=Pilot", 1.25)
+    finally:
+        module.urllib.request.urlopen = original_urlopen
+
+    assert result == {"player_name": "Pilot"}
+    headers = {key.lower(): value for key, value in captured["headers"].items()}
+    assert headers[module.ACTION_HEADER.lower()] == "1"
+    assert captured["timeout"] == 1.25
 
 
 def test_identity_summary_from_combat_uses_metadata_only():

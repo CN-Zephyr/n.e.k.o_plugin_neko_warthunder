@@ -32,6 +32,8 @@ INSTALLED_REQUIRED_FILES = (
     "plugin.toml",
     "pyproject.toml",
     "__init__.py",
+    "adapters/dispatch_observer.py",
+    "adapters/event_delivery.py",
     "ui/panel.tsx",
     "data_layer/data process/wt_server.py",
     "i18n/en.json",

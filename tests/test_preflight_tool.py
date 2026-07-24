@@ -236,7 +236,7 @@ def test_preflight_dry_run_prints_commands_without_running():
         assert rc == 0
         assert "# neko_warthunder offline preflight" in text
         assert "## Quick read" in text
-        assert "baseline: logic self-check should report 493/493 passed" in text
+        assert "baseline: logic self-check should report 506/506 passed" in text
         assert "vehicle profile id audit must keep" in text
         assert "release defaults gate must keep dry_run-first" in text
         assert "output freshness gate must prove battle pushes are fresh" in text

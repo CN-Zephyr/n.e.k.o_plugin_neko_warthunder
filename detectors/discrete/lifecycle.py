@@ -19,7 +19,9 @@ from .proximity import ProximityDetector
 from .radio import RadioCommandDetector
 from .situation import AirSituationDetector, GroundTargetDetector
 
-_END_STATUSES = frozenset({"win", "won", "victory", "fail", "failed", "lost", "defeat", "left", "ended", "finished"})
+_END_STATUSES = frozenset(
+    {"win", "won", "victory", "success", "fail", "failed", "lost", "defeat", "left", "ended", "finished"}
+)
 
 
 def _alive(s: BattleState) -> bool:
@@ -38,6 +40,7 @@ class SpawnDetector(DiscreteDetector):
                     "vehicle_type": cur.vehicle_type,
                     "domain": cur.domain,
                     "domain_label": cur.domain_label,
+                    "respawn": bool(prev.dead),
                 },
                 ts=cur.timestamp or 0.0,
                 level="warning",
@@ -70,17 +73,24 @@ class DeathDetector(DiscreteDetector):
     def __init__(self) -> None:
         self._last_seen_id: int = -1
         self._emitted_ids: set[int] = set()
+        self._dead_edge_emitted = False
+
+    def reset(self) -> None:
+        self._last_seen_id = -1
+        self._emitted_ids.clear()
+        self._dead_edge_emitted = False
 
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
+        if not cur.dead:
+            self._dead_edge_emitted = False
         feed = _feed_items(cur)
         ids = _feed_ids(feed)
-        if not ids:
-            return None
-        max_id = max(ids)
-        if max_id < self._last_seen_id:
-            self._last_seen_id = -1
-            self._emitted_ids.clear()
-        self._last_seen_id = max(self._last_seen_id, max_id)
+        if ids:
+            max_id = max(ids)
+            if max_id < self._last_seen_id:
+                self._last_seen_id = -1
+                self._emitted_ids.clear()
+            self._last_seen_id = max(self._last_seen_id, max_id)
 
         newest: dict[str, Any] | None = None
         for item in feed:
@@ -93,27 +103,45 @@ class DeathDetector(DiscreteDetector):
             if item.get("is_my_death") is True:
                 if newest is None or eid > int(newest.get("id")):
                     newest = item
-        if newest is None:
-            return None
-        for item in feed:
-            try:
-                eid = int(item.get("id"))
-            except (TypeError, ValueError):
-                continue
-            if item.get("is_my_death") is True:
-                self._emitted_ids.add(eid)
+        if newest is not None:
+            for item in feed:
+                try:
+                    eid = int(item.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if item.get("is_my_death") is True:
+                    self._emitted_ids.add(eid)
+            if self._dead_edge_emitted and cur.dead:
+                return None
+            self._dead_edge_emitted = True
+            return BattleEvent(
+                "you_died",
+                payload={
+                    "killer_name": newest.get("killer"),
+                    "killer_vehicle": newest.get("killer_vehicle"),
+                    "cause": newest.get("action") or "unknown",
+                    "domain": cur.domain,
+                },
+                ts=cur.timestamp or 0.0,
+                level="critical",
+            )
 
-        return BattleEvent(
-            "you_died",
-            payload={
-                "killer_name": newest.get("killer"),
-                "killer_vehicle": newest.get("killer_vehicle"),
-                "cause": newest.get("action") or "unknown",
-                "domain": cur.domain,
-            },
-            ts=cur.timestamp or 0.0,
-            level="critical",
-        )
+        # HUD 在部分陆战模式不提供本人死亡事件；数据层的 ground_crew 仅在
+        # crew_total>=2 且 crew_current<=1 时产生，可以安全作为一次通用阵亡边沿。
+        if (
+            cur.dead
+            and not prev.dead
+            and cur.dead_source == "ground_crew"
+            and not self._dead_edge_emitted
+        ):
+            self._dead_edge_emitted = True
+            return BattleEvent(
+                "you_died",
+                payload={"cause": "ground_crew", "domain": cur.domain},
+                ts=cur.timestamp or 0.0,
+                level="critical",
+            )
+        return None
 
 
 class BattleEndDetector(DiscreteDetector):
@@ -142,6 +170,10 @@ class KillDetector(DiscreteDetector):
         self._last_seen_id: int = -1
         self._emitted_ids: set[int] = set()
 
+    def reset(self) -> None:
+        self._last_seen_id = -1
+        self._emitted_ids.clear()
+
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
         feed = _feed_items(cur)
         if not feed:
@@ -154,10 +186,8 @@ class KillDetector(DiscreteDetector):
             self._last_seen_id = -1
             self._emitted_ids.clear()
         self._last_seen_id = max(self._last_seen_id, max_id)
-        newest: dict[str, Any] | None = None
+        new_kills: list[tuple[int, dict[str, Any]]] = []
         for item in feed:
-            if not isinstance(item, dict):
-                continue
             try:
                 eid = int(item.get("id"))
             except (TypeError, ValueError):
@@ -165,23 +195,18 @@ class KillDetector(DiscreteDetector):
             if eid in self._emitted_ids:
                 continue
             if item.get("is_my_kill") is True:
-                if newest is None or eid > int(newest.get("id")):
-                    newest = item
-        if newest is None:
+                new_kills.append((eid, item))
+        if not new_kills:
             return None
-        for item in feed:
-            try:
-                eid = int(item.get("id"))
-            except (TypeError, ValueError):
-                continue
-            if item.get("is_my_kill") is True:
-                self._emitted_ids.add(eid)
+        self._emitted_ids.update(eid for eid, _item in new_kills)
+        _newest_id, newest = max(new_kills, key=lambda entry: entry[0])
         return BattleEvent(
             "you_killed",
             payload={
                 "victim": newest.get("victim"),
                 "victim_vehicle": newest.get("victim_vehicle"),
                 "domain": cur.domain,
+                "kill_count": len(new_kills),
             },
             ts=cur.timestamp or 0.0,
             level="warning",

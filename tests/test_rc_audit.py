@@ -37,7 +37,7 @@ def test_rc_audit_fails_on_stale_baseline():
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        _write_minimal_docs(root, extra="old baseline: 192/192 passed")
+        _write_minimal_docs(root, extra="old baselines: 192/192 passed and 493/493 passed")
 
         result = audit_docs(root)
 
@@ -47,9 +47,14 @@ def test_rc_audit_fails_on_stale_baseline():
         "file": "README.md",
         "detail": "192/192 passed",
     } in result["failures"]
+    assert {
+        "kind": "stale_baseline",
+        "file": "README.md",
+        "detail": "493/493 passed",
+    } in result["failures"]
 
 
-def test_rc_audit_fails_when_required_v2_status_is_missing():
+def test_rc_audit_fails_when_required_status_is_missing():
     from neko_warthunder.tools import rc_audit
 
     with tempfile.TemporaryDirectory() as td:
@@ -67,6 +72,23 @@ def test_rc_audit_fails_when_required_v2_status_is_missing():
         "kind": "missing_required_snippet",
         "file": "-",
         "detail": "ground_target_nearby",
+    } in result["failures"]
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _write_minimal_docs(root)
+        status = root / "PROJECT_STATUS.md"
+        status.write_text(
+            status.read_text(encoding="utf-8").replace("521/521 passed", "outdated baseline"),
+            encoding="utf-8",
+        )
+
+        result = rc_audit.audit_docs(root)
+
+    assert {
+        "kind": "missing_required_file_snippet",
+        "file": "PROJECT_STATUS.md",
+        "detail": "521/521 passed",
     } in result["failures"]
 
 

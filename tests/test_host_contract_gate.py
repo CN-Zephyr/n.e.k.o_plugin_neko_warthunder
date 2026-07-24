@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+from pathlib import Path
 
 
 def _host_core_text() -> str:
@@ -85,6 +86,15 @@ def test_host_contract_gate_fails_when_host_has_warthunder_speech_special_case(t
 
 def test_host_contract_gate_passes_synced_runtime_copy(tmp_path):
     from neko_warthunder.tools import host_contract_gate
+
+    assert {
+        Path("adapters/data_layer_process.py"),
+        Path("adapters/dispatch_observer.py"),
+        Path("adapters/event_delivery.py"),
+        Path("adapters/identity_client.py"),
+        Path("data_layer/data process/wt_recorder.py"),
+        Path("data_layer/data process/wt_server.py"),
+    }.issubset(set(host_contract_gate.RUNTIME_SYNC_SENTINELS))
 
     _write_host_fixture(tmp_path)
     standalone_plugin = tmp_path / "standalone-plugin"

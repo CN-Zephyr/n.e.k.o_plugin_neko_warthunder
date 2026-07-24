@@ -24,7 +24,8 @@
 阵亡待命态：玩家被击杀后（可重生模式重生前、或转观战他人直到终局），8111 座舱遥测会冻结
 在“死车残骸”上（速度 0/坠机/减员），processor 仍当活载具而持续刷失速/低高度/乘员损失等
 假警；观战他人时地图“自身”坐标还会漂到被观战者身上、令态势失真。fast 组据此识别阵亡待命
-（combat.my.deaths 增加进入；先见载具静止再恢复运动/满员退出），其间抑制告警、置空态势/接近，
+（本人死亡事件增加，或陆战可信乘员数降至无法继续作战时进入；先见载具静止再恢复运动/满员退出），
+其间抑制告警、置空态势/接近，
 快照与 /health 带 dead 标志；战绩(K/D)不受影响照常上报。
 
 对外接口（GET）：
@@ -50,11 +51,14 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
+import socket
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -62,6 +66,7 @@ from urllib.parse import parse_qs, urlparse
 
 # set_player_name 的“无请求”哨兵（None 是合法值=清除昵称，故需独立哨兵）
 _UNSET = object()
+_ACTION_HEADER = "X-Neko-Warthunder-Action"
 
 from dataclasses import asdict
 
@@ -82,6 +87,7 @@ from wt_telemetry import (
 )
 
 _CONTENT_TYPE_BY_EXT = {"jpg": "image/jpeg", "png": "image/png"}
+DEFAULT_BIND_HOST = "127.0.0.1"
 
 _HUD_BUFFER = 200   # HUD 事件累积上限
 _CHAT_BUFFER = 200  # 聊天累积上限
@@ -100,13 +106,17 @@ _SPAWN_SUPPRESS_SEC = 10.0
 _REPLAY_TIME_BACK_SEC = 5.0
 _REPLAY_MISSION_GRACE_SEC = 8.0
 
+# 8111/本地 HTTP 单次延迟不等于离开战局。战局内探针失败在此窗口内保留上一帧，
+# 只有持续失败才切到 offline；真实的 map_info.valid=false 响应仍立即判定离局。
+_PROBE_FAILURE_GRACE_SEC = 5.0
+
 # 阵亡待命态检测（玩家被击杀后→重生/观战窗口）：实测玩家死亡后，8111 的座舱遥测会
 # 冻结在“死车残骸”上（速度=0、坠机后高度不变、乘员减员），而 processor 仍把它当活载具，
 # 于是持续刷失速/低高度/乘员损失等假警；观战他人时地图“自身”坐标还会漂到被观战者身上，
 # 令态势(敌距/方位/接近)失真。故一旦判定玩家阵亡待命，就抑制告警 + 标记态势不可靠。
 # 进入：combat.my.deaths 增加（解析到 is_my_death 新事件）。
-# 退出：必须先看到载具“静止/残骸化”(_dead_inert_seen)，再恢复运动或满员——以此区分
-#       “死亡俯冲(高速但已死)”与“重生起飞/行驶”。死亡俯冲时 inert 尚未出现，不会误退出。
+# 退出：必须先看到载具“静止/残骸化”(_dead_inert_seen)，再恢复运动；陆战满员恢复还要求
+#       阵亡后曾见过减员帧。以此区分“死亡俯冲/旧满员帧”与“重生起飞/行驶”。
 _DEAD_INERT_IAS_KMH = 40.0    # 视为静止(残骸)的 IAS 上限
 _DEAD_INERT_SPEED_MS = 3.0    # 视为静止(残骸)的地面速度上限
 _DEAD_ALIVE_IAS_KMH = 150.0   # 视为重新升空的 IAS 下限
@@ -186,10 +196,14 @@ class TelemetryService:
 
         # 运行时设置玩家昵称的待处理请求（由 HTTP 线程写、events 线程取用，避免跨线程改 tracker）
         self._name_req: Any = _UNSET
+        # 手动昵称是跨战局配置，不能依赖会在离局时清空的 _combat 缓存来报告。
+        self._manual_player_name: str | None = (player_name or "").strip() or None
         # 进入对局待排空 hud 积压标志（fast 线程置位、events 线程消费）：
         # 服务(重)启后游标为 0，进局首拉会带回 8111 跨局缓冲的上一局残留，需先丢弃。
         # 初值 True：覆盖“工具启动时已在对局中”的冷启动场景。
         self._hud_drain_pending = True
+        self._chat_drain_pending = True
+        self._probe_failure_since: float | None = None
         # 进入战局的时间戳（用于开局告警抑制窗口）；离开战局清空。
         self._battle_entry_ts: float | None = None
         # 本次出生的时间戳；同局重生时刷新，用于重新开启出生告警抑制。
@@ -202,10 +216,17 @@ class TelemetryService:
         self._dead = False
         self._dead_since: float | None = None
         self._dead_inert_seen = False               # 死后是否已见载具静止(残骸/观战冻结)
+        self._dead_crew_depleted_seen = False       # 死后是否已见陆战乘员未满（满员恢复的前置边沿）
+        self._dead_source: str | None = None         # hud_event / ground_crew
         self._last_deaths = 0                        # 上次见到的 combat.my.deaths（检测增量=新阵亡）
 
         self._running = False
         self._threads: list[threading.Thread] = []
+        self._battle_generation = 0
+        # 8111 不提供官方 match/session id。每次确认 false->true 进入战局时生成本地 ID；
+        # 同局死亡、观战和重生都保持不变，只有确认离局后再次进入才换 ID。
+        self._battle_id: str | None = None
+        self._life_index: int | None = None
 
     # -- 生命周期 ----------------------------------------------------------
 
@@ -213,7 +234,7 @@ class TelemetryService:
         if self._running:
             return
         self._running = True
-        workers: list[tuple[str, Callable[[], None], bool]] = [
+        workers: list[tuple[str, Callable[..., None], bool]] = [
             ("fast", self._poll_fast, False),     # 状态探针，始终运行
             ("map", self._poll_map, True),
             ("events", self._poll_events, True),
@@ -244,11 +265,17 @@ class TelemetryService:
             t0 = time.time()
             try:
                 if (not require_battle) or self._state is ConnectionState.IN_BATTLE:
-                    fn()
                     with self._lock:
-                        meta = self._meta[name]
-                        meta["count"] += 1
-                        meta["last"] = time.time()
+                        generation = self._battle_generation
+                    if require_battle:
+                        fn(generation)
+                    else:
+                        fn()
+                    with self._lock:
+                        if (not require_battle) or generation == self._battle_generation:
+                            meta = self._meta[name]
+                            meta["count"] += 1
+                            meta["last"] = time.time()
             except Exception as exc:  # 单组异常不影响其它组与整体循环
                 print(f"[{name}] 轮询出错（已忽略）：{exc!r}", file=sys.stderr)
             elapsed = time.time() - t0
@@ -259,11 +286,45 @@ class TelemetryService:
     def _poll_fast(self) -> None:
         # 探针同时取 indicators + map_info；战局判定以 map_info.valid 为准
         # （主界面/机库的 indicators/state/mission 都可能“像在战局”）
-        state, ind, minfo = self.client.get_indicators()
+        probe_ok, state, ind, minfo = self.client.get_indicators_with_status()
         now = time.time()
+        if not probe_ok:
+            with self._lock:
+                if self._probe_failure_since is None:
+                    self._probe_failure_since = now
+                    probe_failure_started = True
+                else:
+                    probe_failure_started = False
+                keep_previous = (
+                    self._state is ConnectionState.IN_BATTLE
+                    and now - self._probe_failure_since < _PROBE_FAILURE_GRACE_SEC
+                )
+            if probe_failure_started:
+                self.recorder.mark({"_event": "probe_failure_started"})
+            if keep_previous:
+                return
+            state = ConnectionState.OFFLINE
+            ind = Indicators(valid=False)
+            minfo = MapInfo(valid=False)
+        else:
+            with self._lock:
+                failure_since = self._probe_failure_since
+                self._probe_failure_since = None
+            if failure_since is not None:
+                self.recorder.mark({
+                    "_event": "probe_recovered",
+                    "duration_seconds": round(max(0.0, now - failure_since), 3),
+                })
         if state is ConnectionState.IN_BATTLE:
-            vehicle = self.client.get_state()
-            processed = self.processor.process(vehicle, ind, now).to_dict()
+            state_ok, vehicle = self.client.get_state_with_status()
+            if state_ok:
+                processed = self.processor.process(vehicle, ind, now).to_dict()
+            else:
+                # 单帧 /state 失败时保留上一帧，避免空战被误判死亡后又假出生。
+                with self._lock:
+                    vehicle = self._vehicle
+                    processed = self._processed
+                self.recorder.mark({"_event": "vehicle_state_poll_failed"})
         else:
             vehicle = VehicleState(valid=False)
             processed = None
@@ -271,6 +332,8 @@ class TelemetryService:
         with self._lock:
             prev = self._state
             self._state = state
+            if state is not prev:
+                self._battle_generation += 1
             self._indicators = ind
             self._vehicle = vehicle
             self._map_info = minfo  # grid 参数随 fast 实时刷新，供态势换算
@@ -282,15 +345,21 @@ class TelemetryService:
                 self._life_entry_ts = None
             # 进入战局 -> 标记需排空 hud 积压（丢弃上一局/连接前的残留事件）+ 记录进局时刻
             if state is ConnectionState.IN_BATTLE and prev is not ConnectionState.IN_BATTLE:
+                # 游标清零和排空由 events 线程独占执行，避免旧请求晚返回覆盖新局游标。
                 self._hud_drain_pending = True
+                self._chat_drain_pending = True
                 self._battle_entry_ts = now
                 self._life_entry_ts = now
+                self._battle_id = uuid.uuid4().hex
+                self._life_index = 1
                 self._replay = False
                 self._last_game_time = None
                 self._mission_running_seen = False
                 self._dead = False
                 self._dead_since = None
                 self._dead_inert_seen = False
+                self._dead_crew_depleted_seen = False
+                self._dead_source = None
                 self._last_deaths = 0
             # 回放检测（仅战局内；锁定式，命中后保持到离开战局）
             if state is ConnectionState.IN_BATTLE and not self._replay:
@@ -304,6 +373,7 @@ class TelemetryService:
                 # 立即重置处理器并压掉当前帧；下一帧从新载具重新建立基线。
                 self.processor.reset()
                 self._life_entry_ts = now
+                processed = None
             # 开局抑制窗口：进局前 _SPAWN_SUPPRESS_SEC 秒清空告警（保留派生量/数值），
             # 压掉 air RB 空中生成的失速/低高度等瞬态假警。
             # 阵亡待命态同样抑制告警（死车残骸/观战冻结会刷失速/乘员损失等假警）。
@@ -316,8 +386,12 @@ class TelemetryService:
         # 录制（调试开关）：按记录间隔转存一帧快照；未开启录制时近乎零开销
         self.recorder.offer_frame(self._build_record_frame)
 
-    def _poll_map(self) -> None:
-        objs = self.client.get_map_objects()
+    def _poll_map(self, generation: int) -> None:
+        map_ok, objs = self.client.get_map_objects_with_status()
+        if not map_ok:
+            # 传输失败不是“地图上没有敌人”；保留上一帧态势与轨迹基线。
+            self.recorder.mark({"_event": "map_objects_poll_failed"})
+            return
         # 态势分析依赖 map_info（由 mapimg 组维护），grid 参数基本不变可直接用缓存
         situation = analyze_situation(objs, self._map_info)
         # 敌军接近告警：阈值随【我方兵种×敌方类型】变化
@@ -331,13 +405,15 @@ class TelemetryService:
         )
         now = time.time()
         # 阵亡待命态：地图“自身”坐标会漂到被观战者身上，敌距/接近全部失真，不再生成接近告警。
-        if self._dead:
-            prox_events = []
-        else:
-            prox_events = self.proximity.update(
-                situation.get("enemies", []), thr_air, thr_ground, now
-            )
         with self._lock:
+            if generation != self._battle_generation:
+                return
+            if self._dead:
+                prox_events = []
+            else:
+                prox_events = self.proximity.update(
+                    situation.get("enemies", []), thr_air, thr_ground, now
+                )
             self._map_objects = objs
             self._situation = situation
             self._proximity_threshold = {"vs_air": thr_air, "vs_ground": thr_ground}
@@ -347,35 +423,70 @@ class TelemetryService:
         if prox_events:
             self.recorder.write_events("proximity", list(prox_events))
 
-    def _poll_events(self) -> None:
+    def _poll_events(self, generation: int) -> None:
         # 先应用待处理的昵称设置（仅本线程改 tracker，避免与 HTTP 线程竞争）
         with self._lock:
+            if generation != self._battle_generation:
+                return
             req = self._name_req
             self._name_req = _UNSET
-            drain = self._hud_drain_pending
+            drain_hud = self._hud_drain_pending
+            drain_chat = self._chat_drain_pending
             self._hud_drain_pending = False
+            self._chat_drain_pending = False
         if req is not _UNSET:
             self.tracker.set_player_name(req)
-        # 进入对局首次轮询：排空 8111 跨局缓冲的旧事件（推进游标但不计入战绩），
-        # 并清空 tracker/notices，确保本局从干净状态起算；本周期不再继续喂入。
-        if drain:
-            dropped = self.client.drain_hud()
-            self.tracker.reset()
-            self.notices.reset()
-            self.awards.reset()
-            self.recorder.mark({"_event": "hud_drain", "dropped": dropped})
+        # 进入对局首次轮询：游标仅由 events 线程清零并排空旧缓冲。HUD 与聊天分别重试，
+        # 避免任一接口短暂失败导致另一接口反复清零、吞掉本局新事件。
+        if drain_hud or drain_chat:
+            cursors_before = self.client.incremental_cursor_state()
+            hud_ok, dropped_hud = True, 0
+            chat_ok, dropped_chat = True, 0
+            if drain_hud:
+                self.client.reset_hud_cursors()
+                hud_ok, old_hud = self.client.get_hud_with_status()
+                dropped_hud = len(old_hud)
+            if drain_chat:
+                self.client.reset_chat_cursor()
+                chat_ok, old_chat = self.client.get_chat_with_status()
+                dropped_chat = len(old_chat)
+            with self._lock:
+                if generation != self._battle_generation:
+                    return
+                if drain_hud and not hud_ok:
+                    self._hud_drain_pending = True
+                if drain_chat and not chat_ok:
+                    self._chat_drain_pending = True
+            if drain_hud and hud_ok:
+                self.tracker.reset()
+                self.notices.reset()
+                self.awards.reset()
+            self.recorder.mark({
+                # 保留既有事件名，避免录制回放/分析工具因标记改名而失配。
+                "_event": "hud_drain",
+                "dropped": dropped_hud,
+                "dropped_hud": dropped_hud,
+                "dropped_chat": dropped_chat,
+                "hud_ok": hud_ok,
+                "chat_ok": chat_ok,
+                "cursors_before": cursors_before,
+                "cursors_after": self.client.incremental_cursor_state(),
+            })
             return
 
         status, objectives = self.client.get_mission()
-        hud = self.client.get_hud()
-        chat = self.client.get_chat()
-        self.tracker.feed(hud)  # 解析击杀事件并累积战绩
-        combat = self.tracker.get_summary()
-        self.notices.feed(hud)  # 解析自机技术通知(油温过高/襟翼非对称/发动机过热)
-        notices = self.notices.get_summary()
-        self.awards.feed(hud)   # 解析战斗嘉奖(一血/双杀/三杀/连续无伤歼敌等)
-        awards = self.awards.get_summary(combat.get("player_name"))
+        cursors_before = self.client.incremental_cursor_state()
+        hud_ok, hud = self.client.get_hud_with_status()
+        chat_ok, chat = self.client.get_chat_with_status()
         with self._lock:
+            if generation != self._battle_generation:
+                return
+            self.tracker.feed(hud)  # 解析击杀事件并累积战绩
+            combat = self.tracker.get_summary()
+            self.notices.feed(hud)  # 解析自机技术通知(油温过高/襟翼非对称/发动机过热)
+            notices = self.notices.get_summary()
+            self.awards.feed(hud)   # 解析战斗嘉奖(一血/双杀/三杀/连续无伤歼敌等)
+            awards = self.awards.get_summary(combat.get("player_name"))
             self._mission_status = status
             self._mission_objectives = objectives
             self._combat = combat
@@ -385,13 +496,22 @@ class TelemetryService:
                 self._hud_events.append(ev)
             for msg in chat:
                 self._chat.append(msg)
+        self.recorder.mark({
+            "_event": "incremental_poll",
+            "hud_ok": hud_ok,
+            "chat_ok": chat_ok,
+            "hud_count": len(hud),
+            "chat_count": len(chat),
+            "cursors_before": cursors_before,
+            "cursors_after": self.client.incremental_cursor_state(),
+        })
         # 录制：HUD/聊天增量落盘（击杀/通知可离线从 hudmsg 再解析）
         if hud:
             self.recorder.write_events("hudmsg", [asdict(ev) for ev in hud])
         if chat:
             self.recorder.write_events("chat", list(chat))
 
-    def _poll_mapimg(self) -> None:
+    def _poll_mapimg(self, generation: int) -> None:
         # map_info 已由 fast 组实时缓存，这里只负责按 generation 拉取底图
         with self._lock:
             info = self._map_info
@@ -400,11 +520,13 @@ class TelemetryService:
             data, ext = self.client.fetch_map_image()
             if data and ext:
                 new_map = (data, ext, info.map_generation)
-                if self.save_map:
-                    self._write_map(data, ext, info.map_generation)
         with self._lock:
+            if generation != self._battle_generation:
+                return
             if new_map is not None:
                 self._map_bytes, self._map_ext, self._map_gen = new_map
+        if new_map is not None and self.save_map:
+            self._write_map(*new_map)
 
     def _detect_replay_locked(self, ind: Indicators, now: float) -> None:
         """判定本局是否为录像回放（调用方需已持锁，且仅在战局内调用）。
@@ -432,10 +554,11 @@ class TelemetryService:
                                   now: float) -> bool:
         """更新阵亡待命态（调用方需已持锁，且仅在战局内调用）。
 
-        进入：combat.my.deaths 较上次增加（解析到本人新阵亡）。
-        退出：先见载具静止/残骸化（_dead_inert_seen），再满足以下任一“复活”信号：
+        进入：combat.my.deaths 较上次增加（解析到本人新阵亡）；或陆战中可信的乘员
+              数降至 1（crew_total>=2 且 crew_current<=1，载具已无法继续作战）。
+        退出：在更早的帧先见载具静止/残骸化（_dead_inert_seen），再满足以下任一“复活”信号：
               - 恢复运动（空中 IAS>阈值 / 地面速度>阈值）= 重生起飞/行驶；
-              - 乘员恢复满员（地面坦克 crew_total>=2 且 crew_current>=crew_total）= 新车。
+              - 阵亡后曾见陆战乘员未满，随后恢复满员 = 新车。
         “先静止再活跃”的两段式可正确区分“死亡俯冲(高速但已死)”与“重生”，避免在
         坠落途中误判复活而提前解除抑制。
 
@@ -445,13 +568,28 @@ class TelemetryService:
         deaths = 0
         if isinstance(combat, dict):
             deaths = (combat.get("my") or {}).get("deaths") or 0
-        if deaths > self._last_deaths:
+        army = str(getattr(ind, "army", "") or "").strip().lower()
+        crew = getattr(ind, "crew_current", None)
+        crew_total = getattr(ind, "crew_total", None)
+        ground_crew_knockout = (
+            army in {"tank", "ground"}
+            and crew is not None
+            and crew_total is not None
+            and crew_total >= 2
+            and crew <= 1
+        )
+        entered_dead = False
+        if not self._dead and (deaths > self._last_deaths or ground_crew_knockout):
             self._dead = True
             self._dead_since = now
             self._dead_inert_seen = False
+            self._dead_crew_depleted_seen = False
+            self._dead_source = "hud_event" if deaths > self._last_deaths else "ground_crew"
+            entered_dead = True
         self._last_deaths = deaths
         if not self._dead:
             return False
+        inert_seen_before = self._dead_inert_seen
         ias = processed.get("ias_kmh") if isinstance(processed, dict) else None
         gspeed = getattr(ind, "speed", None)
         inert = ((ias is None or ias < _DEAD_INERT_IAS_KMH)
@@ -460,13 +598,28 @@ class TelemetryService:
             self._dead_inert_seen = True
         moving = ((ias is not None and ias > _DEAD_ALIVE_IAS_KMH)
                   or (gspeed is not None and abs(gspeed) > _DEAD_ALIVE_SPEED_MS))
-        crew = getattr(ind, "crew_current", None)
-        crew_total = getattr(ind, "crew_total", None)
         crew_full = (crew is not None and crew_total is not None
                      and crew_total >= 2 and crew >= crew_total)
-        if self._dead_inert_seen and (moving or crew_full):
+        if (
+            army in {"tank", "ground"}
+            and crew is not None
+            and crew_total is not None
+            and crew_total >= 2
+            and crew < crew_total
+        ):
+            self._dead_crew_depleted_seen = True
+        crew_recovered = (
+            army in {"tank", "ground"}
+            and self._dead_crew_depleted_seen
+            and crew_full
+        )
+        if not entered_dead and inert_seen_before and (moving or crew_recovered):
             self._dead = False
             self._dead_since = None
+            self._dead_inert_seen = False
+            self._dead_crew_depleted_seen = False
+            self._dead_source = None
+            self._life_index = max(1, self._life_index or 1) + 1
             return True
         return False
 
@@ -501,7 +654,11 @@ class TelemetryService:
         self._dead = False
         self._dead_since = None
         self._dead_inert_seen = False
+        self._dead_crew_depleted_seen = False
+        self._dead_source = None
         self._last_deaths = 0
+        self._battle_id = None
+        self._life_index = None
 
     def _write_map(self, data: bytes, ext: str, gen: int | None) -> None:
         try:
@@ -513,6 +670,7 @@ class TelemetryService:
             print(f"[mapimg] 保存地图失败：{exc!r}", file=sys.stderr)
 
     # -- 线程安全读取 ------------------------------------------------------
+
 
     def get_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -542,10 +700,15 @@ class TelemetryService:
             )
             data = snap.to_dict()
             data["replay"] = False
+            data["battle_id"] = self._battle_id
+            data["battle_started_at"] = self._battle_entry_ts
+            data["life_index"] = self._life_index
+            data["confirmed_respawns"] = max(0, (self._life_index or 1) - 1)
             # 阵亡待命态：玩家被击杀后→重生/观战窗口。告警已在 _poll_fast 抑制；这里再把
             # 依赖“自身位置”的态势/接近置空（观战时坐标漂到被观战者，数据失真）。战绩保留
             # （HUD 带全局名字戳，不会被污染，前端仍可展示最终 K/D / 谁击杀了你）。
             data["dead"] = self._dead
+            data["dead_source"] = self._dead_source
             data["processed"] = self._processed
             data["situation"] = None if self._dead else self._situation
             data["combat"] = self._combat
@@ -580,7 +743,25 @@ class TelemetryService:
     def set_player_name(self, name: str | None) -> None:
         """请求设置/清除玩家昵称（在下一次 events 轮询时应用，≤1 个 event-interval 生效）。"""
         with self._lock:
-            self._name_req = (name or "").strip() or None
+            requested = (name or "").strip() or None
+            self._manual_player_name = requested
+            self._name_req = requested
+
+    def get_identity(self) -> dict[str, Any]:
+        """返回身份状态；手动昵称跨局保留，不依赖本局战绩缓存。"""
+        with self._lock:
+            if self._manual_player_name:
+                identity = {
+                    "name": self._manual_player_name,
+                    "source": "manual",
+                    "confidence": 1.0,
+                }
+                return {"self": identity, "player_name": self._manual_player_name}
+            combat = self._combat if isinstance(self._combat, dict) else {}
+            return {
+                "self": combat.get("self"),
+                "player_name": combat.get("player_name"),
+            }
 
     def get_map(self) -> tuple[bytes | None, str | None]:
         with self._lock:
@@ -605,6 +786,11 @@ class TelemetryService:
                 "state": self._state.value,
                 "replay": self._replay,
                 "dead": self._dead,
+                "dead_source": self._dead_source,
+                "battle_id": self._battle_id,
+                "battle_started_at": self._battle_entry_ts,
+                "life_index": self._life_index,
+                "confirmed_respawns": max(0, (self._life_index or 1) - 1),
                 "updated_at": self._fast_ts,
                 "has_map": self._map_bytes is not None,
                 "map_generation": self._map_gen,
@@ -625,8 +811,29 @@ class _Handler(BaseHTTPRequestHandler):
         return self.server.service  # type: ignore[attr-defined]
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        origin = str(self.headers.get("Origin") or "").strip()
+        allowed_origins = getattr(self.server, "cors_origins", frozenset())
+        if origin and origin in allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", _ACTION_HEADER)
+            self.send_header("Vary", "Origin")
+
+    def _host_allowed(self) -> bool:
+        bind_host = str(getattr(self.server, "bind_host", "")).strip().lower()
+        if not _is_loopback_host(bind_host):
+            return True
+        try:
+            request_host = urlparse(f"//{self.headers.get('Host', '')}").hostname or ""
+        except ValueError:
+            return False
+        return _is_loopback_host(request_host)
+
+    def _action_allowed(self) -> bool:
+        if self.headers.get(_ACTION_HEADER) == "1":
+            return True
+        self._send_json({"error": "action_header_required"}, 403)
+        return False
 
     def _send_json(self, obj: Any, code: int = 200) -> None:
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -647,12 +854,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_OPTIONS(self) -> None:
+        if not self._host_allowed():
+            self._send_json({"error": "host_not_allowed"}, 403)
+            return
+        origin = str(self.headers.get("Origin") or "").strip()
+        allowed_origins = getattr(self.server, "cors_origins", frozenset())
+        if origin and origin not in allowed_origins:
+            self._send_json({"error": "origin_not_allowed"}, 403)
+            return
         self.send_response(204)
         self._cors()
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self) -> None:
+        if not self._host_allowed():
+            self._send_json({"error": "host_not_allowed"}, 403)
+            return
         path = urlparse(self.path).path.rstrip("/") or "/"
 
         if path in ("/", "/health", "/api/health"):
@@ -678,6 +896,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/identity":
             # 查看/设置“自己是谁”。?name=昵称 设手动昵称(权威)；?clear=1 清除回退自动。
             q = parse_qs(urlparse(self.path).query)
+            if ("clear" in q or q.get("name")) and not self._action_allowed():
+                return
             requested: Any = "(unchanged)"
             if "clear" in q:
                 self.service.set_player_name(None)
@@ -685,12 +905,11 @@ class _Handler(BaseHTTPRequestHandler):
             elif q.get("name"):
                 requested = q["name"][0]
                 self.service.set_player_name(requested)
-            combat = self.service.get_part("combat") or {}
+            identity = self.service.get_identity()
             self._send_json({
                 "requested": requested,
-                "note": "设置将在下一次 events 轮询（≤event-interval）后体现在 self 中",
-                "self": combat.get("self"),
-                "player_name": combat.get("player_name"),
+                "note": "手动身份立即持久显示；战绩归属将在下一次 events 轮询（≤event-interval）后应用",
+                **identity,
             })
             return
 
@@ -710,6 +929,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/record":
             # 调试开关：?on=1 开始转存 / ?on=0 停止 / 无参=查状态
             q = parse_qs(urlparse(self.path).query)
+            if "on" in q and not self._action_allowed():
+                return
             rec = self.service.recorder
             if "on" in q:
                 want = q["on"][0].strip().lower() in ("1", "true", "yes", "on")
@@ -762,6 +983,31 @@ class _Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 
+def _is_loopback_host(host: str) -> bool:
+    value = str(host or "").strip().lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+def create_http_server(host: str, port: int, *, cors_origins: list[str] | tuple[str, ...] = ()):
+    server_class = ThreadingHTTPServer
+    if ":" in host:
+        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+
+        server_class = IPv6ThreadingHTTPServer
+    server = server_class((host, port), _Handler)
+    server.bind_host = host  # type: ignore[attr-defined]
+    server.cors_origins = frozenset(  # type: ignore[attr-defined]
+        str(origin).strip() for origin in cors_origins if str(origin).strip()
+    )
+    return server
+
+
 def main() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -769,8 +1015,14 @@ def main() -> None:
         pass
 
     parser = argparse.ArgumentParser(description="战雷遥测后台服务（分频轮询）")
-    parser.add_argument("--host", default="0.0.0.0", help="对外服务监听地址")
+    parser.add_argument("--host", default=DEFAULT_BIND_HOST, help="服务监听地址（默认仅本机）")
     parser.add_argument("--port", type=int, default=8112, help="对外服务端口（默认 8112）")
+    parser.add_argument(
+        "--cors-origin",
+        action="append",
+        default=[],
+        help="允许读取遥测的浏览器 Origin；可重复指定，默认不允许跨域",
+    )
     parser.add_argument("--wt-host", default="127.0.0.1", help="游戏 8111 地址")
     parser.add_argument("--wt-port", type=int, default=WT_PORT, help="游戏遥测端口（默认 8111）")
     parser.add_argument("--fast-interval", type=float, default=0.1, help="姿态/仪表轮询间隔（默认 0.1s）")
@@ -782,9 +1034,11 @@ def main() -> None:
     parser.add_argument("--profiles", default=None, help="机型告警配置文件路径")
     parser.add_argument("--player-name", default=None,
                         help="玩家名(不含战队标签)的初始权威值；留空则自动识别，"
-                             "也可运行时用 GET /api/identity?name=xxx 设置")
+                             "也可运行时用 GET /api/identity?name=xxx 设置，修改请求需携带 "
+                             "X-Neko-Warthunder-Action: 1")
     parser.add_argument("--record", action="store_true",
-                        help="启动即开启数据转存（调试开关；也可运行时 GET /api/record?on=1 切换）")
+                        help="启动即开启数据转存（调试开关；也可运行时 GET /api/record?on=1 切换，"
+                             "修改请求需携带 X-Neko-Warthunder-Action: 1）")
     parser.add_argument("--record-dir", default="records", help="转存数据根目录（默认 records）")
     parser.add_argument("--record-interval", type=float, default=1.0,
                         help="快照转存间隔（秒，默认 1.0；抓超速/失速等快瞬变可设 0.2）")
@@ -817,7 +1071,7 @@ def main() -> None:
         print(f"  [录制] 已开启 -> {st['session_dir']}")
     service.start()
 
-    httpd = ThreadingHTTPServer((args.host, args.port), _Handler)
+    httpd = create_http_server(args.host, args.port, cors_origins=args.cors_origin)
     httpd.service = service  # type: ignore[attr-defined]
 
     print(f"战雷遥测服务已启动：http://{args.host}:{args.port}")
@@ -844,6 +1098,7 @@ def main() -> None:
         print("\n正在关闭…")
     finally:
         httpd.shutdown()
+        httpd.server_close()
         service.stop()
         print("已停止。")
 

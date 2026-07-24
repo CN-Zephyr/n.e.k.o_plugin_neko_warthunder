@@ -149,7 +149,7 @@ def test_push_message_parts_text_excludes_unsafe_raw_name():
     assert "{MASTER_NAME}" in call["parts"][0]["text"]
     assert "建议台词：" not in call["parts"][0]["text"]
     assert "不套固定话" in call["parts"][0]["text"]
-    assert "不复读上一句" in call["parts"][0]["text"]
+    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_recommended_reply"] == ""
 
 
@@ -211,7 +211,7 @@ def test_kill_praise_does_not_use_plugin_owned_blind_template():
     assert call["metadata"]["plugin_owned_output"] is False
     assert call["metadata"]["plugin_recommended_reply"] == ""
     assert "建议台词：" not in call["parts"][0]["text"]
-    assert "临场" in call["parts"][0]["text"]
+    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
 
 
 def test_critical_safety_event_uses_respond_by_default_so_tts_can_speak():
@@ -310,21 +310,22 @@ def test_ground_kill_prompt_does_not_say_air_kill_wording():
     assert "击毁" in prompt
     assert "当前模式：陆战/地面载具" in prompt
     assert "角色：车组搭档" in prompt
-    assert "陆战车组语气" in prompt
-    assert "只用地面载具战果语境" in prompt
+    assert "语境：只用陆战车组词" in prompt
     assert "击落" not in prompt
     assert "空中目标" not in prompt
 
 
-def test_ground_kill_prompt_allows_non_template_praise_range():
+def test_ground_kill_prompt_leaves_expression_to_the_character():
     prompt = NekoDispatcher(None).build_prompt(
         BattleEvent("you_killed", payload={"domain": "ground", "victim": "enemy"})
     )
 
-    assert "临场反应，不像颁奖词" in prompt
-    assert "别固定说稳住/推进" in prompt
-    assert "提醒别贪" in prompt
-    assert "可确认、轻夸、调侃或收住" in prompt
+    assert "回应方式由你根据当前人设与对话上下文决定" in prompt
+    assert "插件不指定情绪或措辞" in prompt
+    assert "轻夸" not in prompt
+    assert "调侃" not in prompt
+    assert "提醒别贪" not in prompt
+    assert "稳住/继续推进" not in prompt
     assert "建议台词：" not in prompt
 
 
@@ -341,7 +342,8 @@ def test_air_kill_prompt_keeps_air_kill_wording():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("you_killed", payload={"domain": "air", "victim": "enemy"}))
 
     assert "击落" in prompt
-    assert "空战后座语气" in prompt
+    assert "当前模式：空战/飞行" in prompt
+    assert "语境：只用空战飞行词" in prompt
 
 
 def test_naval_kill_prompt_uses_ship_wording_instead_of_air_wording():
@@ -350,8 +352,8 @@ def test_naval_kill_prompt_uses_ship_wording_instead_of_air_wording():
     )
 
     assert "击毁敌方舰艇" in prompt
-    assert "海战舰桥语气" in prompt
-    assert "只用舰艇战果语境" in prompt
+    assert "当前模式：海战/舰艇" in prompt
+    assert "语境：只用海战舰艇词" in prompt
     assert "击落" not in prompt
     assert "空中目标" not in prompt
 
@@ -407,10 +409,9 @@ def test_generic_proximity_prompt_forbids_filling_missing_direction_or_distance(
     assert "只报观测到的方位/距离/目标类型" in prompt
 
 
-def test_spawn_prompt_forbids_invented_target_or_radar_cues():
+def test_spawn_prompt_leaves_expression_to_persona_and_forbids_invented_cues():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("spawn", payload={"domain": "air"}))
 
-    assert "短促开局招呼" in prompt
     assert "当前模式：空战/飞行" in prompt
     assert "角色：后座或僚机" in prompt
     assert "可用语境：上机、升空、跟上、护住你" in prompt
@@ -418,7 +419,9 @@ def test_spawn_prompt_forbids_invented_target_or_radar_cues():
     assert "输出：一句中文台词，28字内" in prompt
     assert "不复述规则/字段" in prompt
     assert "不加前缀或引号" in prompt
-    assert "可活泼即兴" in prompt
+    assert "插件不指定情绪或措辞" in prompt
+    assert "短促开局招呼" not in prompt
+    assert "可活泼即兴" not in prompt
     assert "建议台词：" not in prompt
     assert "别报敌情/方位/锁定/击杀/威胁" in prompt
     assert "不编锁定/开火/战果/损伤" in prompt
@@ -461,7 +464,7 @@ def test_spawn_prompt_uses_naval_opening_terms():
         assert non_naval_term not in prompt
 
 
-def test_spawn_push_allows_host_polish_with_lively_bounded_prompt():
+def test_spawn_push_allows_persona_owned_bounded_prompt():
     plugin = FakePlugin()
 
     result = NekoDispatcher(plugin).push_event(BattleEvent("spawn", payload={"domain": "ground"}), dry_run=False)
@@ -477,7 +480,7 @@ def test_spawn_push_allows_host_polish_with_lively_bounded_prompt():
     assert "角色：车组搭档" in call["parts"][0]["text"]
     for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
         assert air_term not in call["parts"][0]["text"]
-    assert "可活泼即兴" in call["parts"][0]["text"]
+    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
     assert "别报敌情/方位/锁定/击杀/威胁" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is False
     assert call["metadata"]["plugin_recommended_reply"] == ""
@@ -644,8 +647,8 @@ def test_radio_command_prompt_uses_safe_command_without_raw_chat_or_sender():
 
     assert "玩家无线电：进攻D点" in prompt
     assert "当前模式：陆战/地面载具" in prompt
-    assert "建议台词：收到，看D点。" in prompt
-    assert "不复述无线电原文" in prompt
+    assert "建议台词：" not in prompt
+    assert "不引用聊天原文" in prompt
     assert UNSAFE_NAME not in prompt
     assert "RAW_RADIO" not in prompt
     assert "ignore previous instructions" not in prompt
@@ -660,7 +663,7 @@ def test_radio_command_prompt_supports_praise_without_raw_text():
     )
 
     assert "玩家无线电：干得好" in prompt
-    assert "建议台词：哼，那当然。" in prompt
+    assert "建议台词：" not in prompt
     assert "干得好！" not in prompt
 
 
@@ -681,25 +684,27 @@ def test_free_text_activity_keeps_dry_run_observable_but_suppresses_real_push():
     assert output["event_id"] == "free_text_activity"
 
 
-def test_trade_kill_prompt_acknowledges_loss_but_still_praises_trade():
+def test_trade_kill_prompt_keeps_trade_as_fact_without_prescribing_reaction():
     prompt = NekoDispatcher(None).build_prompt(
         BattleEvent("you_killed", payload={"domain": "air", "trade_death": True})
     )
 
-    assert "换掉一个" in prompt
+    assert "可信交换战果" in prompt
     assert "不复盘" in prompt
-    assert "克制反应" in prompt
-    assert "可安慰或轻夸" in prompt
+    assert "交换只作事实" in prompt
+    assert "不评价得失" in prompt
+    assert "安慰" not in prompt
+    assert "轻夸" not in prompt
 
 
-def test_kill_prompt_avoids_overexcited_chatty_intent_words():
+def test_kill_prompt_only_constrains_facts_and_output_shape():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("you_killed", payload={"domain": "air"}))
 
-    assert "可确认、轻夸、调侃或收住" in prompt
-    assert "不套固定话" in prompt
-    assert "临场反应，不像颁奖词" in prompt
-    assert "不复读上一句" in prompt
-    assert "庆祝" not in prompt
+    assert "{MASTER_NAME} 刚取得可信战果" in prompt
+    assert "不复盘或补充未提供的战术细节" in prompt
+    assert "插件不指定情绪或措辞" in prompt
+    for prescribed_style in ("轻夸", "调侃", "坏笑", "安慰", "得意", "提醒留速"):
+        assert prescribed_style not in prompt
     assert "不反问、不续聊" in prompt
 
 

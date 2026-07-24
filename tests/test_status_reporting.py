@@ -12,7 +12,7 @@ import types
 
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.core.arbiter import Arbiter
-from neko_warthunder.core.contracts import BattleState, WtConfig
+from neko_warthunder.core.contracts import BattleEvent, BattleState, WtConfig
 from neko_warthunder.core.safety_guard import SafetyGuard
 from neko_warthunder.core.scenario import ScenarioResolver
 
@@ -74,6 +74,7 @@ def _plugin_for_report_tests():
     plugin.timeline = RuntimeTimeline()
     plugin.data_layer_manager = types.SimpleNamespace(
         configure=lambda *_args, **_kwargs: None,
+        observe_health=lambda *_args, **_kwargs: None,
         snapshot=lambda: {"mode": "external"},
     )
     plugin.state = BattleState(connected=True, conn_state="in_battle", in_battle=True, scenario="IN_FLIGHT")
@@ -98,6 +99,7 @@ def _plugin_for_action_tests():
     plugin.timeline = RuntimeTimeline()
     plugin.data_layer_manager = types.SimpleNamespace(
         configure=lambda *_args, **_kwargs: None,
+        observe_health=lambda *_args, **_kwargs: None,
         snapshot=lambda: {"mode": "external"},
     )
     plugin.state = BattleState()
@@ -140,6 +142,20 @@ def test_status_report_emits_immediately_when_snapshot_changes():
 
     assert len(plugin.reported_statuses) == 2
     assert plugin.reported_statuses[-1]["scenario"] == "CRITICAL_RISK"
+
+
+def test_tick_refreshes_data_layer_health_from_telemetry_connection():
+    plugin = _plugin_for_report_tests()
+    observed = []
+    plugin.client = types.SimpleNamespace(poll=lambda: BattleState(connected=False, conn_state="offline"))
+    plugin.data_layer_manager = types.SimpleNamespace(observe_health=observed.append)
+    plugin._sync_game_context = lambda *_args: None
+    plugin._evaluate = lambda *_args: None
+    plugin._report = lambda *_args: None
+
+    plugin._tick()
+
+    assert observed == [False]
 
 
 def _plugin_for_game_context_tests():
@@ -274,6 +290,67 @@ def _plugin_for_runtime_evaluate_tests(*, clock_values: list[float], dry_run: bo
     module.time.time = lambda: next(clock_iter)
 
     return plugin, module, original_time
+
+
+def test_new_battle_id_resets_cross_battle_runtime_state_once():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 101.0])
+    reset_counts = {"engine": 0, "resolver": 0, "arbiter": 0}
+
+    def wrap_reset(name, original):
+        def counted_reset():
+            reset_counts[name] += 1
+            return original()
+
+        return counted_reset
+
+    plugin.engine.reset = wrap_reset("engine", plugin.engine.reset)
+    plugin.resolver.reset = wrap_reset("resolver", plugin.resolver.reset)
+    plugin.arbiter.reset = wrap_reset("arbiter", plugin.arbiter.reset)
+
+    try:
+        same_prev = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="ground",
+            battle_id="battle-1",
+            life_index=1,
+        )
+        same_cur = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="ground",
+            battle_id="battle-1",
+            life_index=2,
+        )
+        plugin._evaluate(same_prev, same_cur)
+        assert reset_counts == {"engine": 0, "resolver": 0, "arbiter": 0}
+
+        next_battle = BattleState(
+            connected=True,
+            conn_state="in_battle",
+            in_battle=True,
+            vehicle_valid=True,
+            domain="ground",
+            battle_id="battle-2",
+            life_index=1,
+        )
+        plugin._evaluate(same_cur, next_battle)
+
+        assert reset_counts == {"engine": 1, "resolver": 1, "arbiter": 1}
+        boundary_records = [
+            item
+            for item in plugin.timeline.snapshot()["recent_timeline"]
+            if item.get("stage") == "battle_boundary"
+        ]
+        assert len(boundary_records) == 1
+        assert boundary_records[0]["reason"] == "new_battle_id"
+        assert boundary_records[0]["outcome"] == "reset"
+    finally:
+        module.time.time = original_time
 
 
 def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
@@ -785,9 +862,96 @@ def test_chat_message_starts_quiet_window_without_storing_text():
 
     assert result == {"status": "observed"}
     assert plugin._last_user_chat_at > 0
+    assert plugin._last_user_chat_mode == "text"
     snapshot = plugin.timeline.snapshot()
     assert "raw private chat" not in repr(snapshot)
     assert snapshot["recent_timeline"][-1]["reason"] == "user_chat_quiet_window_started"
+
+
+def test_suppressed_dispatch_restores_output_rate_limit_clock():
+    plugin = _plugin_for_action_tests()
+    plugin.cfg = WtConfig(
+        dry_run=False,
+        global_rate_limit_seconds=12.0,
+        user_chat_quiet_window_seconds=20.0,
+    )
+    plugin.safety = SafetyGuard(plugin.cfg)
+    plugin.arbiter = Arbiter(plugin.safety)
+    plugin.engine = types.SimpleNamespace(
+        feed=lambda _prev, _cur: [BattleEvent("spawn", ts=1.0)],
+        reset=lambda: None,
+    )
+    plugin.resolver = types.SimpleNamespace(
+        resolve=lambda _cur, _now, _grace: "IN_FLIGHT",
+        reset=lambda: None,
+        current_stress_reasons=lambda _now: frozenset(),
+    )
+    dispatch_results = []
+
+    def suppress_dispatch(event, *, dry_run):
+        dispatch_results.append((event.event_id, dry_run))
+        return "suppressed(event=spawn/enter, reason=user_chat_quiet_window)"
+
+    plugin.dispatcher = types.SimpleNamespace(push_event=suppress_dispatch)
+    plugin._record_blocked_free_text_sources = lambda _cur: None
+    plugin._record_deferred_hud_notices = lambda _cur: None
+    plugin._suppress_takeoff_grace = lambda candidates, _cur, _now: candidates
+    plugin._annotate_runtime_context = lambda candidates, _cur, _now: candidates
+
+    plugin._evaluate(BattleState(), BattleState(connected=True, in_battle=True))
+
+    assert dispatch_results == [("spawn", False)]
+    assert plugin.safety.rate_limit_remaining() == 0.0
+
+
+def test_user_context_refresh_keeps_only_safe_text_activity_metadata():
+    plugin = _plugin_for_action_tests()
+    plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    plugin._last_user_chat_at = 0.0
+    plugin._last_user_chat_mode = "unknown"
+    plugin._last_user_context_seen_at = 0.0
+    private_text = "raw private chat should never enter plugin state or timeline"
+    record = types.SimpleNamespace(
+        timestamp=123.0,
+        raw={
+            "type": "user_message",
+            "content": private_text,
+            "lanlan": "Lanlan",
+            "is_voice": False,
+            "_ts": 123.0,
+        },
+    )
+    memory = types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+    plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=memory))
+
+    mode = plugin._refresh_user_chat_activity(target_lanlan="Lanlan")
+
+    assert mode == "text"
+    assert plugin._last_user_chat_at == 123.0
+    assert plugin._last_user_chat_mode == "text"
+    assert private_text not in repr(vars(plugin))
+    assert private_text not in repr(plugin.timeline.snapshot())
+    status = plugin.timeline.snapshot()["recent_timeline"][-1]
+    assert status["input_mode"] == "text"
+    assert status["target_lanlan"] == "Lanlan"
+
+
+def test_user_context_refresh_rejects_another_character_activity():
+    plugin = _plugin_for_action_tests()
+    plugin._last_user_chat_at = 0.0
+    plugin._last_user_chat_mode = "unknown"
+    plugin._last_user_context_seen_at = 0.0
+    record = types.SimpleNamespace(
+        timestamp=123.0,
+        raw={"type": "user_message", "lanlan": "Other", "is_voice": False, "_ts": 123.0},
+    )
+    memory = types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+    plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=memory))
+
+    mode = plugin._refresh_user_chat_activity(target_lanlan="Lanlan")
+
+    assert mode == "unknown"
+    assert plugin._last_user_chat_at == 0.0
 
 
 def test_set_identity_persists_player_name_to_runtime_state(tmp_path):
@@ -909,6 +1073,68 @@ def test_reload_config_uses_saved_dialogue_intrusion_mode(tmp_path):
     assert plugin.cfg.battle_output_quiet_window_seconds == 30.0
 
 
+def test_reload_config_migrates_legacy_urgent_output_tts_default(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    class LegacyConfig:
+        def __init__(self):
+            self.set_calls = []
+
+        async def dump(self, timeout=5.0):
+            return {"neko_warthunder": {"plugin_owned_urgent_output_enabled": True}}
+
+        async def set(self, path, value, timeout=5.0):
+            self.set_calls.append((path, value))
+
+    plugin.config = LegacyConfig()
+    asyncio.run(plugin._reload_config())
+
+    saved = json.loads(plugin._runtime_state_path.read_text(encoding="utf-8"))
+    assert plugin.cfg.plugin_owned_urgent_output_enabled is False
+    assert plugin.config.set_calls == [("neko_warthunder.plugin_owned_urgent_output_enabled", False)]
+    assert saved["urgent_output_tts_default_migrated_v1"] is True
+
+
+def test_reload_config_retries_urgent_output_tts_migration_after_persist_failure(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+
+    class FailingLegacyConfig:
+        async def dump(self, timeout=5.0):
+            return {"neko_warthunder": {"plugin_owned_urgent_output_enabled": True}}
+
+        async def set(self, path, value, timeout=5.0):
+            raise RuntimeError("write unavailable")
+
+    plugin.config = FailingLegacyConfig()
+    asyncio.run(plugin._reload_config())
+
+    assert plugin.cfg.plugin_owned_urgent_output_enabled is False
+    assert not plugin._runtime_state_path.exists()
+
+
+def test_reload_config_preserves_explicit_urgent_output_tts_opt_in_after_migration(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._runtime_state_path = tmp_path / ".runtime_state.json"
+    plugin._runtime_state_path.write_text(
+        json.dumps({"urgent_output_tts_default_migrated_v1": True}),
+        encoding="utf-8",
+    )
+
+    class OptedInConfig:
+        async def dump(self, timeout=5.0):
+            return {"neko_warthunder": {"plugin_owned_urgent_output_enabled": True}}
+
+        async def set(self, path, value, timeout=5.0):
+            raise AssertionError("completed migration must not overwrite an explicit choice")
+
+    plugin.config = OptedInConfig()
+    asyncio.run(plugin._reload_config())
+
+    assert plugin.cfg.plugin_owned_urgent_output_enabled is True
+
+
 def test_dashboard_reports_dialogue_intrusion_policy(tmp_path):
     plugin = _plugin_for_action_tests()
     plugin._runtime_state_path = tmp_path / ".runtime_state.json"
@@ -1004,3 +1230,48 @@ def test_reload_config_uses_runtime_state_player_name_when_profile_missing(tmp_p
     asyncio.run(plugin._reload_config())
 
     assert plugin.cfg.player_name == "CN-Zephyr"
+
+
+def test_config_change_restarts_running_data_layer_when_url_changes():
+    plugin = _plugin_for_action_tests()
+    plugin._startup_completed = True
+    calls = []
+
+    class Manager:
+        def configure(self, cfg):
+            calls.append(("configure", cfg.data_layer_url))
+
+        def snapshot(self):
+            return {"mode": "managed", "health": True}
+
+        def stop(self):
+            calls.append(("stop", None))
+            return {"mode": "stopped", "health": False}
+
+        def start_if_needed(self):
+            calls.append(("start", None))
+            return {"mode": "managed", "health": True}
+
+    plugin.data_layer_manager = Manager()
+    plugin._restore_identity_to_data_layer = lambda: calls.append(("identity", None)) or {"ok": True}
+
+    async def reload_config():
+        plugin._apply_config(
+            WtConfig(
+                data_layer_url="http://127.0.0.1:8113",
+                data_layer_auto_start=True,
+            )
+        )
+
+    plugin._reload_config = reload_config
+
+    result = asyncio.run(plugin.on_config_change())
+
+    assert calls == [
+        ("configure", "http://127.0.0.1:8113"),
+        ("stop", None),
+        ("start", None),
+        ("identity", None),
+    ]
+    assert result["data_layer"] == {"mode": "managed", "health": True}
+    assert result["identity"] == {"ok": True}

@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.core.arbiter import Arbiter
-from neko_warthunder.core.contracts import COMBAT_STRESS, CRITICAL_RISK, DEAD, IN_FLIGHT, BattleEvent, WtConfig
+from neko_warthunder.core.contracts import (
+    COMBAT_STRESS,
+    CRITICAL_RISK,
+    DEAD,
+    IN_FLIGHT,
+    SPAWNING,
+    BattleEvent,
+    WtConfig,
+)
 from neko_warthunder.core.safety_guard import SafetyGuard
 
 
@@ -146,12 +154,12 @@ def test_dead_scenario_late_kill_after_death_becomes_trade_praise():
     assert any(item["event_id"] == "you_killed" and item["reason"] == "trade_kill_after_death" for item in chain)
 
 
-def test_dead_scenario_pending_kill_waits_for_late_death_confirmation():
+def test_dead_scenario_pending_kill_accepts_death_confirmation_within_grace():
     arb = _arbiter()
 
     first, _ = arb.decide([BattleEvent("you_killed", payload={"victim": "A"}, ts=100.0)], IN_FLIGHT, 100.0)
-    waiting, waiting_chain = arb.decide([], DEAD, 103.0)
-    trade, trade_chain = arb.decide([BattleEvent("you_died", level="critical", ts=120.0)], DEAD, 120.0)
+    waiting, waiting_chain = arb.decide([], DEAD, 102.1)
+    trade, trade_chain = arb.decide([BattleEvent("you_died", level="critical", ts=103.5)], DEAD, 103.5)
 
     assert first is None
     assert waiting is None
@@ -162,6 +170,42 @@ def test_dead_scenario_pending_kill_waits_for_late_death_confirmation():
     assert trade is not None and trade.event_id == "you_killed"
     assert trade.payload["trade_death"] is True
     assert any(item["event_id"] == "you_killed" and item["reason"] == "trade_kill_preempt" for item in trade_chain)
+
+
+def test_dead_scenario_pending_kill_expires_before_late_death_confirmation():
+    arb = _arbiter()
+
+    first, _ = arb.decide([BattleEvent("you_killed", payload={"victim": "A"}, ts=100.0)], IN_FLIGHT, 100.0)
+    waiting, _ = arb.decide([], DEAD, 102.1)
+    death, chain = arb.decide([BattleEvent("you_died", level="critical", ts=106.2)], DEAD, 106.2)
+
+    assert first is None
+    assert waiting is None
+    assert death is not None and death.event_id == "you_died"
+    assert "trade_death" not in death.payload
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "stale_kill_after_dead_timeout"
+        for item in chain
+    )
+
+
+def test_dead_scenario_pending_kill_is_cleared_before_respawn():
+    arb = _arbiter()
+
+    first, _ = arb.decide([BattleEvent("you_killed", payload={"victim": "A"}, ts=100.0)], IN_FLIGHT, 100.0)
+    waiting, _ = arb.decide([], DEAD, 101.0)
+    respawn, chain = arb.decide([], SPAWNING, 103.1)
+    later, later_chain = arb.decide([], IN_FLIGHT, 106.0)
+
+    assert first is None
+    assert waiting is None
+    assert respawn is None
+    assert any(
+        item["event_id"] == "you_killed" and item["reason"] == "stale_kill_after_dead_state_exit"
+        for item in chain
+    )
+    assert later is None
+    assert later_chain == []
 
 
 def test_dispatcher_prompt_uses_generic_multikill_summary_without_raw_names():

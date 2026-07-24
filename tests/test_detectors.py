@@ -203,7 +203,7 @@ def test_free_text_activity_detector_emits_safe_summary_without_raw_text():
     assert ev.level == "warning"
     assert ev.payload["source"] == "awards"
     assert ev.payload["count"] == 1
-    assert ev.payload["latest_code"] == "final_blow"
+    assert set(ev.payload) == {"source", "count"}
     assert "RAW_AWARD" not in repr(ev)
     assert "RAW_FEED" not in repr(ev)
     assert "RAW_HUDMSG" not in repr(ev)
@@ -549,6 +549,59 @@ def test_hud_notice_overheat_emits_safe_overheat_event_once():
     assert det.feed(cur, cur) is None
 
 
+def test_detector_engine_reset_rearms_same_id_kill_and_hud_notice_for_a_new_battle():
+    alive = {
+        "connected": True,
+        "conn_state": "in_battle",
+        "in_battle": True,
+        "vehicle_valid": True,
+        "domain": "air",
+    }
+    empty = C.BattleState(**alive)
+    kill = C.BattleState(
+        **alive,
+        combat={"feed": [{"id": 1, "is_my_kill": True, "victim": "Target"}]},
+    )
+    notice = C.BattleState(
+        **alive,
+        hud_notices=[{"id": 1, "code": "engine_overheat", "level": "warning"}],
+    )
+    engine = DetectorEngine([KillDetector("Me"), HudNoticeDetector()])
+
+    assert [event.event_id for event in engine.feed(empty, kill)] == ["you_killed"]
+    assert [event.event_id for event in engine.feed(kill, notice)] == ["overheat"]
+
+    engine.reset()
+
+    assert [event.event_id for event in engine.feed(empty, kill)] == ["you_killed"]
+    assert [event.event_id for event in engine.feed(kill, notice)] == ["overheat"]
+
+
+def test_detector_engine_reset_rearms_same_id_death_for_a_new_battle():
+    alive = C.BattleState(
+        connected=True,
+        conn_state="in_battle",
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+    )
+    death_feed = C.BattleState(
+        connected=True,
+        conn_state="in_battle",
+        in_battle=True,
+        vehicle_valid=True,
+        domain="air",
+        combat={"feed": [{"id": 1, "is_my_death": True, "action": "shot_down"}]},
+    )
+    engine = DetectorEngine([DeathDetector()])
+
+    assert [event.event_id for event in engine.feed(alive, death_feed)] == ["you_died"]
+
+    engine.reset()
+
+    assert [event.event_id for event in engine.feed(alive, death_feed)] == ["you_died"]
+
+
 def test_hud_notice_uses_data_layer_level_field():
     det = HudNoticeDetector()
     cur = C.BattleState(
@@ -800,6 +853,7 @@ def test_air_situation_detector_uses_continuous_enemy_geometry_for_air_threats()
         "is_air": True,
         "distance_m": 4200.0,
         "bearing_deg": 20.0,
+        "clock": 12,
         "relative_deg": 15.0,
     }
     assert "label" not in ev.payload

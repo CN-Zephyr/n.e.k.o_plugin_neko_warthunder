@@ -32,7 +32,12 @@ def test_detector_engine_collects_condition_and_discrete_events_then_dedups():
     events = engine.feed(prev, cur)
     assert [event.event_id for event in events] == ["low_fuel", "spawn", "you_killed"]
     assert events[0].payload == {"domain": "air", "fuel_fraction": 0.08}
-    assert events[1].payload == {"vehicle_type": "bf-109f-4", "domain": "air", "domain_label": "空军"}
+    assert events[1].payload == {
+        "vehicle_type": "bf-109f-4",
+        "domain": "air",
+        "domain_label": "空军",
+        "respawn": False,
+    }
     assert events[2].payload["victim"] == "Bandit"
 
     assert engine.feed(cur, cur) == []

@@ -51,6 +51,7 @@ from .detectors.discrete.lifecycle import build_discrete_detectors
 
 _CONFIG_SECTION = "neko_warthunder"
 _RUNTIME_STATE_FILENAME = ".runtime_state.json"
+_URGENT_OUTPUT_TTS_MIGRATION_KEY = "urgent_output_tts_default_migrated_v1"
 _DIALOGUE_INTRUSION_PRESETS: dict[str, tuple[float, float]] = {
     "no_interrupt": (60.0, 30.0),
     "critical_only": (60.0, 30.0),
@@ -109,19 +110,24 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self._blocked_free_text_sources_seen: set[str] = set()
         self._takeoff_radio_altitude_grace_active = False
         self._last_user_chat_at = 0.0
+        self._last_user_chat_mode = "unknown"
+        self._last_user_context_seen_at = 0.0
         self._last_battle_respond_at = 0.0
         self._startup_completed = False
 
     # ------------------------------------------------------------------ 配置
     async def _reload_config(self) -> None:
         data: dict[str, Any] = {}
+        config_loaded = False
         try:
             dumped = await self.config.dump(timeout=5.0)
+            config_loaded = True
             if isinstance(dumped, dict) and isinstance(dumped.get(_CONFIG_SECTION), dict):
-                data = dumped[_CONFIG_SECTION]
+                data = dict(dumped[_CONFIG_SECTION])
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(f"config load failed, using defaults: {type(exc).__name__}")
         runtime_state = self._load_runtime_state()
+        await self._migrate_urgent_output_tts_default(data, runtime_state, config_loaded=config_loaded)
         if not str(data.get("player_name") or "").strip():
             saved_player_name = str(runtime_state.get("player_name") or "").strip()
             if saved_player_name:
@@ -137,6 +143,30 @@ class NekoWarthunderPlugin(NekoPluginBase):
         if "broadcast_categories" in runtime_state:
             data["broadcast_categories"] = normalize_broadcast_categories(runtime_state.get("broadcast_categories"))
         self._apply_config(WtConfig.from_mapping(data))
+
+    async def _migrate_urgent_output_tts_default(
+        self,
+        data: dict[str, Any],
+        runtime_state: dict[str, Any],
+        *,
+        config_loaded: bool,
+    ) -> None:
+        if not config_loaded or runtime_state.get(_URGENT_OUTPUT_TTS_MIGRATION_KEY) is True:
+            return
+
+        if data.get("plugin_owned_urgent_output_enabled") is True:
+            data["plugin_owned_urgent_output_enabled"] = False
+            try:
+                await self.config.set(
+                    f"{_CONFIG_SECTION}.plugin_owned_urgent_output_enabled",
+                    False,
+                    timeout=5.0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(f"urgent output TTS default migration failed: {type(exc).__name__}")
+                return
+
+        self._save_runtime_state({_URGENT_OUTPUT_TTS_MIGRATION_KEY: True})
 
     def _apply_config(self, cfg: WtConfig) -> None:
         prev_player = self.cfg.player_name
@@ -196,12 +226,29 @@ class NekoWarthunderPlugin(NekoPluginBase):
 
     @lifecycle(id="config_change")
     async def on_config_change(self, **_):
+        old_connection = (self.cfg.data_layer_url, self.cfg.data_layer_auto_start)
         await self._reload_config()
-        return Ok({"status": "reloaded", "dry_run": self.cfg.dry_run})
+        new_connection = (self.cfg.data_layer_url, self.cfg.data_layer_auto_start)
+        data_layer_status = self.data_layer_manager.snapshot()
+        identity_result: dict[str, Any] | None = None
+        if old_connection != new_connection and getattr(self, "_startup_completed", False):
+            self.data_layer_manager.stop()
+            data_layer_status = self.data_layer_manager.start_if_needed()
+            if data_layer_status.get("health"):
+                identity_result = self._restore_identity_to_data_layer()
+        return Ok(
+            {
+                "status": "reloaded",
+                "dry_run": self.cfg.dry_run,
+                "data_layer": data_layer_status,
+                "identity": identity_result,
+            }
+        )
 
     @message(id="chat_quiet_window", source="chat")
     def on_chat_message(self, **_):
         self._last_user_chat_at = time.time()
+        self._last_user_chat_mode = "text"
         if self.timeline:
             self.timeline.record_stage(
                 stage="chat_observed",
@@ -212,6 +259,63 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 safe_summary="chat/observed",
             )
         return Ok({"status": "observed"})
+
+    def _refresh_user_chat_activity(self, *, target_lanlan: str) -> str:
+        """Refresh safe chat timing/mode metadata without retaining user text.
+
+        The host's user-context bus already publishes ``lanlan``, ``is_voice``
+        and ``_ts`` for each user utterance.  We read only the newest record for
+        the exact target character and keep only those three routing fields.
+        """
+        target = str(target_lanlan or "").strip()
+        if not target:
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        ctx = getattr(self, "ctx", None)
+        bus = getattr(ctx, "bus", None)
+        memory = getattr(bus, "memory", None)
+        get_sync = getattr(memory, "get_sync", None)
+        if not callable(get_sync):
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        try:
+            records = get_sync(target, limit=1, timeout=0.25)
+            record = list(records)[-1] if records else None
+        except Exception:  # noqa: BLE001 - optional activity hint must never block battle output
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        raw = getattr(record, "raw", record)
+        if not isinstance(raw, dict) or str(raw.get("type") or "") != "user_message":
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+        if str(raw.get("lanlan") or "").strip() != target:
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        try:
+            observed_at = float(getattr(record, "timestamp", None) or raw.get("_ts") or 0.0)
+        except (TypeError, ValueError):
+            observed_at = 0.0
+        if observed_at <= 0:
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        voice_flag = raw.get("is_voice")
+        mode = "voice" if voice_flag is True else "text" if voice_flag is False else "unknown"
+        previous_seen_at = float(getattr(self, "_last_user_context_seen_at", 0.0) or 0.0)
+        if observed_at > previous_seen_at:
+            self._last_user_context_seen_at = observed_at
+            self._last_user_chat_at = observed_at
+            self._last_user_chat_mode = mode
+            if self.timeline:
+                self.timeline.record_stage(
+                    stage="chat_observed",
+                    outcome="observed",
+                    reason="user_context_activity_refreshed",
+                    kind="chat",
+                    source="user_context",
+                    input_mode=mode,
+                    target_lanlan=target,
+                    safe_summary=f"chat/{mode}/observed",
+                )
+        return str(getattr(self, "_last_user_chat_mode", mode) or mode)
 
     async def _persist_identity_name(self, name: str) -> dict[str, Any]:
         persisted_name = str(name or "").strip()
@@ -296,6 +400,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 self._instructions_injected = False
             return
         new_state = self.client.poll()
+        self.data_layer_manager.observe_health(new_state.connected)
         self.timeline.mark_tick()
         with self._state_lock:
             prev = self.state
@@ -342,6 +447,21 @@ class NekoWarthunderPlugin(NekoPluginBase):
     def _evaluate(self, prev: BattleState, cur: BattleState) -> None:
         """Scenario(D-B1) + Detector(D-B3) → 候选 → Arbiter(D-B4) → dispatcher。"""
         now = time.time()
+        if cur.battle_id and cur.battle_id != prev.battle_id:
+            # battle_id is stable across deaths and respawns. A new non-empty id
+            # therefore marks a true battle boundary and is the right place to
+            # discard detector, scenario, and arbitration state from the prior match.
+            self.engine.reset()
+            self.resolver.reset()
+            self.arbiter.reset()
+            self.timeline.record_stage(
+                stage="battle_boundary",
+                outcome="reset",
+                reason="new_battle_id",
+                in_battle=cur.in_battle,
+                life_index=cur.life_index,
+                safe_summary="battle/new/reset",
+            )
         cur.scenario = self.resolver.resolve(cur, now, self.cfg.spawn_grace_seconds)
         candidates = self.engine.feed(prev, cur)
         if cur.replay:
@@ -383,6 +503,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 replay=cur.replay,
                 safe_summary=f"{candidate.event_id}/{candidate.edge}/{candidate.level}",
             )
+        output_clock_checkpoint = self.safety.output_clock_checkpoint()
         chosen, chain = self.arbiter.decide(candidates, cur.scenario, now)
         for record in arbiter_chain_to_observe_records(chain, scenario=cur.scenario):
             self.timeline.record_stage(**record)
@@ -400,8 +521,11 @@ class NekoWarthunderPlugin(NekoPluginBase):
         if chosen is not None:
             try:
                 result = self.dispatcher.push_event(chosen, dry_run=self.cfg.dry_run)
+                if not result.startswith(("pushed(", "dry_run(")):
+                    self.safety.restore_output_clock(output_clock_checkpoint)
                 self.logger.info(f"[output] {result}")
             except Exception as exc:  # noqa: BLE001 — 投递失败计入安全门，不杀循环
+                self.safety.restore_output_clock(output_clock_checkpoint)
                 self.logger.warning(f"dispatch failed: {type(exc).__name__}: {exc}")
                 self.safety.record_failure(now)
 

@@ -43,6 +43,42 @@ def test_real_output_backpressure_suppresses_same_or_lower_priority_pushes():
     assert snapshot["last_output_status"]["reason"] == "output_backpressure"
 
 
+def test_suppressed_dispatch_trace_keeps_common_event_context():
+    plugin = FakePlugin()
+    plugin.cfg.output_backpressure_seconds = 0.0
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([100.0]))
+    event = BattleEvent(
+        "air_threat_nearby",
+        edge="enter",
+        payload={"domain": "air"},
+        ts=90.0,
+        level="warning",
+    )
+
+    result = dispatcher.push_event(event, dry_run=False)
+
+    assert result == "suppressed(event=air_threat_nearby/enter, reason=event_expired)"
+    assert plugin.calls == []
+    assert timeline.snapshot()["last_output_status"] == {
+        "stage": "dispatcher_suppressed",
+        "outcome": "dropped",
+        "reason": "event_expired",
+        "kind": "event",
+        "ai_behavior": "respond",
+        "pushed": False,
+        "event_id": "air_threat_nearby",
+        "edge": "enter",
+        "level": "warning",
+        "priority": event.priority,
+        "dry_run": False,
+        "event_ts": 90.0,
+        "event_age_seconds": 10.0,
+        "event_max_age_seconds": 3.0,
+        "event_expires_at": 93.0,
+    }
+
+
 def test_active_frequency_shortens_noncritical_output_backpressure():
     plugin = FakePlugin()
     plugin.cfg.broadcast_frequency = "active"
@@ -201,6 +237,61 @@ def test_user_chat_quiet_window_suppresses_nonurgent_battle_cue():
     status = timeline.snapshot()["last_output_status"]
     assert status["reason"] == "user_chat_quiet_window"
     assert status["quiet_window_remaining_seconds"] == 15.0
+
+
+def test_confirmed_kill_during_text_chat_is_deferred_into_next_reply():
+    plugin = FakePlugin()
+    plugin.cfg.target_lanlan = "Lanlan"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    plugin._last_user_chat_mode = "text"
+    timeline = RuntimeTimeline(observability_enabled=True, max_events=10)
+    dispatcher = NekoDispatcher(plugin, timeline=timeline, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("you_killed", ts=104.0), dry_run=False)
+
+    assert result.startswith("pushed(event=you_killed/enter)")
+    assert len(plugin.calls) == 1
+    call = plugin.calls[0]
+    assert call["ai_behavior"] == "read"
+    assert call["visibility"] == []
+    assert call["target_lanlan"] == "Lanlan"
+    assert call["metadata"]["delivery_strategy"] == "next_text_turn"
+    assert call["metadata"]["consume_hint"] == "next_reply_once"
+    assert call["metadata"]["deferred_from_user_chat_quiet_window"] is True
+    assert call["metadata"]["quiet_window_remaining_seconds"] == 15.0
+    assert "一次性" in call["parts"][0]["text"]
+    status = timeline.snapshot()["last_output_status"]
+    assert status["ai_behavior"] == "read"
+    assert status["delivery_strategy"] == "next_text_turn"
+
+
+def test_confirmed_kill_during_voice_chat_keeps_noninterrupting_suppression():
+    plugin = FakePlugin()
+    plugin.cfg.target_lanlan = "Lanlan"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    plugin._last_user_chat_mode = "voice"
+    dispatcher = NekoDispatcher(plugin, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("you_killed", ts=104.0), dry_run=False)
+
+    assert result == "suppressed(event=you_killed/enter, reason=user_chat_quiet_window)"
+    assert plugin.calls == []
+
+
+def test_text_chat_does_not_convert_nonkill_cues_to_passive_followups():
+    plugin = FakePlugin()
+    plugin.cfg.target_lanlan = "Lanlan"
+    plugin.cfg.user_chat_quiet_window_seconds = 20.0
+    plugin._last_user_chat_at = 100.0
+    plugin._last_user_chat_mode = "text"
+    dispatcher = NekoDispatcher(plugin, clock=_clock([105.0]))
+
+    result = dispatcher.push_event(BattleEvent("spawn", ts=104.0), dry_run=False)
+
+    assert result == "suppressed(event=spawn/enter, reason=user_chat_quiet_window)"
+    assert plugin.calls == []
 
 
 def test_user_chat_quiet_window_allows_critical_safety_cue():
@@ -374,7 +465,8 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert "建议台词：拉起来，要撞地了！" in plugin.calls[0]["parts"][0]["text"]
     assert metadata["plugin_owned_output"] is False
     assert metadata["plugin_recommended_reply"] == "拉起来，要撞地了！"
-    assert metadata["reply_style_contract"].startswith("Style: one short Chinese line")
+    assert metadata["reply_style_contract"].startswith("Boundary: exactly one short Chinese line")
+    assert "character owns the emotion and wording" in metadata["reply_style_contract"]
     assert metadata["dialogue_policy_owner"] == "plugin"
     assert metadata["plugin_dialogue_policy"] == {
         "owner": "plugin",
@@ -395,7 +487,7 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert status["visibility"] == []
     assert status["plugin_owned_output"] is False
     assert status["plugin_recommended_reply"] == "拉起来，要撞地了！"
-    assert status["reply_style_contract"].startswith("Style: one short Chinese line")
+    assert status["reply_style_contract"].startswith("Boundary: exactly one short Chinese line")
     assert status["dialogue_policy_owner"] == "plugin"
     assert status["plugin_dialogue_policy"]["owner"] == "plugin"
 
@@ -440,13 +532,15 @@ def test_real_event_push_metadata_reserves_generic_host_callback_contract():
     assert status["interrupt_pending"] is True
 
 
-def test_kill_prompt_requests_one_shot_non_repetitive_praise():
+def test_kill_prompt_requests_one_response_without_prescribing_style():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("you_killed", payload={"kill_count": 2}))
 
-    assert "连续战果" in prompt
-    assert "只合并说一次" in prompt
+    assert "合并后的可信战果" in prompt
+    assert "只回应一次" in prompt
     assert "不逐条念" in prompt
-    assert "临场反应，不像颁奖词" in prompt
+    assert "插件不指定情绪或措辞" in prompt
+    assert "轻夸" not in prompt
+    assert "坏笑" not in prompt
 
 
 def test_real_event_push_uses_configured_target_lanlan():
