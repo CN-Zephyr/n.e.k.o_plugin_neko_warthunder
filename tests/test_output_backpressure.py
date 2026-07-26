@@ -142,6 +142,53 @@ def test_real_output_backpressure_never_blocks_death_event():
     assert plugin.calls[-1]["metadata"]["interrupt_battle_event"] is True
 
 
+def test_confirmed_battle_outcomes_bypass_backpressure_without_interrupting():
+    cases = [
+        ("win, K2/D1", "victory", "自然庆祝或夸奖"),
+        ("defeat, K0/D2", "defeat", "自然安慰或鼓励"),
+    ]
+
+    for result_text, result_kind, expected_intent in cases:
+        plugin = FakePlugin()
+        dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+        dispatcher.push_event(BattleEvent("over_g", level="critical", ts=99.9), dry_run=False)
+
+        result = dispatcher.push_event(
+            BattleEvent(
+                "battle_end",
+                payload={"result": result_text, "result_kind": result_kind, "domain": "air"},
+                ts=104.9,
+            ),
+            dry_run=False,
+        )
+
+        assert result.startswith("pushed(event=battle_end/enter)")
+        assert len(plugin.calls) == 2
+        call = plugin.calls[-1]
+        assert expected_intent in call["parts"][0]["text"]
+        assert call["metadata"]["replace_pending"] is True
+        assert call["metadata"]["interrupt_battle_event"] is False
+        assert call["metadata"]["interrupt_pending"] is False
+
+
+def test_neutral_battle_end_remains_subject_to_output_backpressure():
+    plugin = FakePlugin()
+    dispatcher = NekoDispatcher(plugin, clock=_clock([100.0, 105.0]))
+    dispatcher.push_event(BattleEvent("over_g", level="critical", ts=99.9), dry_run=False)
+
+    result = dispatcher.push_event(
+        BattleEvent(
+            "battle_end",
+            payload={"result": "left", "result_kind": "neutral", "domain": "air"},
+            ts=104.9,
+        ),
+        dry_run=False,
+    )
+
+    assert result == "suppressed(event=battle_end/enter, reason=output_backpressure)"
+    assert len(plugin.calls) == 1
+
+
 def test_repeated_urgent_safety_cue_collapses_inside_short_window():
     plugin = FakePlugin()
     timeline = RuntimeTimeline(observability_enabled=True, max_events=10)

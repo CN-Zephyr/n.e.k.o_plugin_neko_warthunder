@@ -69,7 +69,7 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
         "you_killed": {"victim": "Bandit"},
         "you_died": {"cause": "unknown"},
         "spawn": {"vehicle_type": "bf-109f-4", "domain": "air"},
-        "battle_end": {"result": "win, K2/D1"},
+        "battle_end": {"result": "win, K2/D1", "result_kind": "victory"},
     }
 
     for event_id in C.EVENT_CATALOG:

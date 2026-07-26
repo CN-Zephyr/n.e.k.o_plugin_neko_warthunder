@@ -79,7 +79,7 @@ def test_rc_audit_fails_when_required_status_is_missing():
         _write_minimal_docs(root)
         status = root / "PROJECT_STATUS.md"
         status.write_text(
-            status.read_text(encoding="utf-8").replace("521/521 passed", "outdated baseline"),
+            status.read_text(encoding="utf-8").replace("532/532 passed", "outdated baseline"),
             encoding="utf-8",
         )
 
@@ -88,7 +88,7 @@ def test_rc_audit_fails_when_required_status_is_missing():
     assert {
         "kind": "missing_required_file_snippet",
         "file": "PROJECT_STATUS.md",
-        "detail": "521/521 passed",
+        "detail": "532/532 passed",
     } in result["failures"]
 
 

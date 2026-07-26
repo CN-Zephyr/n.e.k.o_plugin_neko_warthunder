@@ -878,7 +878,7 @@ def test_suppressed_dispatch_restores_output_rate_limit_clock():
     plugin.safety = SafetyGuard(plugin.cfg)
     plugin.arbiter = Arbiter(plugin.safety)
     plugin.engine = types.SimpleNamespace(
-        feed=lambda _prev, _cur: [BattleEvent("spawn", ts=1.0)],
+        feed=lambda _prev, _cur: [BattleEvent("overheat", ts=1.0)],
         reset=lambda: None,
     )
     plugin.resolver = types.SimpleNamespace(
@@ -890,7 +890,7 @@ def test_suppressed_dispatch_restores_output_rate_limit_clock():
 
     def suppress_dispatch(event, *, dry_run):
         dispatch_results.append((event.event_id, dry_run))
-        return "suppressed(event=spawn/enter, reason=user_chat_quiet_window)"
+        return "suppressed(event=overheat/enter, reason=user_chat_quiet_window)"
 
     plugin.dispatcher = types.SimpleNamespace(push_event=suppress_dispatch)
     plugin._record_blocked_free_text_sources = lambda _cur: None
@@ -900,8 +900,55 @@ def test_suppressed_dispatch_restores_output_rate_limit_clock():
 
     plugin._evaluate(BattleState(), BattleState(connected=True, in_battle=True))
 
-    assert dispatch_results == [("spawn", False)]
+    assert dispatch_results == [("overheat", False)]
     assert plugin.safety.rate_limit_remaining() == 0.0
+    assert "overheat" not in plugin.arbiter._last_fired
+
+
+def test_failed_dispatch_restores_arbiter_and_retries_selected_edge():
+    plugin = _plugin_for_action_tests()
+    plugin.cfg = WtConfig(dry_run=False, global_rate_limit_seconds=12.0)
+    plugin.safety = SafetyGuard(plugin.cfg)
+    plugin.arbiter = Arbiter(plugin.safety)
+    event = BattleEvent("overheat", ts=0.0)
+    feeds = iter([[event], []])
+    plugin.engine = types.SimpleNamespace(
+        feed=lambda _prev, _cur: next(feeds),
+        reset=lambda: None,
+    )
+    plugin.resolver = types.SimpleNamespace(
+        resolve=lambda _cur, _now, _grace: "IN_FLIGHT",
+        reset=lambda: None,
+        current_stress_reasons=lambda _now: frozenset(),
+    )
+    attempts: list[str] = []
+
+    def flaky_dispatch(selected, *, dry_run):
+        attempts.append(selected.event_id)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary host failure")
+        return f"pushed(event={selected.event_id}/{selected.edge})"
+
+    plugin.dispatcher = types.SimpleNamespace(push_event=flaky_dispatch)
+    plugin._record_blocked_free_text_sources = lambda _cur: None
+    plugin._record_deferred_hud_notices = lambda _cur: None
+    plugin._suppress_takeoff_grace = lambda candidates, _cur, _now: candidates
+    plugin._annotate_runtime_context = lambda candidates, _cur, _now: candidates
+    plugin._pending_dispatch_event = None
+    state = BattleState(connected=True, in_battle=True)
+
+    plugin._evaluate(BattleState(), state)
+
+    assert attempts == ["overheat"]
+    assert plugin._pending_dispatch_event is event
+    assert "overheat" not in plugin.arbiter._last_fired
+    assert plugin.safety.rate_limit_remaining() == 0.0
+
+    plugin._evaluate(state, state)
+
+    assert attempts == ["overheat", "overheat"]
+    assert plugin._pending_dispatch_event is None
+    assert plugin.arbiter._last_fired["overheat"][1] == "warning"
 
 
 def test_user_context_refresh_keeps_only_safe_text_activity_metadata():

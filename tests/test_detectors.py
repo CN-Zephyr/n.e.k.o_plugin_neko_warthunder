@@ -8,7 +8,7 @@ from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
 from neko_warthunder.detectors._base import ConditionDetector, DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
-from neko_warthunder.detectors.discrete.lifecycle import DeathDetector, KillDetector, SpawnDetector
+from neko_warthunder.detectors.discrete.lifecycle import BattleEndDetector, DeathDetector, KillDetector, SpawnDetector
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
 from neko_warthunder.detectors.discrete.notices import HudNoticeDetector
 from neko_warthunder.detectors.discrete.proximity import ProximityDetector
@@ -103,6 +103,35 @@ def test_spawn_not_fired_after_telemetry_blip():
     blip = C.BattleState(connected=False)  # 遥测瞬断
     cur = C.BattleState(connected=True, in_battle=True, vehicle_valid=True)
     assert det.feed(blip, cur) is None  # prev 断连 → 不误判重生
+
+
+@pytest.mark.parametrize(
+    "mission_status,result_kind",
+    [
+        ("win", "victory"),
+        ("defeat", "defeat"),
+        ("left", "neutral"),
+    ],
+)
+def test_battle_end_detector_classifies_result(mission_status, result_kind):
+    det = BattleEndDetector()
+    prev = C.BattleState(in_battle=True, mission_status="running")
+    cur = C.BattleState(
+        in_battle=False,
+        mission_status=mission_status,
+        domain="air",
+        timestamp=123.0,
+        combat={"my": {"kills": 2, "deaths": 1}},
+    )
+
+    ev = det.feed(prev, cur)
+
+    assert ev is not None and ev.event_id == "battle_end"
+    assert ev.payload == {
+        "result": f"{mission_status}, K2/D1",
+        "result_kind": result_kind,
+        "domain": "air",
+    }
 
 
 def test_death_detector():

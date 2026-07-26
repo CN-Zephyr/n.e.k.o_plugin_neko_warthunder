@@ -72,6 +72,49 @@ def test_rate_limit_buffer_then_flush():
     assert c is not None and c.event_id == "low_fuel"               # 窗口到点 flush
 
 
+def test_restore_does_not_resurrect_a_terminally_suppressed_buffer():
+    safety = SafetyGuard(
+        WtConfig(
+            global_rate_limit_seconds=5.0,
+            kill_coalesce_window_seconds=0.0,
+        )
+    )
+    arb = Arbiter(safety)
+    safety.mark_output(critical=False, now=0.0)
+
+    buffered, _ = arb.decide([BattleEvent("overheat", ts=1.0)], IN_FLIGHT, 1.0)
+    checkpoint = arb.checkpoint()
+    flushed, _ = arb.decide([], IN_FLIGHT, 6.0)
+    arb.restore(checkpoint)
+    retried, _ = arb.decide([], IN_FLIGHT, 20.0)
+
+    assert buffered is None
+    assert flushed is not None and flushed.event_id == "overheat"
+    assert "overheat" not in arb._last_fired
+    assert retried is None
+
+
+def test_restore_then_retry_keeps_coalesced_kill_count_stable():
+    safety = SafetyGuard(
+        WtConfig(
+            global_rate_limit_seconds=0.0,
+            kill_coalesce_window_seconds=1.0,
+        )
+    )
+    arb = Arbiter(safety)
+    event = BattleEvent("you_killed", ts=1.0, payload={"kill_count": 1})
+
+    arb.decide([event], IN_FLIGHT, 1.0)
+    checkpoint = arb.checkpoint()
+    flushed, _ = arb.decide([], IN_FLIGHT, 3.0)
+    arb.restore(checkpoint)
+    arb.decide([flushed], IN_FLIGHT, 3.1)
+
+    assert flushed is not None
+    assert arb._kill_window is not None
+    assert arb._kill_window.payload["kill_count"] == 1
+
+
 def test_window_flush_preserves_latest_observation_timestamp():
     arb = _arb()
     a, _ = arb.decide([BattleEvent("low_fuel", level="warning", ts=1000.0)], IN_FLIGHT, 1000.0)

@@ -113,6 +113,30 @@ def test_missing_data_layer_is_started_and_owned_by_plugin():
     assert "managed_data_layer_requires_loopback_url" in remote_status["last_error"]
 
 
+def test_repeated_start_keeps_managed_process_owned_and_stoppable():
+    cfg = WtConfig(data_layer_auto_start=True)
+    proc = FakeProcess()
+
+    with _fake_plugin_root() as root:
+        manager = DataLayerProcessManager(
+            cfg,
+            plugin_root=Path(root),
+            health_check=lambda _url, _timeout: True,
+        )
+        manager._process = proc
+        manager._started_by_plugin = True
+        manager._mode = "managed"
+
+        status = manager.start_if_needed()
+        stopped = manager.stop()
+
+    assert status["mode"] == "managed"
+    assert status["started_by_plugin"] is True
+    assert status["pid"] == proc.pid
+    assert proc.terminated is True
+    assert stopped["mode"] == "stopped"
+
+
 def test_data_layer_auto_start_can_be_disabled():
     cfg = WtConfig(data_layer_auto_start=False)
 

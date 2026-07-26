@@ -132,7 +132,7 @@ STALE_BASELINES = [
 ]
 
 REQUIRED_SNIPPETS = [
-    "521/521 passed",
+    "532/532 passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -202,7 +202,7 @@ REQUIRED_SNIPPETS = [
 ]
 
 REQUIRED_FILE_SNIPPETS = {
-    "PROJECT_STATUS.md": ["521/521 passed", "521 passed"],
+    "PROJECT_STATUS.md": ["532/532 passed", "532 passed"],
 }
 
 FORBIDDEN_PHRASES = [

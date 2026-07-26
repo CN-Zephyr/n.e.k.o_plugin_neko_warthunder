@@ -33,3 +33,18 @@ def test_rolling_stream_prunes_finished_compression_threads_before_rotation(tmp_
 
     assert len(stream._compression_threads) == 1
     stream.close()
+
+
+def test_session_recorder_never_persists_raw_chat(tmp_path):
+    module = _load_recorder_module()
+    recorder = module.SessionRecorder(root_dir=str(tmp_path))
+    recorder.start()
+
+    recorder.write_events(
+        "chat",
+        [{"sender": "Pilot", "msg": "raw private chat must not be persisted"}],
+    )
+    status = recorder.stop()
+
+    assert status["counts"]["chat"] == 0
+    assert not list(tmp_path.rglob("chat*"))
