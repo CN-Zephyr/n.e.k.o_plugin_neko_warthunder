@@ -50,3 +50,42 @@ def test_capture_advances_chat_cursor_without_persisting_raw_chat(tmp_path):
     )
     assert raw_chat not in persisted
     assert "Pilot" not in persisted
+
+
+def test_processed_snapshot_capture_redacts_chat_and_invalid_raw_body(tmp_path):
+    module = _load_capture_module()
+    private_marker = "private processed chat"
+    responses = iter(
+        [
+            (
+                True,
+                200,
+                json.dumps(
+                    {"state": "in_battle", "chat": [{"msg": private_marker}]}
+                ).encode("utf-8"),
+            ),
+            (True, 200, f'{{"chat":[{{"msg":"{private_marker}"}}]'.encode()),
+        ]
+    )
+    original_fetch = module._fetch_text
+    module._fetch_text = lambda *_args, **_kwargs: next(responses)
+    capturer = module.Capturer(
+        "http://127.0.0.1:8111",
+        "http://127.0.0.1:8112",
+        str(tmp_path),
+    )
+
+    try:
+        capturer._snap_server()
+        capturer._snap_server()
+        capturer.finalize()
+    finally:
+        module._fetch_text = original_fetch
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "processed_8112.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[0]["data"] == {"state": "in_battle"}
+    assert rows[1]["parse_error"] is True
+    assert private_marker not in json.dumps(rows, ensure_ascii=False)

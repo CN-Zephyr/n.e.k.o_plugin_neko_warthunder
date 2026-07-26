@@ -11,6 +11,8 @@ DATA_PROCESS = Path(__file__).resolve().parents[1] / "data_layer" / "data proces
 if str(DATA_PROCESS) not in sys.path:
     sys.path.insert(0, str(DATA_PROCESS))
 
+from wt_server import TelemetryService  # noqa: E402
+
 
 def _vehicle(**overrides):
     data = {
@@ -40,6 +42,46 @@ def _indicators(**overrides):
     }
     data.update(overrides)
     return SimpleNamespace(**data)
+
+
+def test_failed_chat_drain_does_not_block_hud_incremental_polling():
+    class DrainClient:
+        def __init__(self) -> None:
+            self.hud_calls = 0
+            self.chat_calls = 0
+
+        def incremental_cursor_state(self):
+            return {}
+
+        def reset_hud_cursors(self):
+            return None
+
+        def reset_chat_cursor(self):
+            return None
+
+        def get_hud_with_status(self):
+            self.hud_calls += 1
+            return True, []
+
+        def get_chat_with_status(self):
+            self.chat_calls += 1
+            return False, []
+
+        def get_mission(self):
+            return "running", None
+
+    client = DrainClient()
+    service = TelemetryService(client)
+
+    service._poll_events(service._battle_generation)
+    assert client.hud_calls == 2
+    assert client.chat_calls == 1
+    assert service._hud_drain_pending is False
+    assert service._chat_drain_pending is True
+
+    service._poll_events(service._battle_generation)
+    assert client.hud_calls == 3
+    assert client.chat_calls == 2
 
 
 def _assert_no_fixed_wing_derivatives(result):

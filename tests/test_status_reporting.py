@@ -173,6 +173,24 @@ def _plugin_for_game_context_tests():
     return plugin
 
 
+def test_urgent_output_migration_marker_write_failure_does_not_abort_startup():
+    Plugin = _runtime_plugin_class()
+    plugin = object.__new__(Plugin)
+    warnings: list[str] = []
+    plugin.logger = types.SimpleNamespace(warning=warnings.append)
+    plugin._save_runtime_state = lambda _patch: (_ for _ in ()).throw(OSError("read only"))
+
+    asyncio.run(
+        plugin._migrate_urgent_output_tts_default(
+            {},
+            {},
+            config_loaded=True,
+        )
+    )
+
+    assert warnings == ["urgent output TTS migration flag persist failed: OSError"]
+
+
 def test_game_context_is_not_active_for_offline_state():
     plugin = _plugin_for_game_context_tests()
 
