@@ -191,6 +191,34 @@ def test_urgent_output_migration_marker_write_failure_does_not_abort_startup():
     assert warnings == ["urgent output TTS migration flag persist failed: OSError"]
 
 
+def test_user_context_refresh_cannot_move_chat_activity_backwards():
+    Plugin = _runtime_plugin_class()
+    plugin = object.__new__(Plugin)
+    record = types.SimpleNamespace(
+        timestamp=50.0,
+        raw={
+            "type": "user_message",
+            "lanlan": "target",
+            "is_voice": True,
+            "_ts": 50.0,
+        },
+    )
+    plugin.ctx = types.SimpleNamespace(
+        bus=types.SimpleNamespace(
+            memory=types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+        )
+    )
+    plugin.timeline = None
+    plugin._last_user_context_seen_at = 40.0
+    plugin._last_user_chat_at = 100.0
+    plugin._last_user_chat_mode = "text"
+
+    assert plugin._refresh_user_chat_activity(target_lanlan="target") == "text"
+    assert plugin._last_user_context_seen_at == 40.0
+    assert plugin._last_user_chat_at == 100.0
+    assert plugin._last_user_chat_mode == "text"
+
+
 def test_game_context_is_not_active_for_offline_state():
     plugin = _plugin_for_game_context_tests()
 

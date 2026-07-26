@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.core.contracts import BattleEvent, WtConfig
@@ -22,6 +24,27 @@ class FakePlugin:
 
     def push_message(self, **kwargs) -> None:
         self.calls.append(kwargs)
+
+
+def test_post_acceptance_observer_failure_does_not_retry_delivered_event():
+    plugin = FakePlugin()
+    warnings: list[str] = []
+    plugin.logger = SimpleNamespace(warning=warnings.append)
+    plugin.cfg.global_rate_limit_seconds = 0
+    plugin.cfg.output_backpressure_seconds = 0
+    plugin.cfg.dialogue_intrusion_mode = "allow_interrupt"
+    dispatcher = NekoDispatcher(plugin, clock=lambda: 100.0)
+    dispatcher._observer = SimpleNamespace(
+        record_event=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("observer unavailable")
+        )
+    )
+
+    result = dispatcher.push_event(BattleEvent("spawn", ts=100.0), dry_run=False)
+
+    assert result.startswith("pushed(")
+    assert len(plugin.calls) == 1
+    assert warnings == ["post-acceptance output bookkeeping failed: RuntimeError"]
 
 
 def test_kill_event_unsafe_victim_name_does_not_enter_prompt():
