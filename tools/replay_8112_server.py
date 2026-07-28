@@ -1,7 +1,7 @@
 """Serve captured War Thunder telemetry samples as a fake local :8112 data layer.
 
 Usage:
-    uv run python tools/replay_8112_server.py local_samples/data_process_20260630 --port 8112 --player-name CN-Zephyr --end-offline
+    uv run python tools/replay_8112_server.py local_samples/data_process_20260630 --port 8112 --player-name "Player#123456" --end-offline
     uv run python tools/replay_8112_server.py old_sample.jsonl --player-name tl0sr2 --infer-ownership-from-player-name --end-offline
 
 The server intentionally prints only aggregate/status lines. Raw telemetry,

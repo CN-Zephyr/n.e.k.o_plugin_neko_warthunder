@@ -122,7 +122,7 @@ uv run python tools\release_readiness.py --run --include-local-sample
 把本地实机素材伪装成 `:8112` 数据层、让宿主/插件按真实轮询路径消费时，先在插件仓库启动样本回放服务，再启动 N.E.K.O 宿主和插件：
 
 ```powershell
-uv run python tools\replay_8112_server.py local_samples\data_process_20260630 --port 8112 --player-name CN-Zephyr --end-offline
+uv run python tools\replay_8112_server.py local_samples\data_process_20260630 --port 8112 --player-name "Player#123456" --end-offline
 ```
 
 这个入口只打印帧数、索引、identity source 等摘要，不打印 raw combat.feed、HUD、chat 或 awards 文本。默认会把帧时间戳刷新成当前时间，避免真实输出新鲜度门禁把历史样本当旧事件丢弃；推荐非循环喂素材时加 `--end-offline`，样本播完后改为安全 offline/menu 帧，避免重启插件时反复消费最后一帧战斗事件；需要复现原始时间戳时再加 `--preserve-timestamps`。
@@ -200,4 +200,3 @@ neko_warthunder/
 - `/api/identity` 是 player_name 的主路径；插件侧 Hosted UI/context/action 接缝已完成，面板只支持手动填写玩家名并持久化到插件配置；2026-06-23 真机已验证手动身份会反映到 `combat.self.source=manual`，并能驱动 `is_my_kill` / `is_my_death` owned combat.feed 标记；`you_killed` post-fix dry_run 与 `dry_run=false` push 已通过陆战验证。
 - `hud_notices` / `awards` 来自自由文本解析，真实播报前受 T-Safety 阻塞。
 - V2 后方/尾随/目标点事件在真机证据补齐前受 `v2_live_verified_real_output_enabled=false` 保护：dry_run 仍可观察，真实输出默认被压住。
-
