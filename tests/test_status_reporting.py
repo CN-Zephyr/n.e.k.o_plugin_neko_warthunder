@@ -1180,14 +1180,29 @@ def test_set_dialogue_intrusion_mode_persists_critical_only_policy(tmp_path):
     assert plugin.cfg.dialogue_intrusion_mode == "critical_only"
 
 
-def test_reload_config_uses_saved_dialogue_intrusion_mode(tmp_path):
+def test_reload_config_uses_saved_dialogue_mode_and_refreshes_heartbeat_in_place(tmp_path):
     plugin = _plugin_for_action_tests()
+    plugin.engine = plugin._build_engine()
+    original_engine = plugin.engine
+    heartbeat_detectors = [
+        detector
+        for detector in plugin.engine.detectors
+        if getattr(detector, "id", "")
+        in {"stall_risk", "high_aoa", "over_g", "low_alt_danger", "overspeed"}
+    ]
+    other_condition_detectors = [
+        detector
+        for detector in plugin.engine.detectors
+        if hasattr(detector, "critical_heartbeat_seconds") and detector not in heartbeat_detectors
+    ]
+    assert heartbeat_detectors
+    assert all(detector.critical_heartbeat_seconds == 5.0 for detector in heartbeat_detectors)
     plugin._runtime_state_path = tmp_path / ".runtime_state.json"
     plugin._runtime_state_path.write_text(json.dumps({"dialogue_intrusion_mode": "no_interrupt"}), encoding="utf-8")
 
     class EmptyConfig:
         async def dump(self, timeout=5.0):
-            return {}
+            return {"neko_warthunder": {"critical_preempt_cooldown_seconds": 0}}
 
     plugin.config = EmptyConfig()
 
@@ -1196,6 +1211,9 @@ def test_reload_config_uses_saved_dialogue_intrusion_mode(tmp_path):
     assert plugin.cfg.dialogue_intrusion_mode == "no_interrupt"
     assert plugin.cfg.user_chat_quiet_window_seconds == 60.0
     assert plugin.cfg.battle_output_quiet_window_seconds == 30.0
+    assert plugin.engine is original_engine
+    assert all(detector.critical_heartbeat_seconds == 0.0 for detector in heartbeat_detectors)
+    assert all(detector.critical_heartbeat_seconds == 0.0 for detector in other_condition_detectors)
 
 
 def test_reload_config_migrates_legacy_urgent_output_tts_default(tmp_path):

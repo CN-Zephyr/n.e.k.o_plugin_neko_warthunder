@@ -1119,15 +1119,17 @@ def test_engine_still_emits_kills_earned_after_respawn():
     assert events[0].payload.get("victim") == "V9"
 
 
-def test_engine_discards_kills_scored_while_dead_without_replaying_them():
-    """阵亡期间进入 feed 的条目被消费掉：不在阵亡时播报，重生后也不补播。"""
+def test_engine_emits_kills_scored_while_dead_once_for_trade_handling():
+    """阵亡期间到账的战果交给 Arbiter 判定同归于尽，重生后不补播。"""
     base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, battle_id="B1")
     engine = DetectorEngine([KillDetector()])
     empty = C.BattleState(**base, combat={"feed": []})
 
     dead_feed = {"feed": [{"id": 4, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "V4"}]}
     dead = C.BattleState(**base, combat=dead_feed, dead=True, dead_source="hud")
-    assert engine.feed(empty, dead) == []
+    events = engine.feed(empty, dead)
+    assert [event.event_id for event in events] == ["you_killed"]
+    assert events[0].payload.get("victim") == "V4"
 
     respawned = C.BattleState(**base, combat=dead_feed, dead=False)
     assert engine.feed(dead, respawned) == []
