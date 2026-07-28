@@ -8,7 +8,7 @@
 
 - 模型不变；唯一变化是**危急/重要提醒 flag 改由数据层 `/api/processed` 提供**（我们消费，不自己算阈值，见 D-B5 v0.2）。
 - CRITICAL_RISK 危急集合 = 数据层 critical 级安全 flag 中我们的子集：`stall_critical`、`altitude_critical`、`overspeed_critical`。数据层 v1.6 已提供 `overspeed_critical`，插件侧已接入，仍需真机验证触发节奏和 Arbiter 抢占语义。
-- COMBAT_STRESS 的"最近受创"信号取数据层 `hud_events`（关于我的 damage）；脱战窗口按载具域区分：空战/直升机看 `maneuver`/`air_contact`/`damage`，陆战看近距离 `surface_contact`/`damage`，海战看更长的 `surface_contact`/`damage`。
+- COMBAT_STRESS 的"最近受创"信号取数据层 `combat.feed` 中**归属到本机**的条目（`is_my_kill` / `is_my_death`）；曾经取 `hud_events` 里的 damage 条目，但那是**未过滤的全场战斗日志**，多人对局里近乎连续——实测两段完整对局中，旧规则会把 69.1% / 51.3% 的时间判为交火压力，而其中没有一条能归属到玩家本人。身份未确定时数据层不置 `is_my_*`，此时不产生 damage 压力（宁可少压制，也不把全场活跃度当成本机在交火）。脱战窗口按载具域区分：空战/直升机看 `maneuver`/`air_contact`/`damage`，陆战看近距离 `surface_contact`/`damage`，海战看更长的 `surface_contact`/`damage`。
 
 ## 0. 设计约束（先钉死边界）
 
@@ -91,9 +91,9 @@ stateDiagram-v2
 
 ### COMBAT_STRESS（见第 5 节特别说明）
 - 定义：**高工作负荷的纯物理代理态**，不代表"判定到了敌人"。
-- 进入：最近 T 秒内收到**关于我的 hudmsg 受创**（被命中/起火等）；空战/直升机域还可由持续高 G 机动或近距离空中威胁进入；陆战/海战不使用高 G 代理，改看近距离地面/水面接触。
+- 进入：最近 T 秒内出现**归属到本机的战斗条目**（`combat.feed[].is_my_kill` / `is_my_death`）；空战/直升机域还可由持续高 G 机动或近距离空中威胁进入；陆战/海战不使用高 G 代理，改看近距离地面/水面接触。
 - 退出：对应域的代理条件解除并经迟滞 → `IN_FLIGHT`。当前默认：空战/直升机约 8s，陆战约 10s，海战约 20s。
-- 依赖字段：`/hudmsg`（关于我的受创）、`/state.Ny`（G 载荷，仅空/直升机）、`situation.nearest_air_threat` / `situation.enemies[]`、`proximity.thresholds_m`。
+- 依赖字段：`combat.feed[].is_my_kill` / `is_my_death`（归属到本机的战斗条目）、`/state.Ny`（G 载荷，仅空/直升机）、`situation.nearest_air_threat` / `situation.enemies[]`、`proximity.thresholds_m`。
 - 对提示系统：放行危急安全 + 重要提醒(overheat)；**压制一般提醒（如低油）与陪伴闲聊**。owned 战斗击杀进入多杀合并缓冲；空战/直升机在 `maneuver`/`air_contact`/`damage` 压力下等脱战后补一句；陆战/海战只在 `surface_contact`/`damage` 压力下等脱战，其他情况下按配置窗口合并。陆战/海战近敌 `enemy_nearby` 是交战观察信号，不按普通地图提示在 COMBAT_STRESS 下硬压。
 
 ### CRITICAL_RISK
@@ -142,7 +142,7 @@ stateDiagram-v2
 - `maneuver`：高 G / 高机动代理。仅用于空战/直升机；陆战/海战不因 G 值进入该压力源。
 - `air_contact`：空战/直升机的近距离空中威胁，阈值取数据层 `proximity.thresholds_m.vs_air`，缺省按 5000m 保守处理。
 - `surface_contact`：陆战/海战的近距离地面/水面接触，阈值取数据层 `proximity.thresholds_m.vs_ground`；缺省陆战 800m，海战 2500m。
-- `damage`：新增 damage HUD 事件。视为真实交战压力，按域使用不同迟滞窗口。
+- `damage`：新增**归属到本机**的 combat.feed 条目。视为真实交战压力，按域使用不同迟滞窗口。注意不是全场 damage 流——那会让独自巡航的玩家长期停在 COMBAT_STRESS。
 
 Arbiter 不再把 `COMBAT_STRESS` 一概当作"不能夸"：空战/直升机在 `maneuver`/`air_contact`/`damage` 下等，陆战/海战在 `surface_contact`/`damage` 下等；没有对应域压力证据时按配置窗口合并。陆战/海战 `enemy_nearby` 可在 COMBAT_STRESS 下放行，空战普通 `enemy_nearby` 仍按低优先级 map awareness 压制。
 

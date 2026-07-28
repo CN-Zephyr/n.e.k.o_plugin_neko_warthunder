@@ -167,7 +167,7 @@ def test_death_detector_emits_when_ownership_arrives_late_for_seen_id():
 
 
 def test_kill_dedup_monotonic():
-    det = KillDetector("Me")
+    det = KillDetector()
     feed1 = {"player_name": "Me", "feed": [{"id": 5, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "A"}]}
     cur1 = C.BattleState(in_battle=True, vehicle_valid=True, combat=feed1)
     ev = det.feed(C.BattleState(), cur1)
@@ -180,7 +180,7 @@ def test_kill_dedup_monotonic():
 
 
 def test_kill_detector_emits_when_ownership_arrives_late_for_seen_id():
-    det = KillDetector("Me")
+    det = KillDetector()
     prev = C.BattleState(in_battle=True, vehicle_valid=True)
     first = C.BattleState(
         in_battle=True,
@@ -201,7 +201,7 @@ def test_kill_detector_emits_when_ownership_arrives_late_for_seen_id():
 
 
 def test_kill_requires_is_my_kill_flag():
-    det = KillDetector("")
+    det = KillDetector()
     feed = {"feed": [{"id": 1, "is_kill": True, "killer": "Someone", "victim": "X"}]}
     cur = C.BattleState(in_battle=True, vehicle_valid=True, combat=feed)
     assert det.feed(C.BattleState(), cur) is None
@@ -479,7 +479,7 @@ def test_ground_status_flags_are_suppressed_outside_ground_domain():
 
 
 def test_kill_detector_uses_is_my_kill_flag():
-    det = KillDetector("Me")
+    det = KillDetector()
     feed = {
         "player_name": "Me",
         "feed": [{"id": 10, "is_kill": True, "is_my_kill": True, "killer": "OtherName", "victim": "Target"}],
@@ -491,7 +491,7 @@ def test_kill_detector_uses_is_my_kill_flag():
 
 
 def test_kill_detector_carries_domain_for_output_wording():
-    det = KillDetector("Me")
+    det = KillDetector()
     feed = {"feed": [{"id": 12, "is_my_kill": True, "victim": "Target", "victim_vehicle": "Tank"}]}
     cur = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground", combat=feed)
 
@@ -595,7 +595,7 @@ def test_detector_engine_reset_rearms_same_id_kill_and_hud_notice_for_a_new_batt
         **alive,
         hud_notices=[{"id": 1, "code": "engine_overheat", "level": "warning"}],
     )
-    engine = DetectorEngine([KillDetector("Me"), HudNoticeDetector()])
+    engine = DetectorEngine([KillDetector(), HudNoticeDetector()])
 
     assert [event.event_id for event in engine.feed(empty, kill)] == ["you_killed"]
     assert [event.event_id for event in engine.feed(kill, notice)] == ["overheat"]
@@ -1075,3 +1075,242 @@ def test_ground_target_detector_does_not_rearm_on_transient_empty_frame():
     assert det.feed(C.BattleState(), active) is not None
     assert det.feed(active, empty) is None
     assert det.feed(empty, active) is None
+
+
+def test_engine_does_not_replay_battle_kills_after_same_battle_respawn():
+    """同局阵亡→重生不得重播整局旧击杀。
+
+    数据层 combat.feed 是整局持久的（只在换局/HUD drain 时清空），阵亡期间若重置
+    KillDetector 的 id 游标，重生后 feed 里所有历史 is_my_kill 都会被当成新击杀。
+    """
+    base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, battle_id="B1")
+    feed = {"feed": [{"id": i, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": f"V{i}"} for i in (1, 2, 3)]}
+    engine = DetectorEngine([KillDetector()])
+
+    before = C.BattleState(**base, combat={"feed": []})
+    scored = C.BattleState(**base, combat=feed)
+    assert [e.event_id for e in engine.feed(before, scored)] == ["you_killed"]
+
+    dead = C.BattleState(**base, combat=feed, dead=True, dead_source="hud")
+    for _ in range(3):
+        assert engine.feed(scored, dead) == []
+
+    respawned = C.BattleState(**base, combat=feed, dead=False)
+    assert engine.feed(dead, respawned) == []
+
+
+def test_engine_still_emits_kills_earned_after_respawn():
+    """重生后的新击杀仍要正常播报（consume 策略不能把真实新事件也吃掉）。"""
+    base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, battle_id="B1")
+    old_feed = {"feed": [{"id": 1, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "V1"}]}
+    engine = DetectorEngine([KillDetector()])
+
+    scored = C.BattleState(**base, combat=old_feed)
+    assert [e.event_id for e in engine.feed(C.BattleState(**base, combat={"feed": []}), scored)] == ["you_killed"]
+
+    dead = C.BattleState(**base, combat=old_feed, dead=True, dead_source="hud")
+    engine.feed(scored, dead)
+
+    new_feed = {"feed": old_feed["feed"] + [{"id": 9, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "V9"}]}
+    respawned = C.BattleState(**base, combat=new_feed, dead=False)
+    events = engine.feed(dead, respawned)
+    assert [e.event_id for e in events] == ["you_killed"]
+    assert events[0].payload.get("kill_count") == 1
+    assert events[0].payload.get("victim") == "V9"
+
+
+def test_engine_discards_kills_scored_while_dead_without_replaying_them():
+    """阵亡期间进入 feed 的条目被消费掉：不在阵亡时播报，重生后也不补播。"""
+    base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, battle_id="B1")
+    engine = DetectorEngine([KillDetector()])
+    empty = C.BattleState(**base, combat={"feed": []})
+
+    dead_feed = {"feed": [{"id": 4, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "V4"}]}
+    dead = C.BattleState(**base, combat=dead_feed, dead=True, dead_source="hud")
+    assert engine.feed(empty, dead) == []
+
+    respawned = C.BattleState(**base, combat=dead_feed, dead=False)
+    assert engine.feed(dead, respawned) == []
+
+
+def _flagged(ts, **flags):
+    return C.BattleState(domain="air", timestamp=ts, flags=dict(flags))
+
+
+def test_critical_condition_reemits_on_heartbeat_while_sustained():
+    """危急持续期需要低频重发：否则被抢占冷却压掉的危急永远等不到第二次机会。"""
+    d = ConditionDetector(
+        "stall_risk", [("stall_warning", "stall_critical")],
+        confirm_enter=1, confirm_exit=2, critical_heartbeat_seconds=8.0,
+    )
+    prev = C.BattleState(domain="air")
+
+    first = d.feed(prev, _flagged(1000.0, stall_critical=True))
+    assert first is not None and first.level == "critical"
+
+    assert d.feed(prev, _flagged(1004.0, stall_critical=True)) is None      # 未到心跳间隔
+    beat = d.feed(prev, _flagged(1008.0, stall_critical=True))
+    assert beat is not None and beat.edge == "enter" and beat.level == "critical"
+    assert beat.ts == 1008.0                                               # ts 是新的，不会被下游判过期
+
+    assert d.feed(prev, _flagged(1012.0, stall_critical=True)) is None     # 心跳从上次重发起算
+    assert d.feed(prev, _flagged(1016.0, stall_critical=True)) is not None
+
+
+def test_warning_level_condition_does_not_heartbeat():
+    """只有 critical 才心跳；warning 持续期保持安静，不唠叨。"""
+    d = ConditionDetector(
+        "stall_risk", [("stall_warning", "stall_critical")],
+        confirm_enter=1, confirm_exit=2, critical_heartbeat_seconds=8.0,
+    )
+    prev = C.BattleState(domain="air")
+
+    assert d.feed(prev, _flagged(1000.0, stall_warning=True)) is not None
+    for ts in (1008.0, 1020.0, 1040.0):
+        assert d.feed(prev, _flagged(ts, stall_warning=True)) is None
+
+
+def test_condition_heartbeat_stops_after_condition_clears():
+    d = ConditionDetector(
+        "stall_risk", [("stall_warning", "stall_critical")],
+        confirm_enter=1, confirm_exit=2, critical_heartbeat_seconds=8.0,
+    )
+    prev = C.BattleState(domain="air")
+    assert d.feed(prev, _flagged(1000.0, stall_critical=True)) is not None
+
+    clear = C.BattleState(domain="air", timestamp=1002.0)
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, C.BattleState(domain="air", timestamp=1003.0)) is None   # confirm_exit 满 → ARMED
+    assert d.feed(prev, C.BattleState(domain="air", timestamp=1030.0)) is None   # 已解除，不再心跳
+
+
+def test_condition_heartbeat_is_off_by_default():
+    d = ConditionDetector("overheat", [("engine_overheat", "engine_overheat_critical")], confirm_enter=1)
+    prev = C.BattleState(domain="air")
+    assert d.feed(prev, _flagged(1000.0, engine_overheat_critical=True)) is not None
+    assert d.feed(prev, _flagged(1100.0, engine_overheat_critical=True)) is None
+
+
+def test_once_per_battle_condition_does_not_rearm_on_flicker():
+    """cooldown<0 声明"每局一次"，电平抖动不该反复重报。
+
+    实测样本里 low_fuel 曾在 13 秒内报三次：flag 在阈值附近抖，检测器每次
+    confirm_exit 满就 re-arm，而 Arbiter 只对 cd>0 查冷却，于是无人拦。
+    """
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    prev = C.BattleState()
+    low = C.BattleState(flags={"fuel_low": True})
+    clear = C.BattleState()
+
+    assert d.feed(prev, low) is not None                 # 首次报出
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, clear) is None                   # confirm_exit 满 → SPENT
+    assert d.feed(prev, low) is None                     # 再次跌破阈值也不重报
+    assert d.feed(prev, low) is None
+
+
+def test_once_per_battle_rearms_after_engine_reset():
+    """换局(engine.reset)后应重新武装。"""
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    prev = C.BattleState()
+    low = C.BattleState(flags={"fuel_low": True})
+    clear = C.BattleState()
+
+    assert d.feed(prev, low) is not None
+    d.feed(prev, clear); d.feed(prev, clear)
+    assert d.feed(prev, low) is None
+
+    d.reset()
+    assert d.feed(prev, low) is not None
+
+
+def test_once_per_battle_condition_stays_spent_across_same_battle_respawn():
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    engine = DetectorEngine([d])
+    prev = C.BattleState()
+    low = C.BattleState(flags={"fuel_low": True})
+
+    assert [event.event_id for event in engine.feed(prev, low)] == ["low_fuel"]
+
+    dead = C.BattleState(dead=True)
+    assert engine.feed(low, dead) == []
+
+    respawned = C.BattleState(flags={"fuel_low": True})
+    assert engine.feed(dead, respawned) == []
+
+    engine.reset()
+    assert [event.event_id for event in engine.feed(respawned, low)] == ["low_fuel"]
+
+
+def test_once_per_battle_still_allows_warning_to_critical_upgrade():
+    """升级发生在 ACTIVE 内，不走 re-arm，因此必须仍然生效。"""
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    prev = C.BattleState()
+
+    first = d.feed(prev, C.BattleState(flags={"fuel_low": True}))
+    assert first is not None and first.level == "warning"
+
+    upgraded = d.feed(prev, C.BattleState(flags={"fuel_critical": True}))
+    assert upgraded is not None and upgraded.level == "critical"
+
+
+def test_condition_without_once_per_battle_still_rearms():
+    d = ConditionDetector("stall_risk", [("stall_warning", "stall_critical")], confirm_enter=1, confirm_exit=2)
+    prev = C.BattleState()
+    on = C.BattleState(flags={"stall_warning": True})
+    off = C.BattleState()
+
+    assert d.feed(prev, on) is not None
+    d.feed(prev, off); d.feed(prev, off)
+    assert d.feed(prev, on) is not None
+
+
+def test_awareness_detectors_share_one_set_of_helpers_and_thresholds():
+    """接近/态势两个检测器不得各留一份取值与几何判定副本。
+
+    历史上 _as_float / _as_int / _safe_short_text 在两个文件里逐字重复，后半球判定
+    还有 _is_rear 与 _is_behind 两个名字，尾随阈值也分散两处——真机调参时很容易
+    只改一边。守住这条，重复回潮会立刻失败。
+    """
+    import pathlib
+
+    from neko_warthunder.detectors.discrete import _common
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "detectors" / "discrete"
+    for name in ("situation.py", "proximity.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        assert "def _as_float" not in src, f"{name} 又出现了本地 _as_float"
+        assert "def _as_int" not in src, f"{name} 又出现了本地 _as_int"
+        assert "def _safe_short_text" not in src, f"{name} 又出现了本地 _safe_short_text"
+        assert "_BEHIND_CLOCKS = {" not in src, f"{name} 又出现了本地后半球常量"
+        assert "from ._common import" in src
+
+    # 两条路径的阈值刻意不同：帧驱动窗短距宽，事件驱动窗长距窄。
+    assert _common.SITUATION_TAIL_WINDOW_SECONDS < _common.PROXIMITY_TAIL_WINDOW_SECONDS
+    assert _common.SITUATION_TAIL_DISTANCE_M > _common.PROXIMITY_TAIL_DISTANCE_M
+
+
+def test_shared_rear_predicate_matches_both_clock_and_relative_bearing():
+    from neko_warthunder.detectors.discrete._common import is_rear
+
+    assert is_rear({"clock": 6}) is True
+    assert is_rear({"clock": 5}) is True
+    assert is_rear({"clock": 12}) is False
+    assert is_rear({"relative_deg": 180.0}) is True
+    assert is_rear({"relative_deg": -140.0}) is True
+    assert is_rear({"relative_deg": 20.0}) is False
+    assert is_rear({}) is False
+    # bool 是 int 的子类，必须被排除，否则 True 会被当成 1 点钟
+    assert is_rear({"clock": True}) is False

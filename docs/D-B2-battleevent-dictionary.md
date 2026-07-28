@@ -19,7 +19,9 @@
 - **severity（0–10）**：危险/紧迫程度，决定**能否抢占**与是否驱动 `CRITICAL_RISK`。分档：9–10 生死危急；6–8 重要；3–5 一般；0–2 信息/陪伴。
 - **priority（0–10）**：同一仲裁窗口内多个候选竞争时谁先开口（高者胜）。与 severity 相关但不等同：生命周期事件可能 severity 低、priority 高（"必须说"）。
 - **是否允许抢占**：true = 可绕过全局限流/冷却**立即开口**（仅留给生死危急与阵亡）；false = 严格受限流约束。
-- **cooldown**：同一事件两次开口的最短间隔。
+- **cooldown**：同一事件两次开口的最短间隔。**负值表示"每局一次"**，由 Detector 侧的
+  `once_per_battle` 兑现（Arbiter 只在 `cd > 0` 时查冷却）。2026-07-27 前该语义无人执行，
+  `low_fuel` 因油量在阈值附近抖动而反复重报（实测 13 秒内三次）。
 - **re-arm 条件**：退出后"算作新一次事件"需满足的条件——连续派生类需退出阈值保持一段时间（配合迟滞）；离散类按新的 feed/notice id / 新一次生命周期跳变。
 - **payload**：该事件**携带的派生上下文（具体标量子集）**，供 handler 拼"事实行"。**不是整个 snapshot**，只是这次事件相关的几个派生值。
 - **提示意图**：只描述"要让猫娘传达什么"，Detector 不写具体台词；最终输出由 dispatcher 统一管理。危急动作类默认走 bounded `respond`，由宿主生成受短播报合同约束的回复并进入 TTS；只有显式兼容开关开启时才由插件以 `blind+plugin` 固定短句直出。开局、击杀/阵亡、过热、低油、普通接近、目标点和结算默认同样走 bounded `respond`，让猫娘在事实边界内自行组织短句。
@@ -33,7 +35,7 @@
 | `low_alt_danger` | 连续派生 | 危急 | 9 | 9 | 是 | 10s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
 | `overspeed` | 连续派生 | 危急 | 7 | 8 | 是 | 15s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
 | `overheat` | 连续派生 / HUD notice | 重要提醒 | 6 | 6 | 否 | 30s | IN_FLIGHT / COMBAT_STRESS |
-| `low_fuel` | 连续派生 | 一般提醒 | 3 | 4 | 否 | 每局 1–2 次 | IN_FLIGHT |
+| `low_fuel` | 连续派生 | 一般提醒 | 3 | 4 | 否 | 每局 1 次（`once_per_battle`） | IN_FLIGHT |
 | `you_killed` | combat.feed 离散 | 战斗 | 3 | 5 | 否 | 8s（多杀合并） | SPAWNING / IN_FLIGHT；COMBAT_STRESS 下延迟合并 |
 | `you_died` | combat.feed 离散 | 生命周期 | 8 | 10 | 是 | 每次死亡 1 次 | DEAD（死亡瞬间） |
 | `spawn` | 生命周期 | 生命周期 | 1 | 5 | 否 | 每次出生 1 次 | SPAWNING |

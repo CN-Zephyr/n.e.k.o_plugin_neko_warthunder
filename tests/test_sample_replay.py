@@ -651,6 +651,12 @@ def test_sample_replay_json_output_is_machine_readable_and_safe():
 def test_local_20260620_sample_replay_if_present():
     from neko_warthunder.tools.sample_replay import replay_sample_root
 
+    # 该样本不在仓库里（local_samples 被 gitignore），没解压时本用例静默跳过。
+    # 代价是：它只在有人恰好解出样本时才真正运行，期间断言可能已经悄悄过期——
+    # 2026-07-27 解出样本后发现 enemy_on_six 早已从 149 漂到 175、tailing_risk
+    # 从 44 漂到 29，而所有结构性断言（帧数/身份/奖励/proximity 计数）全部仍然成立，
+    # 说明是后方威胁判定逻辑改过而这道守卫没跟上。下面的数字锁定
+    # samples-20260715_0001 这份归档；换样本归档必须同时更新。
     sample_root = Path(__file__).resolve().parent.parent / "local_samples" / "data_process_20260620"
     if not sample_root.exists():
         return
@@ -666,8 +672,8 @@ def test_local_20260620_sample_replay_if_present():
     assert report["coverage"]["proximity_air_events"] == 5300
     assert report["coverage"]["proximity_rear_events"] == 49
     assert report["coverage"]["situation_rear_air_threat_live_items"] == 1906
-    assert report["events"]["enemy_on_six/warning"] == 149
-    assert report["events"]["tailing_risk/warning"] == 44
+    assert report["events"]["enemy_on_six/warning"] == 175
+    assert report["events"]["tailing_risk/warning"] == 29
     assert report["coverage"]["situation_frames"] == 9970
     assert report["coverage"]["ground_target_items"] == 3253
     assert report["coverage"]["ground_target_live_items"] == 3253

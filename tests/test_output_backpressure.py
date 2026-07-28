@@ -286,7 +286,7 @@ def test_user_chat_quiet_window_suppresses_nonurgent_battle_cue():
     assert status["quiet_window_remaining_seconds"] == 15.0
 
 
-def test_confirmed_kill_during_text_chat_is_deferred_into_next_reply():
+def test_confirmed_kill_during_text_chat_becomes_passive_context():
     plugin = FakePlugin()
     plugin.cfg.target_lanlan = "Lanlan"
     plugin.cfg.user_chat_quiet_window_seconds = 20.0
@@ -303,14 +303,21 @@ def test_confirmed_kill_during_text_chat_is_deferred_into_next_reply():
     assert call["ai_behavior"] == "read"
     assert call["visibility"] == []
     assert call["target_lanlan"] == "Lanlan"
-    assert call["metadata"]["delivery_strategy"] == "next_text_turn"
-    assert call["metadata"]["consume_hint"] == "next_reply_once"
-    assert call["metadata"]["deferred_from_user_chat_quiet_window"] is True
+    assert call["metadata"]["delivery_strategy"] == "passive_context"
+    assert call["metadata"]["passive_from_user_chat_quiet_window"] is True
     assert call["metadata"]["quiet_window_remaining_seconds"] == 15.0
-    assert "一次性" in call["parts"][0]["text"]
+    assert "只供之后自然发生的用户轮次参考" in call["parts"][0]["text"]
+    assert "不要求在回复中提及" in call["parts"][0]["text"]
+    # 规范入口是 ai_behavior=read；metadata 只补充通用的被动上下文意图。
+    assert call["metadata"]["delivery_intent"] == "passive_context"
+    assert "candidate_ttl_seconds" not in call["metadata"]
+    assert "consume_hint" not in call["metadata"]
+    assert "deferred_from_user_chat_quiet_window" not in call["metadata"]
     status = timeline.snapshot()["last_output_status"]
     assert status["ai_behavior"] == "read"
-    assert status["delivery_strategy"] == "next_text_turn"
+    assert status["delivery_strategy"] == "passive_context"
+    assert status["delivery_intent"] == "passive_context"
+    assert status["passive_from_user_chat_quiet_window"] is True
 
 
 def test_confirmed_kill_during_voice_chat_keeps_noninterrupting_suppression():

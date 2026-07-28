@@ -96,6 +96,15 @@ stateDiagram-v2
 - **迟滞（hysteresis）**：`exit` 谓词比 `enter` **更松**（如 enter: IAS<220；exit: IAS>260）。靠"两个不同谓词"天然实现，避免临界抖动。
 - **debounce / confirm**：`confirm_enter` / `confirm_exit`（连续 N tick 或 T 秒）。谓词必须**持续保持**才翻状态——单帧尖刺（AoA/G）在 CONFIRMING 阶段被滤掉。
 - **re-arm**：`ACTIVE → ARMED` 这条边就是 re-arm。**只有回到 ARMED 后，才可能再次 emit enter**。这保证"同一次持续危险"只发一次 enter，而不是每 tick 发。
+- **危急心跳（2026-07-27 新增）**：`critical_heartbeat_seconds > 0` 时，critical 在 ACTIVE 期间每隔该间隔重发一条 enter。
+  存在的理由是 Arbiter 会把抢占冷却窗内的危急候选**整条丢弃**，而 FSM 进入 ACTIVE 后不再重发——
+  于是"冷却期内进入的危急"永远不会被播报。样本里真实出现过：低空告警播完 5.9s 后进入失速，全程无提示。
+  间隔由 `critical_preempt_cooldown_seconds` 推导（默认 5s），不可随意调大：实测 critical 段最长仅 6.9s
+  (`low_alt_danger`)、`stall_risk` 6.3s，取 8s 会让该机制在真实飞行中永不触发。
+  已播报过的同一条仍由 Dispatcher 的 repeat-collapse（30s 窗）折叠，不会刷屏。
+- **once_per_battle（2026-07-27 新增）**：置位后条件退出进入 `_SPENT` 相位，本局不再 re-arm，只有 `engine.reset()`（新 `battle_id`）复位。
+  用于兑现 D-B2 里 `cooldown < 0` 声明的"每局一次"语义——Arbiter 只在 `cd > 0` 时查冷却，此前该语义无人执行，
+  电平 flag 在阈值附近抖动就能反复重报（实测 `low_fuel` 13 秒内报三次）。warning→critical 升级发生在 ACTIVE 内，不受影响。
 
 ## 5. 两个家族，一套协议（回答"连续与离散是否共用"）
 

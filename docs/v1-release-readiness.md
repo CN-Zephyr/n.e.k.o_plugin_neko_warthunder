@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 最后一次完整 pytest 基线：`539 passed`；一键逻辑自检同样为 `539/539 passed`。
+- 最后一次完整 pytest 基线：`575 passed`；一键逻辑自检同样为 `575/575 passed`。
 - 2026-07-15 已重新运行完整 `preflight` 与 `release_readiness`：全部离线门禁通过，当前 verdict 为 `ready_for_final_live_smoke`，下一步只做 dry-run-first 聚焦真机证据。
 - 2026-07-10 发布状态：**ground data-layer fix complete; live revalidation pending**。陆战状态输出已进一步收缩为只播真实激光告警；重新打包前需验证其余陆战状态保持静默。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。

@@ -93,6 +93,15 @@ def test_hosted_ui_panel_groups_operator_state_in_chinese():
         assert label in panel
 
 
+def test_hosted_ui_panel_serializes_background_refresh_and_handles_rejections():
+    panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
+
+    assert "let refreshInFlight = false" in panel
+    assert "await props.api.refresh()" in panel
+    assert "props.api.refresh().catch(() => undefined)" in panel
+    assert "setTimeout(() => { void tick() }" in panel
+
+
 def test_hosted_ui_panel_keeps_existing_actions_available():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
 

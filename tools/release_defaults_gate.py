@@ -7,18 +7,15 @@ real output queue guards enabled. It is intentionally no-host and no-data-layer.
 
 from __future__ import annotations
 
-import argparse
-import json
-import pathlib
-import sys
-import types
+import pathlib as _pathlib
+import sys as _sys
+
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
+from _common import ensure_package, run_gate_cli  # noqa: E402
+
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
+_BASE = ensure_package(__file__)
 
 from neko_warthunder.core.contracts import WtConfig  # noqa: E402
 
@@ -142,16 +139,12 @@ def render_text(result: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check release-safe default configuration.")
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    args = parser.parse_args(argv)
-
-    result = run_gate()
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    else:
-        print(render_text(result), end="")
-    return 0 if result["status"] == "pass" else 1
+    return run_gate_cli(
+        description="Check release-safe default configuration.",
+        run_gate=run_gate,
+        render_text=render_text,
+        argv=argv,
+    )
 
 
 if __name__ == "__main__":

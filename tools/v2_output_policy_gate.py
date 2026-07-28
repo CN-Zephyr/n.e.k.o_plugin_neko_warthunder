@@ -8,18 +8,15 @@ verified output switch.
 
 from __future__ import annotations
 
-import argparse
-import json
-import pathlib
-import sys
-import types
+import pathlib as _pathlib
+import sys as _sys
+
+_sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
+from _common import ensure_package, run_gate_cli  # noqa: E402
+
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
+_BASE = ensure_package(__file__)
 
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher, V2_LIVE_EVIDENCE_GATED_EVENTS  # noqa: E402
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline  # noqa: E402
@@ -118,16 +115,12 @@ def render_text(payload: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the V2 real-output policy gate.")
-    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    args = parser.parse_args(argv)
-
-    payload = run_gate()
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        print(render_text(payload), end="")
-    return 0 if payload["status"] == "pass" else 1
+    return run_gate_cli(
+        description="Run the V2 real-output policy gate.",
+        run_gate=run_gate,
+        render_text=render_text,
+        argv=argv,
+    )
 
 
 if __name__ == "__main__":

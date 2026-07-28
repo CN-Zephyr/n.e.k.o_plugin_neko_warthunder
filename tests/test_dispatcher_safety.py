@@ -746,3 +746,104 @@ def test_common_battle_prompts_stay_compact():
         prompt = dispatcher.build_prompt(event)
         assert len(prompt) <= 300
         assert len(prompt.splitlines()) <= 4
+
+
+def test_real_push_emits_host_generic_delivery_fields():
+    """真实推送要带上宿主已在消费的通用投递字段。
+
+    宿主核心读的是 delivery_ttl_seconds / delivery_intent / interrupt_policy 这套名字；
+    插件自己的 host_callback_contract 表达同一语义但宿主还不认。同时发出两套，
+    插件在已合并该核心的宿主上立刻能拿到逐条 TTL，无需等待新的核心改动。
+    """
+    plugin = FakePlugin()
+    plugin.cfg.global_rate_limit_seconds = 0
+    plugin.cfg.output_backpressure_seconds = 0
+    plugin.cfg.dialogue_intrusion_mode = "allow_interrupt"
+    dispatcher = NekoDispatcher(plugin, clock=lambda: 1000.0)
+
+    event = BattleEvent("low_alt_danger", edge="enter", level="critical", ts=999.0)
+    result = dispatcher.push_event(event, dry_run=False)
+
+    assert result.startswith("pushed(")
+    metadata = plugin.calls[0]["metadata"]
+    assert metadata["interrupt_policy"] == "drop"
+    # low_alt_danger 的新鲜度窗是 4s，事件已过 1s → 剩余 3s
+    assert metadata["delivery_ttl_seconds"] == 3.0
+    # 普通推送不是延后候选，不能声明 passive 意图，否则宿主会压掉整条回复。
+    assert "delivery_intent" not in metadata
+    # 结构化契约仍然保留，两套并存。
+    assert metadata["host_callback_contract"]["delivery"]["coalesce_key"]
+
+
+def test_expired_free_event_without_ttl_omits_delivery_ttl():
+    """无时间戳的事件不应编造 TTL。"""
+    plugin = FakePlugin()
+    plugin.cfg.global_rate_limit_seconds = 0
+    plugin.cfg.output_backpressure_seconds = 0
+    plugin.cfg.dialogue_intrusion_mode = "allow_interrupt"
+    plugin.cfg.output_event_max_age_seconds = 0
+    dispatcher = NekoDispatcher(plugin, clock=lambda: 1000.0)
+
+    event = BattleEvent("overheat", edge="enter", level="warning", ts=0.0)
+    assert dispatcher.push_event(event, dry_run=False).startswith("pushed(")
+
+    metadata = plugin.calls[0]["metadata"]
+    assert "delivery_ttl_seconds" not in metadata
+    assert metadata["interrupt_policy"] == "drop"
+
+
+def test_plugin_activity_state_fields_exist_on_the_real_plugin():
+    """派发器按名字读写插件的活动状态字段，这组名字必须真实存在。
+
+    这是跨对象隐式契约：任一侧改名或拼错都不报错，getattr 会静默回落到默认值，
+    效果是"用户正在说话"的静默窗门控被无声关闭——只有行为测试才可能察觉。
+    这条把它变成签名级失败。
+    """
+    import importlib.util
+    import pathlib
+    import sys
+    import types as _types
+
+    from neko_warthunder.adapters.neko_dispatcher import PLUGIN_ACTIVITY_STATE_FIELDS
+
+    if "plugin.sdk.plugin" not in sys.modules:
+        plugin_mod = _types.ModuleType("plugin")
+        sdk_mod = _types.ModuleType("plugin.sdk")
+        sdk_plugin = _types.ModuleType("plugin.sdk.plugin")
+
+        class NekoPluginBase:
+            def __init__(self, ctx):
+                self.ctx = ctx
+
+        def identity_decorator(*_a, **_k):
+            def wrap(obj):
+                return obj
+            return wrap
+
+        sdk_plugin.NekoPluginBase = NekoPluginBase
+        sdk_plugin.neko_plugin = lambda cls: cls
+        sdk_plugin.plugin_entry = identity_decorator
+        sdk_plugin.lifecycle = identity_decorator
+        sdk_plugin.message = identity_decorator
+        sdk_plugin.ui = _types.SimpleNamespace(context=identity_decorator, action=identity_decorator)
+        sdk_plugin.Ok = lambda value=None: value
+        sdk_plugin.Err = lambda value=None: value
+        sdk_plugin.SdkError = Exception
+        sys.modules["plugin"] = plugin_mod
+        sys.modules["plugin.sdk"] = sdk_mod
+        sys.modules["plugin.sdk.plugin"] = sdk_plugin
+
+    name = "neko_warthunder.__activity_contract_under_test__"
+    root = pathlib.Path(__file__).resolve().parent.parent
+    if name in sys.modules:
+        module = sys.modules[name]
+    else:
+        spec = importlib.util.spec_from_file_location(name, root / "__init__.py")
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+
+    source = (root / "__init__.py").read_text(encoding="utf-8")
+    for field in PLUGIN_ACTIVITY_STATE_FIELDS:
+        assert f"self.{field}" in source, f"插件未定义派发器要读的字段: {field}"

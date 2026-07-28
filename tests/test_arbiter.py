@@ -116,16 +116,59 @@ def test_restore_then_retry_keeps_coalesced_kill_count_stable():
 
 
 def test_window_flush_preserves_latest_observation_timestamp():
-    arb = _arb()
+    """能活到 flush 的事件照常缓冲、flush 时保留原始观测时间戳。
+
+    限流放宽到 4s，使 overheat(新鲜度上限 6s)在最早 flush 时刻仍然新鲜；
+    用默认 12s 限流的话它必然过期，见下面的 expired_before_flush 用例。
+    """
+    arb = Arbiter(SafetyGuard(WtConfig(global_rate_limit_seconds=4.0)))
     a, _ = arb.decide([BattleEvent("low_fuel", level="warning", ts=1000.0)], IN_FLIGHT, 1000.0)
-    b, _ = arb.decide([BattleEvent("overheat", level="warning", ts=1003.0)], IN_FLIGHT, 1003.0)
-    c, chain = arb.decide([], IN_FLIGHT, 1013.0)
+    b, _ = arb.decide([BattleEvent("overheat", level="warning", ts=1002.0)], IN_FLIGHT, 1002.0)
+    c, chain = arb.decide([], IN_FLIGHT, 1005.0)
 
     assert a is not None and a.event_id == "low_fuel"
     assert b is None
     assert c is not None and c.event_id == "overheat"
-    assert c.ts == 1003.0
+    assert c.ts == 1002.0
     assert any(item["result"] == "spoken" and item["reason"] == "window_flush" for item in chain)
+
+
+def test_candidate_that_cannot_survive_the_rate_limit_does_not_occupy_the_window():
+    """注定过期的候选不该占住单槽窗口。
+
+    默认全局限流 12s 远大于多数事件的新鲜度窗（接近类 3s、低空 4s），旧行为会把
+    这类事件塞进单槽、挤掉更新鲜的低优先级候选，然后到 flush 时 Dispatcher 再
+    以 event_expired 丢弃——两条都没播出去。
+    """
+    arb = _arb()
+    fired, _ = arb.decide([BattleEvent("low_fuel", level="warning", ts=1000.0)], IN_FLIGHT, 1000.0)
+    assert fired is not None
+
+    # air_threat_nearby 新鲜度上限 3s，最早 flush 要等到 1012 —— 必然过期。
+    doomed = BattleEvent("air_threat_nearby", level="warning", ts=1001.0)
+    buffered, chain = arb.decide([doomed], IN_FLIGHT, 1001.0)
+
+    assert buffered is None
+    assert arb._window_best is None
+    assert any(item["result"] == "dropped" and item["reason"] == "expired_before_flush" for item in chain)
+
+
+def test_freshness_check_leaves_the_window_free_for_a_deliverable_event():
+    """槽位被让出来之后，随后仍然新鲜的候选可以正常入窗并 flush。"""
+    arb = Arbiter(SafetyGuard(WtConfig(global_rate_limit_seconds=4.0)))
+    fired, _ = arb.decide([BattleEvent("low_fuel", level="warning", ts=1000.0)], IN_FLIGHT, 1000.0)
+    assert fired is not None
+
+    doomed = BattleEvent("air_threat_nearby", level="warning", ts=1000.0)
+    fresh = BattleEvent("overheat", level="warning", ts=1001.0)
+    buffered, chain = arb.decide([doomed, fresh], IN_FLIGHT, 1001.0)
+
+    assert buffered is None
+    assert any(item["result"] == "dropped" and item["reason"] == "expired_before_flush" for item in chain)
+    assert arb._window_best is not None and arb._window_best.event_id == "overheat"
+
+    flushed, _ = arb.decide([], IN_FLIGHT, 1004.5)
+    assert flushed is not None and flushed.event_id == "overheat"
 
 
 def test_cooldown_drops_repeat():

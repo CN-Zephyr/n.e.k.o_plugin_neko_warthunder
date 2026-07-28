@@ -113,6 +113,42 @@ def test_missing_data_layer_is_started_and_owned_by_plugin():
     assert "managed_data_layer_requires_loopback_url" in remote_status["last_error"]
 
 
+def test_pre_health_python_failure_tries_the_next_candidate_in_same_start():
+    cfg = WtConfig(data_layer_auto_start=True, data_layer_startup_timeout_seconds=0.2)
+    checks = iter([False, False, True])
+    healthy_process = FakeProcess()
+    launched: list[str] = []
+
+    original_prefixes = module._python_command_prefixes
+    module._python_command_prefixes = lambda: [["first-python"], ["second-python"]]
+
+    def launch(args, **_kwargs):
+        launched.append(args[0])
+        if args[0] == "first-python":
+            return ExitedProcess()
+        return healthy_process
+
+    try:
+        with _fake_plugin_root() as root:
+            manager = DataLayerProcessManager(
+                cfg,
+                plugin_root=Path(root),
+                health_check=lambda _url, _timeout: next(checks),
+                popen_factory=launch,
+                sleep=lambda _seconds: None,
+            )
+            status = manager.start_if_needed()
+            manager.stop()
+    finally:
+        module._python_command_prefixes = original_prefixes
+
+    assert launched == ["first-python", "second-python"]
+    assert status["mode"] == "managed"
+    assert status["python_cmd"] == "second-python"
+    assert ("first-python",) in manager._failed_python_prefixes
+    assert healthy_process.terminated is True
+
+
 def test_repeated_start_keeps_managed_process_owned_and_stoppable():
     cfg = WtConfig(data_layer_auto_start=True)
     proc = FakeProcess()
@@ -193,10 +229,10 @@ def test_exited_data_layer_reports_stderr_tail():
         status = manager.start_if_needed()
 
     assert status["mode"] == "failed"
-    assert status["started_by_plugin"] is True
-    assert status["last_error"] == "process_exited_before_healthy(exit=1; Traceback: port 8112 already in use)"
+    assert status["started_by_plugin"] is False
+    assert "process_exited_before_healthy(exit=1; Traceback: port 8112 already in use)" in status["last_error"]
+    assert status["last_error"].startswith("all_data_layer_runners_failed:")
     assert status["stderr_log"].endswith("warthunder_data_layer_8112_stderr.log")
-    assert "python" in status["python_cmd"].lower() or status["python_cmd"].lower().startswith("py")
 
 
 def test_missing_python_runner_uses_embedded_fallback():

@@ -1168,3 +1168,30 @@ def test_vehicle_profile_third_datamine_batch_keeps_common_jet_candidates():
         assert family == expected_family, vehicle_type
         for key, value in expected_values.items():
             assert cfg[key] == value, vehicle_type
+
+
+def test_proximity_thresholds_use_public_resolver_not_private_symbols():
+    """接近阈值解析必须走 processor 的公开入口。
+
+    历史写法是 `from wt_processor import _merge_profile` 再用
+    `getattr(processor, "_family_rules", [])` 把家族规则掏出来回传：改名或调整规则
+    结构会同时炸掉三个模块，而带默认值的 getattr 更糟——家族匹配会静默退化成空规则，
+    不报错、只是悄悄不生效。
+    """
+    import pathlib
+
+    from wt_processor import TelemetryProcessor
+    from wt_proximity import resolve_proximity_thresholds
+
+    processor = TelemetryProcessor()
+    assert hasattr(processor, "resolve_profile"), "processor 必须提供公开的 resolve_profile"
+
+    profiles = {"_default": {"proximity_warn_m": 3000}, "f-4f_kws_lv": {"proximity_warn_m": 5000}}
+    processor.profiles = profiles
+    assert resolve_proximity_thresholds(profiles, "air", "f-4f_kws_lv", processor.resolve_profile) == (5000, None)
+
+    data_dir = pathlib.Path(__file__).resolve().parent.parent / "data_layer" / "data process"
+    prox_src = (data_dir / "wt_proximity.py").read_text(encoding="utf-8")
+    server_src = (data_dir / "wt_server.py").read_text(encoding="utf-8")
+    assert "_merge_profile" not in prox_src
+    assert '_family_rules' not in server_src

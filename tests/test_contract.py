@@ -241,3 +241,52 @@ def test_broadcast_preferences_normalize_invalid_frequency_and_partial_categorie
     assert config.broadcast_categories["radio"] is False
     assert config.broadcast_categories["safety"] is True
     assert "unrecognized" not in config.broadcast_categories
+
+
+def test_mission_status_normalization_is_shared_across_end_and_result_checks():
+    """"是否终局"与"胜负判定"必须用同一套归一化。
+
+    数据层可能给出带空白的值，或 "win, K3/D1" 这类复合串；历史上场景机与
+    battle_end 检测器只做 lower()，而 classify_battle_result 还做 strip + 逗号截断，
+    于是同一个值会出现"场景机不认为结束、classify 却识别得出"的分裂。
+    """
+    from neko_warthunder.core.contracts import (
+        classify_battle_result,
+        is_battle_end_status,
+        normalize_mission_status,
+    )
+
+    for raw, kind in [
+        ("win", "victory"),
+        ("  Win  ", "victory"),
+        ("win, K3/D1", "victory"),
+        ("DEFEAT", "defeat"),
+        (" lost , K0/D2", "defeat"),
+        ("left", "neutral"),
+    ]:
+        assert is_battle_end_status(raw) is True, raw
+        assert classify_battle_result(raw) == kind, raw
+
+    for raw in ("running", "", None, "   ", "in_progress"):
+        assert is_battle_end_status(raw) is False, raw
+        assert classify_battle_result(raw) == "unknown", raw
+
+    assert normalize_mission_status("  Win, K3/D1 ") == "win"
+
+
+def test_scenario_and_battle_end_detector_agree_on_compound_status():
+    """场景机与 battle_end 检测器对复合状态串的判定必须一致。"""
+    from neko_warthunder.core import contracts as C
+    from neko_warthunder.core.scenario import ScenarioResolver
+    from neko_warthunder.detectors.discrete.lifecycle import BattleEndDetector
+
+    compound = "win, K3/D1"
+    resolver = ScenarioResolver()
+    state = C.BattleState(connected=True, conn_state="in_battle", in_battle=True, mission_status=compound)
+    assert resolver.resolve(state, 1000.0, 6) == C.BATTLE_ENDED
+
+    det = BattleEndDetector()
+    prev = C.BattleState(connected=True, conn_state="in_battle", in_battle=True, mission_status="running")
+    ev = det.feed(prev, state)
+    assert ev is not None and ev.event_id == "battle_end"
+    assert ev.payload["result_kind"] == "victory"

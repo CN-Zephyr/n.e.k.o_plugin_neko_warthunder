@@ -12,6 +12,11 @@ def _alive(**kw):
     return C.BattleState(**base)
 
 
+def _owned_damage(feed_id: int = 3):
+    """归属到本机的 combat.feed 条目——交火压力只认这种，不认全场击杀榜。"""
+    return {"feed": [{"id": feed_id, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "X"}]}
+
+
 def test_out_of_battle():
     r = ScenarioResolver()
     assert r.resolve(C.BattleState(connected=False), 1000.0, 6) == C.OUT_OF_BATTLE
@@ -167,8 +172,8 @@ def test_combat_stress_not_stuck_on_stale_damage():
     r = ScenarioResolver()
     r.resolve(_alive(), 1000.0, 6)
     r.resolve(_alive(), 1007.0, 6)
-    dmg = _alive(hud_events=[{"id": 3, "kind": "damage"}])
-    assert r.resolve(dmg, 1008.0, 6) == C.COMBAT_STRESS          # 新受创 → 进 stress
+    dmg = _alive(combat=_owned_damage())
+    assert r.resolve(dmg, 1008.0, 6) == C.COMBAT_STRESS          # 新的本机战斗条目 → 进 stress
     assert r.current_stress_reasons(1008.0) == frozenset({"damage"})
     assert r.resolve(dmg, 1018.0, 6) == C.IN_FLIGHT              # 同一条旧 damage 不应永久卡住
     assert r.current_stress_reasons(1018.0) == frozenset()
@@ -179,7 +184,7 @@ def test_combat_stress_reasons_expire_independently():
     r.resolve(_alive(), 1000.0, 6)
     r.resolve(_alive(), 1007.0, 6)
     assert r.resolve(_alive(g_now=6.0), 1008.0, 6) == C.COMBAT_STRESS
-    assert r.resolve(_alive(hud_events=[{"id": 3, "kind": "damage"}]), 1012.0, 6) == C.COMBAT_STRESS
+    assert r.resolve(_alive(combat=_owned_damage()), 1012.0, 6) == C.COMBAT_STRESS
     assert r.current_stress_reasons(1012.0) == frozenset({"maneuver", "damage"})
     assert r.current_stress_reasons(1016.5) == frozenset({"damage"})
 
@@ -188,7 +193,7 @@ def test_domain_change_clears_mode_stress_but_preserves_damage():
     r = ScenarioResolver()
     r.resolve(_alive(), 1000.0, 6)
     r.resolve(_alive(), 1007.0, 6)
-    stressed = _alive(g_now=6.0, hud_events=[{"id": 3, "kind": "damage"}])
+    stressed = _alive(g_now=6.0, combat=_owned_damage())
 
     assert r.resolve(stressed, 1008.0, 6) == C.COMBAT_STRESS
     assert r.current_stress_reasons(1008.0) == frozenset({"maneuver", "damage"})
@@ -197,3 +202,31 @@ def test_domain_change_clears_mode_stress_but_preserves_damage():
     assert r.resolve(ground, 1009.0, 6) == C.COMBAT_STRESS
     assert r.current_stress_reasons(1009.0) == frozenset({"damage"})
     assert r.resolve(ground, 1016.1, 6) == C.IN_FLIGHT
+
+
+def test_combat_stress_ignores_unowned_battle_log_activity():
+    """全场击杀榜不得被当成本机受创。
+
+    数据层 hud_events 是未过滤的全场战斗日志，多人对局里近乎连续；若按它计压力，
+    玩家独自巡航也会长期停在 COMBAT_STRESS，压掉 low_fuel 与陪伴类输出。
+    """
+    r = ScenarioResolver()
+    r.resolve(_alive(), 1000.0, 6)
+    r.resolve(_alive(), 1007.0, 6)
+
+    others = _alive(
+        hud_events=[{"id": 3, "kind": "damage"}, {"id": 4, "kind": "damage"}],
+        combat={"feed": [{"id": 4, "is_kill": True, "is_my_kill": False, "is_my_death": False, "victim": "Someone"}]},
+    )
+    assert r.resolve(others, 1008.0, 6) == C.IN_FLIGHT
+    assert r.current_stress_reasons(1008.0) == frozenset()
+
+
+def test_combat_stress_enters_on_owned_death_feed_entry():
+    r = ScenarioResolver()
+    r.resolve(_alive(), 1000.0, 6)
+    r.resolve(_alive(), 1007.0, 6)
+
+    owned_death = _alive(combat={"feed": [{"id": 7, "is_kill": True, "is_my_death": True, "killer": "Bandit"}]})
+    assert r.resolve(owned_death, 1008.0, 6) == C.COMBAT_STRESS
+    assert r.current_stress_reasons(1008.0) == frozenset({"damage"})

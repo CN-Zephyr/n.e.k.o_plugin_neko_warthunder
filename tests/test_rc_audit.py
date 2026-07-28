@@ -77,9 +77,10 @@ def test_rc_audit_fails_when_required_status_is_missing():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         _write_minimal_docs(root)
+        baseline = f"{rc_audit.CURRENT_BASELINE}/{rc_audit.CURRENT_BASELINE} passed"
         status = root / "PROJECT_STATUS.md"
         status.write_text(
-            status.read_text(encoding="utf-8").replace("532/532 passed", "outdated baseline"),
+            status.read_text(encoding="utf-8").replace(baseline, "outdated baseline"),
             encoding="utf-8",
         )
 
@@ -88,7 +89,7 @@ def test_rc_audit_fails_when_required_status_is_missing():
     assert {
         "kind": "missing_required_file_snippet",
         "file": "PROJECT_STATUS.md",
-        "detail": "532/532 passed",
+        "detail": baseline,
     } in result["failures"]
 
 

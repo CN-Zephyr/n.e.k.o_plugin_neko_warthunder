@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.gz binary
+*.db binary
+*.neko-plugin binary
+*.bat text eol=crlf

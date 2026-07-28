@@ -30,6 +30,11 @@ AUDITED_FILES = [
     "docs/v1-release-readiness.md",
 ]
 
+# 当前已验证的逻辑自检基线。加/减测试后只改这一个常量：
+# REQUIRED_SNIPPETS 与 REQUIRED_FILE_SNIPPETS 都由它派生，
+# 旧值请追加到 STALE_BASELINES，保证文档不会停留在过期计数上。
+CURRENT_BASELINE = 575
+
 STALE_BASELINES = [
     "29/29 passed",
     "32/32 passed",
@@ -129,10 +134,28 @@ STALE_BASELINES = [
     "505 passed",
     "506/506 passed",
     "506 passed",
+    "532/532 passed",
+    "532 passed",
+    "539/539 passed",
+    "539 passed",
+    "548/548 passed",
+    "548 passed",
+    "554/554 passed",
+    "554 passed",
+    "559/559 passed",
+    "559 passed",
+    "561/561 passed",
+    "561 passed",
+    "563/563 passed",
+    "563 passed",
+    "569/569 passed",
+    "569 passed",
+    "571/571 passed",
+    "571 passed",
 ]
 
 REQUIRED_SNIPPETS = [
-    "532/532 passed",
+    f"{CURRENT_BASELINE}/{CURRENT_BASELINE} passed",
     "vehicle profile id audit",
     "tools/vehicle_profile_id_audit.py",
     "vehicle profile economy metadata",
@@ -202,7 +225,7 @@ REQUIRED_SNIPPETS = [
 ]
 
 REQUIRED_FILE_SNIPPETS = {
-    "PROJECT_STATUS.md": ["532/532 passed", "532 passed"],
+    "PROJECT_STATUS.md": [f"{CURRENT_BASELINE}/{CURRENT_BASELINE} passed", f"{CURRENT_BASELINE} passed"],
 }
 
 FORBIDDEN_PHRASES = [
@@ -289,4 +312,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

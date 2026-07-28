@@ -7,7 +7,9 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import threading
+import time
 import types
 
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
@@ -104,6 +106,10 @@ def _plugin_for_action_tests():
     )
     plugin.state = BattleState()
     plugin._state_lock = threading.Lock()
+    # 默认落到临时目录：运行时 fallback 会写插件根，测试忘记覆盖 _runtime_state_path
+    # 就会把 .runtime_state.json（含玩家昵称）泄漏进仓库——历史上确实发生过。
+    # 需要断言落盘内容的测试仍可覆盖成自己的 tmp_path。
+    plugin._runtime_state_path = pathlib.Path(tempfile.mkdtemp(prefix="wt-runtime-state-")) / ".runtime_state.json"
     plugin.pushed_messages = []
     plugin.config_updates = []
 
@@ -189,6 +195,29 @@ def test_urgent_output_migration_marker_write_failure_does_not_abort_startup():
     )
 
     assert warnings == ["urgent output TTS migration flag persist failed: OSError"]
+
+
+def test_startup_refuses_to_overlap_a_previous_poll_thread():
+    Plugin = _runtime_plugin_class()
+    plugin = object.__new__(Plugin)
+    calls: list[str] = []
+
+    async def reload_config():
+        calls.append("reload")
+
+    plugin._reload_config = reload_config
+    plugin._thread = types.SimpleNamespace(is_alive=lambda: True)
+    plugin.logger = types.SimpleNamespace(warning=lambda message: calls.append(message))
+    plugin.data_layer_manager = types.SimpleNamespace(
+        start_if_needed=lambda: calls.append("data_layer_start")
+    )
+
+    result = asyncio.run(plugin.startup())
+
+    assert isinstance(result, Exception)
+    assert calls[0] == "reload"
+    assert "data_layer_start" not in calls
+    assert any("previous poll thread" in item for item in calls)
 
 
 def test_user_context_refresh_cannot_move_chat_activity_backwards():
@@ -923,8 +952,11 @@ def test_suppressed_dispatch_restores_output_rate_limit_clock():
     )
     plugin.safety = SafetyGuard(plugin.cfg)
     plugin.arbiter = Arbiter(plugin.safety)
+    # ts 必须贴近 _evaluate 内部的 time.time()：本用例验证的是"投递被压制后要还原
+    # 限流时钟"，不是新鲜度；用占位的 ts=1.0 会让事件老到被 Arbiter 判为必然过期。
+    event_ts = time.time()
     plugin.engine = types.SimpleNamespace(
-        feed=lambda _prev, _cur: [BattleEvent("overheat", ts=1.0)],
+        feed=lambda _prev, _cur: [BattleEvent("overheat", ts=event_ts)],
         reset=lambda: None,
     )
     plugin.resolver = types.SimpleNamespace(
