@@ -71,6 +71,7 @@ def test_recorder_stops_itself_when_session_quota_is_reached(tmp_path):
     assert recorder.recording is False
     assert status["stopped_reason"] == "max_session_bytes_reached"
     assert status["max_session_bytes"] == 4096
+    assert status["session_bytes"] >= 4096
 
 
 def test_recorder_quota_can_be_disabled_and_reports_usage(tmp_path):

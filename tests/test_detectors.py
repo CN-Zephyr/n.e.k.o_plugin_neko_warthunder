@@ -671,6 +671,33 @@ def test_dead_state_suppresses_overheat_candidates():
     assert engine.feed(prev, dead) == []
     assert engine.feed(dead, dead) == []
 
+    persistent_engine = DetectorEngine(
+        [
+            FreeTextActivityDetector(),
+            HudNoticeDetector(),
+            ProximityDetector(),
+            RadioCommandDetector(),
+        ]
+    )
+    persistent_data = {
+        "in_battle": True,
+        "vehicle_valid": True,
+        "domain": "ground",
+        "combat": {
+            "player_name": "Pilot",
+            "self": {"name": "Pilot", "source": "manual", "confidence": 1.0},
+        },
+        "raw": {"awards": {"feed": [{"id": 20, "code": "final_blow"}]}},
+        "hud_notices": [{"id": 21, "code": "engine_overheat", "level": "critical"}],
+        "proximity_events": [{"id": 22, "kind": "enter", "distance_m": 500}],
+        "chat": [{"id": 23, "sender": "Pilot", "msg": "进攻 D 点！"}],
+    }
+    persistent_dead = C.BattleState(**persistent_data, dead=True)
+    assert persistent_engine.feed(prev, persistent_dead) == []
+
+    respawned = C.BattleState(**persistent_data)
+    assert persistent_engine.feed(persistent_dead, respawned) == []
+
 
 def test_dead_state_allows_death_event_and_blocks_overheat_same_tick():
     engine = DetectorEngine(list(build_condition_detectors()) + [DeathDetector(), HudNoticeDetector()])
