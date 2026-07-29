@@ -988,6 +988,9 @@ def test_dry_run_does_not_mark_once_per_battle_event_delivered():
         clock_values=[100.0],
         dry_run=True,
     )
+    plugin.cfg = WtConfig(dry_run=True, global_rate_limit_seconds=12.0)
+    plugin.safety = SafetyGuard(plugin.cfg)
+    plugin.arbiter = Arbiter(plugin.safety)
     event = BattleEvent("low_fuel", ts=100.0)
     marked: list[str] = []
     pushed: list[tuple[BattleEvent, bool]] = []
@@ -1020,6 +1023,8 @@ def test_dry_run_does_not_mark_once_per_battle_event_delivered():
 
     assert pushed == [(event, True)]
     assert marked == []
+    assert plugin.safety.rate_limit_remaining(100.0) == 0.0
+    assert "low_fuel" not in plugin.arbiter._last_fired
 
 
 def test_enabling_real_output_rearms_uncommitted_once_per_battle_event():

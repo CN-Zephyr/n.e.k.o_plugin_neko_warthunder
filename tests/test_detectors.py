@@ -1331,7 +1331,10 @@ def test_once_per_battle_rearms_when_real_output_follows_dry_run():
     assert [event.event_id for event in engine.feed(low, low)] == ["low_fuel"]
     engine.mark_delivered("low_fuel")
     engine.rearm_uncommitted_once_per_battle()
-    assert engine.feed(low, low) == []
+    clear = C.BattleState(flags={})
+    assert engine.feed(low, clear) == []
+    assert engine.feed(clear, clear) == []
+    assert engine.feed(clear, low) == []
 
 
 def test_condition_without_once_per_battle_still_rearms():
