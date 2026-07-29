@@ -58,7 +58,7 @@ def test_replay_detection_treats_midnight_wrap_as_forward_time():
 
 
 def test_replay_detection_still_catches_timeline_scrub():
-    """半天以内的明显倒退仍然判回放。"""
+    """明显倒退仍然判回放。"""
     module = _server_module()
     service = _service(module)
 
@@ -67,6 +67,52 @@ def test_replay_detection_still_catches_timeline_scrub():
 
     service._detect_replay_locked(types.SimpleNamespace(game_time_sec=120.0), 1001.0)
     assert service._replay is True
+
+
+def test_large_replay_scrub_is_not_mistaken_for_midnight_wrap():
+    module = _server_module()
+    service = _service(module)
+
+    service._detect_replay_locked(types.SimpleNamespace(game_time_sec=20 * 3600.0), 1000.0)
+    service._detect_replay_locked(types.SimpleNamespace(game_time_sec=1 * 3600.0), 1001.0)
+
+    assert service._replay is True
+
+
+def _assert_midnight_wrap_boundary(
+    previous_game_time,
+    current_game_time,
+    expected_replay,
+):
+    module = _server_module()
+    service = _service(module)
+
+    service._detect_replay_locked(
+        types.SimpleNamespace(game_time_sec=previous_game_time),
+        1000.0,
+    )
+    service._detect_replay_locked(
+        types.SimpleNamespace(game_time_sec=current_game_time),
+        1001.0,
+    )
+
+    assert service._replay is expected_replay
+
+
+def test_midnight_wrap_at_the_edge_is_allowed():
+    _assert_midnight_wrap_boundary(
+        23 * 3600.0 + 59 * 60.0 + 59.0,
+        0.0,
+        False,
+    )
+
+
+def test_non_midnight_backwards_jump_is_replay():
+    _assert_midnight_wrap_boundary(
+        23 * 3600.0,
+        1 * 3600.0 + 1.0,
+        True,
+    )
 
 
 def test_replay_detection_ignores_small_jitter():
