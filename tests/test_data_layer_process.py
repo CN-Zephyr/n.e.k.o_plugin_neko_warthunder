@@ -132,6 +132,27 @@ def test_invalid_url_does_not_retry_a_stale_python_runner():
     assert status["python_cmd"] == ""
 
 
+def test_invalid_port_does_not_blacklist_python_runners():
+    cfg = WtConfig(
+        data_layer_auto_start=True,
+        data_layer_url="http://127.0.0.1:not-a-port",
+    )
+
+    with _fake_plugin_root() as root:
+        manager = DataLayerProcessManager(
+            cfg,
+            plugin_root=Path(root),
+            health_check=lambda _url, _timeout: False,
+        )
+
+        status = manager.start_if_needed()
+
+    assert status["mode"] == "failed"
+    assert "port" in status["last_error"].lower()
+    assert manager._failed_python_prefixes == set()
+    assert status["python_cmd"] == ""
+
+
 def test_pre_health_python_failure_tries_the_next_candidate_in_same_start():
     cfg = WtConfig(data_layer_auto_start=True, data_layer_startup_timeout_seconds=0.2)
     checks = iter([False, False, True])

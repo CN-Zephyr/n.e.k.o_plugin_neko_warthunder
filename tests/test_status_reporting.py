@@ -983,6 +983,41 @@ def test_suppressed_dispatch_restores_output_rate_limit_clock():
     assert "overheat" not in plugin.arbiter._last_fired
 
 
+def test_dry_run_does_not_mark_once_per_battle_event_delivered():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(
+        clock_values=[100.0],
+        dry_run=True,
+    )
+    event = BattleEvent("low_fuel", ts=100.0)
+    marked: list[str] = []
+    plugin.engine = types.SimpleNamespace(
+        feed=lambda _prev, _cur: [event],
+        reset=lambda: None,
+        mark_delivered=marked.append,
+    )
+    plugin.resolver = types.SimpleNamespace(
+        resolve=lambda _cur, _now, _grace: "IN_FLIGHT",
+        reset=lambda: None,
+        current_stress_reasons=lambda _now: frozenset(),
+    )
+    plugin.dispatcher = types.SimpleNamespace(
+        push_event=lambda _event, *, dry_run: (
+            "dry_run(event=low_fuel/enter/warning)" if dry_run else "pushed()"
+        )
+    )
+    plugin._record_blocked_free_text_sources = lambda _cur: None
+    plugin._record_deferred_hud_notices = lambda _cur: None
+    plugin._suppress_takeoff_grace = lambda candidates, _cur, _now: candidates
+    plugin._annotate_runtime_context = lambda candidates, _cur, _now: candidates
+
+    try:
+        plugin._evaluate(BattleState(), BattleState(connected=True, in_battle=True))
+    finally:
+        module.time.time = original_time
+
+    assert marked == []
+
+
 def test_failed_dispatch_restores_arbiter_and_retries_selected_edge():
     plugin = _plugin_for_action_tests()
     plugin.cfg = WtConfig(dry_run=False, global_rate_limit_seconds=12.0)
