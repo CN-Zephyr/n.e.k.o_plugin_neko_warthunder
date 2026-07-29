@@ -671,6 +671,33 @@ def test_dead_state_suppresses_overheat_candidates():
     assert engine.feed(prev, dead) == []
     assert engine.feed(dead, dead) == []
 
+    persistent_engine = DetectorEngine(
+        [
+            FreeTextActivityDetector(),
+            HudNoticeDetector(),
+            ProximityDetector(),
+            RadioCommandDetector(),
+        ]
+    )
+    persistent_data = {
+        "in_battle": True,
+        "vehicle_valid": True,
+        "domain": "ground",
+        "combat": {
+            "player_name": "Pilot",
+            "self": {"name": "Pilot", "source": "manual", "confidence": 1.0},
+        },
+        "raw": {"awards": {"feed": [{"id": 20, "code": "final_blow"}]}},
+        "hud_notices": [{"id": 21, "code": "engine_overheat", "level": "critical"}],
+        "proximity_events": [{"id": 22, "kind": "enter", "distance_m": 500}],
+        "chat": [{"id": 23, "sender": "Pilot", "msg": "进攻 D 点！"}],
+    }
+    persistent_dead = C.BattleState(**persistent_data, dead=True)
+    assert persistent_engine.feed(prev, persistent_dead) == []
+
+    respawned = C.BattleState(**persistent_data)
+    assert persistent_engine.feed(persistent_dead, respawned) == []
+
 
 def test_dead_state_allows_death_event_and_blocks_overheat_same_tick():
     engine = DetectorEngine(list(build_condition_detectors()) + [DeathDetector(), HudNoticeDetector()])
@@ -1119,15 +1146,17 @@ def test_engine_still_emits_kills_earned_after_respawn():
     assert events[0].payload.get("victim") == "V9"
 
 
-def test_engine_discards_kills_scored_while_dead_without_replaying_them():
-    """阵亡期间进入 feed 的条目被消费掉：不在阵亡时播报，重生后也不补播。"""
+def test_engine_emits_kills_scored_while_dead_once_for_trade_handling():
+    """阵亡期间到账的战果交给 Arbiter 判定同归于尽，重生后不补播。"""
     base = dict(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True, battle_id="B1")
     engine = DetectorEngine([KillDetector()])
     empty = C.BattleState(**base, combat={"feed": []})
 
     dead_feed = {"feed": [{"id": 4, "is_kill": True, "is_my_kill": True, "killer": "Me", "victim": "V4"}]}
     dead = C.BattleState(**base, combat=dead_feed, dead=True, dead_source="hud")
-    assert engine.feed(empty, dead) == []
+    events = engine.feed(empty, dead)
+    assert [event.event_id for event in events] == ["you_killed"]
+    assert events[0].payload.get("victim") == "V4"
 
     respawned = C.BattleState(**base, combat=dead_feed, dead=False)
     assert engine.feed(dead, respawned) == []
@@ -1206,6 +1235,7 @@ def test_once_per_battle_condition_does_not_rearm_on_flicker():
     clear = C.BattleState()
 
     assert d.feed(prev, low) is not None                 # 首次报出
+    d.mark_delivered()
     assert d.feed(prev, clear) is None
     assert d.feed(prev, clear) is None                   # confirm_exit 满 → SPENT
     assert d.feed(prev, low) is None                     # 再次跌破阈值也不重报
@@ -1223,6 +1253,7 @@ def test_once_per_battle_rearms_after_engine_reset():
     clear = C.BattleState()
 
     assert d.feed(prev, low) is not None
+    d.mark_delivered()
     d.feed(prev, clear); d.feed(prev, clear)
     assert d.feed(prev, low) is None
 
@@ -1240,6 +1271,7 @@ def test_once_per_battle_condition_stays_spent_across_same_battle_respawn():
     low = C.BattleState(flags={"fuel_low": True})
 
     assert [event.event_id for event in engine.feed(prev, low)] == ["low_fuel"]
+    engine.mark_delivered("low_fuel")
 
     dead = C.BattleState(dead=True)
     assert engine.feed(low, dead) == []
@@ -1264,6 +1296,21 @@ def test_once_per_battle_still_allows_warning_to_critical_upgrade():
 
     upgraded = d.feed(prev, C.BattleState(flags={"fuel_critical": True}))
     assert upgraded is not None and upgraded.level == "critical"
+
+
+def test_once_per_battle_rearms_when_candidate_was_not_delivered():
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    prev = C.BattleState()
+    low = C.BattleState(flags={"fuel_low": True})
+    clear = C.BattleState()
+
+    assert d.feed(prev, low) is not None
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, low) is not None
 
 
 def test_condition_without_once_per_battle_still_rearms():

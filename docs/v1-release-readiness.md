@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 最后一次完整 pytest 基线：`575 passed`；一键逻辑自检同样为 `575/575 passed`。
+- 最后一次完整 pytest 基线：`579 passed`；一键逻辑自检同样为 `579/579 passed`。
 - 2026-07-15 已重新运行完整 `preflight` 与 `release_readiness`：全部离线门禁通过，当前 verdict 为 `ready_for_final_live_smoke`，下一步只做 dry-run-first 聚焦真机证据。
 - 2026-07-10 发布状态：**ground data-layer fix complete; live revalidation pending**。陆战状态输出已进一步收缩为只播真实激光告警；重新打包前需验证其余陆战状态保持静默。
 - `tools/free_text_gate.py` 已作为自由文本发布门禁，防止玩家名、hudmsg、combat.feed、awards 原文进入 prompt 或 `push_message.parts[].text`。
@@ -136,4 +136,3 @@ This output separates `sample_unproven_items`, `blocked_release_items`, `remaini
 4. `dry_run=false` 下确认 `event_expired` / output backpressure / output freshness metadata 能减少旧事件晚播，并确认 `target_lanlan` 不走 fallback session，`battle_reply_contract=short_tts_line` / `live_reply_contract=short_tts_line` / `max_reply_chars=28` / `dialogue_policy_owner=plugin` / `plugin_dialogue_policy` / `plugin_recommended_reply` / `plugin_owned_output` / `host_callback_contract_version=neko.callback.v1` 未丢失。旧事件过期、背压、短句和用户聊天干扰策略都属于插件自身验收；宿主核心不作为本插件发布前提。
 5. 分别观察空战、直升机、陆战、海战或合成事件 prompt：事件文本和 metadata 中应有相同的 `当前模式` / `domain_prompt_contract`，陆战出场与战果不应出现升空、后座、云霄、机翼、拉杆等空战词。
 6. 如出现 replay/free-text 样本，确认 live monitor 显示 suppressed / blocked，且没有 unsafe raw 文本进入输出。
-

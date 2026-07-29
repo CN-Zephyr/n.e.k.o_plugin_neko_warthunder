@@ -200,6 +200,16 @@ class NekoWarthunderPlugin(NekoPluginBase):
         # 导致 combat.feed 里的历史击杀被当新事件重放（Bugbot 反馈）。
         if cfg.player_name != prev_player:
             self.engine = self._build_engine()
+        else:
+            # 心跳跟随抢占冷却动态更新，但不能为此重建 engine：重建会丢 FSM，
+            # 也会让整局持久 feed 的游标回退并重放历史事件。
+            configure_heartbeat = getattr(
+                getattr(self, "engine", None),
+                "configure_critical_heartbeat",
+                None,
+            )
+            if callable(configure_heartbeat):
+                configure_heartbeat(cfg.critical_preempt_cooldown_seconds)
 
     def _build_engine(self) -> DetectorEngine:
         # 危急心跳对齐抢占冷却：低于冷却的重发会落在冷却窗内被 Arbiter 丢弃，
@@ -582,6 +592,10 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 if not result.startswith(COMMITTED_RESULT_PREFIXES):
                     self.arbiter.restore(arbiter_checkpoint)
                     self.safety.restore_output_clock(output_clock_checkpoint)
+                else:
+                    mark_delivered = getattr(self.engine, "mark_delivered", None)
+                    if callable(mark_delivered):
+                        mark_delivered(chosen.event_id)
                 self.logger.info(f"[output] {result}")
             except Exception as exc:  # noqa: BLE001 — 投递失败计入安全门，不杀循环
                 self.arbiter.restore(arbiter_checkpoint)

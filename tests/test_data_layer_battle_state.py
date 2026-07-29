@@ -69,7 +69,7 @@ def test_replay_detection_still_catches_timeline_scrub():
     assert service._replay is True
 
 
-def test_large_replay_scrub_is_not_mistaken_for_midnight_wrap():
+def test_replay_detection_catches_large_scrub_not_near_midnight():
     module = _server_module()
     service = _service(module)
 
@@ -113,8 +113,6 @@ def test_non_midnight_backwards_jump_is_replay():
         1 * 3600.0 + 1.0,
         True,
     )
-
-
 def test_replay_detection_ignores_small_jitter():
     module = _server_module()
     service = _service(module)
