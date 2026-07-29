@@ -1313,6 +1313,27 @@ def test_once_per_battle_rearms_when_candidate_was_not_delivered():
     assert d.feed(prev, low) is not None
 
 
+def test_once_per_battle_rearms_when_real_output_follows_dry_run():
+    detector = ConditionDetector(
+        "low_fuel",
+        [("fuel_low", "fuel_critical")],
+        confirm_enter=1,
+        confirm_exit=2,
+        once_per_battle=True,
+    )
+    engine = DetectorEngine([detector])
+    low = C.BattleState(flags={"fuel_low": True})
+
+    assert [event.event_id for event in engine.feed(C.BattleState(), low)] == ["low_fuel"]
+
+    engine.rearm_uncommitted_once_per_battle()
+
+    assert [event.event_id for event in engine.feed(low, low)] == ["low_fuel"]
+    engine.mark_delivered("low_fuel")
+    engine.rearm_uncommitted_once_per_battle()
+    assert engine.feed(low, low) == []
+
+
 def test_condition_without_once_per_battle_still_rearms():
     d = ConditionDetector("stall_risk", [("stall_warning", "stall_critical")], confirm_enter=1, confirm_exit=2)
     prev = C.BattleState()

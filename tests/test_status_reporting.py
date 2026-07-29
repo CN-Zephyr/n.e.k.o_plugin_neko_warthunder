@@ -990,6 +990,7 @@ def test_dry_run_does_not_mark_once_per_battle_event_delivered():
     )
     event = BattleEvent("low_fuel", ts=100.0)
     marked: list[str] = []
+    pushed: list[tuple[BattleEvent, bool]] = []
     plugin.engine = types.SimpleNamespace(
         feed=lambda _prev, _cur: [event],
         reset=lambda: None,
@@ -1000,11 +1001,13 @@ def test_dry_run_does_not_mark_once_per_battle_event_delivered():
         reset=lambda: None,
         current_stress_reasons=lambda _now: frozenset(),
     )
-    plugin.dispatcher = types.SimpleNamespace(
-        push_event=lambda _event, *, dry_run: (
+    def push_event(selected: BattleEvent, *, dry_run: bool) -> str:
+        pushed.append((selected, dry_run))
+        return (
             "dry_run(event=low_fuel/enter/warning)" if dry_run else "pushed()"
         )
-    )
+
+    plugin.dispatcher = types.SimpleNamespace(push_event=push_event)
     plugin._record_blocked_free_text_sources = lambda _cur: None
     plugin._record_deferred_hud_notices = lambda _cur: None
     plugin._suppress_takeoff_grace = lambda candidates, _cur, _now: candidates
@@ -1015,7 +1018,23 @@ def test_dry_run_does_not_mark_once_per_battle_event_delivered():
     finally:
         module.time.time = original_time
 
+    assert pushed == [(event, True)]
     assert marked == []
+
+
+def test_enabling_real_output_rearms_uncommitted_once_per_battle_event():
+    plugin = _plugin_for_action_tests()
+    plugin.cfg = WtConfig(dry_run=True)
+    plugin._session_dry_run_override = None
+    rearmed: list[bool] = []
+    plugin.engine = types.SimpleNamespace(
+        rearm_uncommitted_once_per_battle=lambda: rearmed.append(True)
+    )
+
+    asyncio.run(plugin.set_dry_run(False))
+
+    assert plugin.cfg.dry_run is False
+    assert rearmed == [True]
 
 
 def test_failed_dispatch_restores_arbiter_and_retries_selected_edge():
