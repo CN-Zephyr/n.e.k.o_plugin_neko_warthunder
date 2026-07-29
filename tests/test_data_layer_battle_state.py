@@ -69,6 +69,16 @@ def test_replay_detection_still_catches_timeline_scrub():
     assert service._replay is True
 
 
+def test_replay_detection_catches_large_scrub_not_near_midnight():
+    module = _server_module()
+    service = _service(module)
+
+    service._detect_replay_locked(types.SimpleNamespace(game_time_sec=20 * 3600.0), 1000.0)
+    service._detect_replay_locked(types.SimpleNamespace(game_time_sec=1 * 3600.0), 1001.0)
+
+    assert service._replay is True
+
+
 def test_replay_detection_ignores_small_jitter():
     module = _server_module()
     service = _service(module)

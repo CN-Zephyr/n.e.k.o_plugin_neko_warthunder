@@ -8,7 +8,7 @@
 
 - 当前工作分支为 `agent/isolate-cross-domain-runtime-state`，基线提交 `34f94cc` 已包含新版概览/诊断面板和两步首次使用教程；当前工作区继续补齐了独立活动页与安全活动摘要。先前宿主集成 PR `Project-N-E-K-O/N.E.K.O#2371` 已合并，当前专属 `warthuder` 分支用于后续插件同步维护。
 - 面板维护已收口：安全暂停/自动保护与输出成功/失败判断统一，死样式和受控下拉框冗余属性已清理，设置弹窗中的重复“播报插话规则”已删除，概览底栏保留唯一常驻入口。
-- 正式 pytest 基线为 `575 passed`。`tests/run_logic_tests.py` 已支持当前简单 `pytest.mark.parametrize` 隔离用例，一键逻辑自检与 pytest 统一为 `575/575`。
+- 正式 pytest 基线为 `579 passed`。`tests/run_logic_tests.py` 已支持当前简单 `pytest.mark.parametrize` 隔离用例，一键逻辑自检与 pytest 统一为 `579/579`。
 - **T-Safe-Activity 已完成**：运行时新增默认可见、最多 20 条的安全活动摘要；面板新增活动页和结果筛选。该通道不包含 raw text，也不打开 debug timeline。
 - **R1 RC 稳定化已完成**：preflight/release-readiness 全部通过，独立源码与宿主面板副本一致。当前进入 R2 dry-run 真机证据补齐；未验证 V2/free-text 真实输出继续关闭。
 - 最新交接入口：`docs/handoff-20260727.md`（上一份 `docs/handoff-20260715.md` 仍然有效，新文件只记增量）。
@@ -47,7 +47,7 @@
 - T-Package-Artifact-Gate 分发包内容门禁已完成：`tools/package_artifact_gate.py` 验证包身份、运行必需文件、路径安全和开发文件排除；本轮据此发现并清除了误入包内的 `.ruff_cache`。
 - T-RC-Builder 原子 RC 构建入口已完成：`tools/build_release_candidate.py` 串联宿主官方 release check、分发包内容门禁、官方 payload verify 和隔离临时安装 smoke，全部通过后才发布最终文件；默认不覆盖已有包，也不写入真实插件目录。
 - T-Observe runtime decision timeline 已完成轻量实现：普通模式只保留最近摘要，debug 模式使用内存 ring buffer。
-- 最后一次完整 pytest 基线为 `575 passed`；逻辑自检为 `575/575 passed`。播报偏好、频率设置和安全活动中心已完成离线实现，数据层 P0、UI 隔离、package artifact gate 和统一 RC 构建演练已有通过记录；聚焦真机 dry-run 按当前决定延期。
+- 最后一次完整 pytest 基线为 `579 passed`；逻辑自检为 `579/579 passed`。播报偏好、频率设置和安全活动中心已完成离线实现，数据层 P0、UI 隔离、package artifact gate 和统一 RC 构建演练已有通过记录；聚焦真机 dry-run 按当前决定延期。
 - 播报偏好阶段已完成：设置页提供安静/标准/活跃三档非危急节奏，以及一般安全、战果、固定无线电、态势感知、开场收尾五类开关；可一键恢复标准频率和全部普通类别，且不会改动昵称、插话规则、`dry_run` 或播报启停状态；critical 安全和阵亡提醒不允许被偏好关闭。
 - 安全诊断摘要已完成：诊断页可复制版本化白名单摘要，只包含连接、模式、安全控制、播报偏好和最近决策/输出代码；不包含身份、聊天/HUD、目标、载具、URL/PID、异常原文或 prompt/payload 原文，概览主界面不变。
 - 离线 readiness 与真机监控工具链已补齐：`tools/sample_replay.py` 负责样本覆盖率与 `session_summary`，并能用 candidate/chosen/output 计数证明 `replay=true` 样本被静默，同时统计 V2 proximity/situation/ground-target 覆盖率、后方近距样本、`tailing_risk` 触发和 3000m 内任务目标点候选；`tools/offline_report.py` 负责安全 Markdown / JSON 汇报，并输出 Next test focus；`tools/live_test_plan.py` 负责把 P1/P2 待测项展开为下一轮真机 Operator quick checklist 和“操作 / 监控 / 通过 / 失败 / 数据层缺口”清单，包含 `fly_closer_to_ground_target_sample`；`sample_replay` / `offline_report` / `live_test_plan` 三个出口都会带上 T-Output 背压、T-Kill-Coalesce 多杀合并和 V2 proximity 后方样本复测项，`next_steps` 也会列出这些现场动作但状态仍按样本/数据缺口判定；`tools/live_monitor.py` 负责真机测试时安全汇总 health、context、telemetry ownership 计数、free-text dry_run-only 状态与逐源 blocked 摘要、replay 降级状态、T-Observe 摘要、`selected` / `dry_run_enabled` / `free_text_blocked` / `kill_coalesced` / `output_backpressure` / `event_expired` 等可行动原因与日志异常计数；`tools/preflight.py` 已把 runtime smoke 纳入门禁，dry-run 会先打印 Quick read，`--run` 通过/失败时会直接提示继续 dry_run 真机验证或停止排障。
@@ -186,6 +186,5 @@
 - 不要把自由文本过滤塞进 Detector / Scenario / Arbiter。
 - 不要复活旧的 `vehicle_valid` 作为 `you_died` 主路径。
 - 不要把 recovery 作为 v1 当前任务；它只保留测试方案和 TODO。
-- 不要沿用旧的 pre-T-Safety / pre-free-text-gate / pre-identity / pre-T-Output / pre-T-Kill-Coalesce / pre-L8 / pre-L9-takeoff-grace / pre-output-coalescing / pre-event-expiry / pre-T-UI2 / pre-deferred-hud-notice / pre-radio-altitude / pre-V2-proximity / pre-rc-docs-audit / pre-tailing-risk / pre-free-text-observe / pre-v2-evidence-refinement / pre-release-scope / pre-release-json-cleanliness / pre-v2-readiness / pre-final-smoke-packet / pre-release-defaults-gate / pre-v2-completion-gate / pre-free-text-activity / pre-critical-risk-kill-defer / pre-output-freshness-metadata / pre-output-freshness-gate / pre-host-contract-gate / pre-ownership-replay-gate / pre-final-smoke-evidence-gate / pre-host-callback-contract-reservation / pre-datamine-profile-batches / pre-vehicle-profile-id-audit / pre-domain-runtime-isolation / pre-UI-redesign / pre-package-artifact-gate / pre-rc-builder / pre-broadcast-preferences / pre-safe-activity 测试数量；当前最后一次完整 pytest 为 `575 passed`。
+- 不要沿用旧的 pre-T-Safety / pre-free-text-gate / pre-identity / pre-T-Output / pre-T-Kill-Coalesce / pre-L8 / pre-L9-takeoff-grace / pre-output-coalescing / pre-event-expiry / pre-T-UI2 / pre-deferred-hud-notice / pre-radio-altitude / pre-V2-proximity / pre-rc-docs-audit / pre-tailing-risk / pre-free-text-observe / pre-v2-evidence-refinement / pre-release-scope / pre-release-json-cleanliness / pre-v2-readiness / pre-final-smoke-packet / pre-release-defaults-gate / pre-v2-completion-gate / pre-free-text-activity / pre-critical-risk-kill-defer / pre-output-freshness-metadata / pre-output-freshness-gate / pre-host-contract-gate / pre-ownership-replay-gate / pre-final-smoke-evidence-gate / pre-host-callback-contract-reservation / pre-datamine-profile-batches / pre-vehicle-profile-id-audit / pre-domain-runtime-isolation / pre-UI-redesign / pre-package-artifact-gate / pre-rc-builder / pre-broadcast-preferences / pre-safe-activity 测试数量；当前最后一次完整 pytest 为 `579 passed`。
 - 不要在父仓库 `N.E.K.O` 里提交这个独立插件仓库。
-

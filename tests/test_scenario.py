@@ -230,3 +230,24 @@ def test_combat_stress_enters_on_owned_death_feed_entry():
     owned_death = _alive(combat={"feed": [{"id": 7, "is_kill": True, "is_my_death": True, "killer": "Bandit"}]})
     assert r.resolve(owned_death, 1008.0, 6) == C.COMBAT_STRESS
     assert r.current_stress_reasons(1008.0) == frozenset({"damage"})
+
+
+def test_combat_stress_enters_on_owned_nonfatal_damage_feed_entry():
+    r = ScenarioResolver()
+    r.resolve(_alive(), 1000.0, 6)
+    r.resolve(_alive(), 1007.0, 6)
+
+    owned_damage = _alive(
+        combat={
+            "feed": [
+                {
+                    "id": 8,
+                    "action_type": "severely_damaged",
+                    "is_kill": False,
+                    "involves_me": True,
+                }
+            ]
+        }
+    )
+    assert r.resolve(owned_damage, 1008.0, 6) == C.COMBAT_STRESS
+    assert r.current_stress_reasons(1008.0) == frozenset({"damage"})

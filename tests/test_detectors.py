@@ -1235,6 +1235,7 @@ def test_once_per_battle_condition_does_not_rearm_on_flicker():
     clear = C.BattleState()
 
     assert d.feed(prev, low) is not None                 # 首次报出
+    d.mark_delivered()
     assert d.feed(prev, clear) is None
     assert d.feed(prev, clear) is None                   # confirm_exit 满 → SPENT
     assert d.feed(prev, low) is None                     # 再次跌破阈值也不重报
@@ -1252,6 +1253,7 @@ def test_once_per_battle_rearms_after_engine_reset():
     clear = C.BattleState()
 
     assert d.feed(prev, low) is not None
+    d.mark_delivered()
     d.feed(prev, clear); d.feed(prev, clear)
     assert d.feed(prev, low) is None
 
@@ -1269,6 +1271,7 @@ def test_once_per_battle_condition_stays_spent_across_same_battle_respawn():
     low = C.BattleState(flags={"fuel_low": True})
 
     assert [event.event_id for event in engine.feed(prev, low)] == ["low_fuel"]
+    engine.mark_delivered("low_fuel")
 
     dead = C.BattleState(dead=True)
     assert engine.feed(low, dead) == []
@@ -1293,6 +1296,21 @@ def test_once_per_battle_still_allows_warning_to_critical_upgrade():
 
     upgraded = d.feed(prev, C.BattleState(flags={"fuel_critical": True}))
     assert upgraded is not None and upgraded.level == "critical"
+
+
+def test_once_per_battle_rearms_when_candidate_was_not_delivered():
+    d = ConditionDetector(
+        "low_fuel", [("fuel_low", "fuel_critical")],
+        confirm_enter=1, confirm_exit=2, once_per_battle=True,
+    )
+    prev = C.BattleState()
+    low = C.BattleState(flags={"fuel_low": True})
+    clear = C.BattleState()
+
+    assert d.feed(prev, low) is not None
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, clear) is None
+    assert d.feed(prev, low) is not None
 
 
 def test_condition_without_once_per_battle_still_rearms():
