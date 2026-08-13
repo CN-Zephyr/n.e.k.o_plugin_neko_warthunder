@@ -25,8 +25,44 @@ _pkg.__path__ = [str(_PLUGIN_DIR)]  # type: ignore[attr-defined]
 sys.modules["neko_warthunder"] = _pkg
 
 
+def _install_sdk_stubs() -> None:
+    """Prevent the host SDK from initializing user configuration in logic tests."""
+    plugin_pkg = types.ModuleType("plugin")
+    sdk_pkg = types.ModuleType("plugin.sdk")
+    sdk_plugin = types.ModuleType("plugin.sdk.plugin")
+
+    class NekoPluginBase:
+        def __init__(self, ctx):
+            self.ctx = ctx
+
+    def identity_decorator(*_args, **_kwargs):
+        def wrap(obj):
+            return obj
+
+        return wrap
+
+    sdk_plugin.NekoPluginBase = NekoPluginBase
+    sdk_plugin.neko_plugin = lambda cls: cls
+    sdk_plugin.plugin_entry = identity_decorator
+    sdk_plugin.lifecycle = identity_decorator
+    sdk_plugin.message = identity_decorator
+    sdk_plugin.ui = types.SimpleNamespace(context=identity_decorator, action=identity_decorator)
+    sdk_plugin.Ok = lambda value=None: value
+    sdk_plugin.Err = lambda value=None: value
+    sdk_plugin.SdkError = Exception
+    plugin_pkg.sdk = sdk_pkg
+    sdk_pkg.plugin = sdk_plugin
+    sys.modules["plugin"] = plugin_pkg
+    sys.modules["plugin.sdk"] = sdk_pkg
+    sys.modules["plugin.sdk.plugin"] = sdk_plugin
+
+
+_install_sdk_stubs()
+
+
 @pytest.fixture(autouse=True)
 def _restore_lightweight_plugin_package():
     """Keep tests that load the real plugin package isolated from later tests."""
     yield
     sys.modules["neko_warthunder"] = _pkg
+    _install_sdk_stubs()
