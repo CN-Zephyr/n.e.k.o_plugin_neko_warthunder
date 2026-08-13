@@ -6,31 +6,25 @@ does not persist output and its summaries intentionally avoid raw free text.
 
 from __future__ import annotations
 
+import argparse
 import gzip
 import json
 import pathlib
 import sys
-import types
-import argparse
 from collections import Counter
 from typing import Any, Iterable
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher  # noqa: E402
-from neko_warthunder.adapters.telemetry_client import parse_telemetry  # noqa: E402
-from neko_warthunder.adapters.event_labels import display_event_key  # noqa: E402
-from neko_warthunder.core.arbiter import Arbiter  # noqa: E402
-from neko_warthunder.core.contracts import BattleState, WtConfig  # noqa: E402
-from neko_warthunder.core.safety_guard import SafetyGuard  # noqa: E402
-from neko_warthunder.core.scenario import ScenarioResolver  # noqa: E402
-from neko_warthunder.detectors._base import DetectorEngine  # noqa: E402
-from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors  # noqa: E402
-from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detectors  # noqa: E402
+from _bootstrap import PLUGIN_ROOT as _BASE
+from neko_warthunder.adapters.event_labels import display_event_key
+from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
+from neko_warthunder.adapters.telemetry_client import parse_telemetry
+from neko_warthunder.core.arbiter import Arbiter
+from neko_warthunder.core.contracts import BattleState, WtConfig
+from neko_warthunder.core.safety_guard import SafetyGuard
+from neko_warthunder.core.scenario import ScenarioResolver
+from neko_warthunder.detectors._base import DetectorEngine
+from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
+from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detectors
 
 
 def discover_sample_files(root: str | pathlib.Path) -> list[pathlib.Path]:

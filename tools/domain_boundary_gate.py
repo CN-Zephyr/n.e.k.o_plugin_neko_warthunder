@@ -8,21 +8,11 @@ no-host, and does not start War Thunder or the data-layer subprocess.
 from __future__ import annotations
 
 import json
-import pathlib
-import sys
-import types
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.core.contracts import BattleState  # noqa: E402
-from neko_warthunder.detectors._base import DetectorEngine  # noqa: E402
-from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors  # noqa: E402
-
+from neko_warthunder.core.contracts import BattleState
+from neko_warthunder.detectors._base import DetectorEngine
+from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 
 AIR_ONLY_FLAGS = {
     "stall_critical": True,

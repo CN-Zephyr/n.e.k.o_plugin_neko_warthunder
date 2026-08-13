@@ -11,12 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterable
-
 
 DEFAULT_REF = "master"
 RAW_ROOT = "https://raw.githubusercontent.com/gszabi99/War-Thunder-Datamine"

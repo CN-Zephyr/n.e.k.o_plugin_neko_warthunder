@@ -24,6 +24,7 @@ from .proximity import ProximityDetector
 from .radio import RadioCommandDetector
 from .situation import AirSituationDetector, GroundTargetDetector
 
+
 def _alive(s: BattleState) -> bool:
     return s.is_alive()
 

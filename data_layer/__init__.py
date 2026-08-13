@@ -1,1 +1,1 @@
-"""Vendored War Thunder telemetry data layer."""
+"""War Thunder telemetry data layer."""

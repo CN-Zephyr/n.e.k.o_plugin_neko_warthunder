@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
-
 _OUTPUT_STAGES = {
     "dispatcher_dry_run",
     "dispatcher_pushed",

@@ -11,25 +11,26 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from plugin.sdk.plugin import (
+    Err,
     NekoPluginBase,
-    neko_plugin,
-    plugin_entry,
+    Ok,
+    SdkError,
     lifecycle,
     message,
+    neko_plugin,
+    plugin_entry,
     ui,
-    Ok,
-    Err,
-    SdkError,
 )
 
 from .adapters.data_layer_process import DataLayerProcessManager
-from .adapters.identity_client import identity_summary_from_combat, set_identity as request_set_identity
+from .adapters.identity_client import identity_summary_from_combat
+from .adapters.identity_client import set_identity as request_set_identity
 from .adapters.neko_dispatcher import (
     COMMITTED_RESULT_PREFIXES,
     NekoDispatcher,

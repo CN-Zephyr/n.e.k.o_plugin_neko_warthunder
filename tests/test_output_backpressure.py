@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher, URGENT_REPLACE_EVENTS
+from neko_warthunder.adapters.neko_dispatcher import URGENT_REPLACE_EVENTS, NekoDispatcher
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.core.contracts import CRITICAL_EVENT_IDS, BattleEvent, WtConfig
 

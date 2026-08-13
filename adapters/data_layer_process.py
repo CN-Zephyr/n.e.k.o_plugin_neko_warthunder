@@ -17,7 +17,6 @@ from typing import IO, Any, Callable
 
 from ..core.contracts import WtConfig
 
-
 HealthCheck = Callable[[str, float], bool]
 PopenFactory = Callable[..., Any]
 SleepFn = Callable[[float], None]
@@ -58,7 +57,7 @@ def _bind_host_from_url(base_url: str) -> str:
 def _looks_like_python(executable: str | None) -> bool:
     if not executable:
         return False
-    name = Path(executable).name.lower()
+    name = Path(str(executable).replace("\\", "/")).name.lower()
     if not (name.startswith("python") or name in {"py.exe", "py"}):
         return False
     normalized = str(executable).replace("/", "\\").lower()

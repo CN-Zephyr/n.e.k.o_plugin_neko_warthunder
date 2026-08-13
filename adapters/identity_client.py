@@ -14,7 +14,6 @@ from typing import Any, Callable
 
 from .text_safety import sanitize_display_name
 
-
 IdentityFetcher = Callable[[str, float], dict[str, Any] | None]
 ACTION_HEADER = "X-Neko-Warthunder-Action"
 

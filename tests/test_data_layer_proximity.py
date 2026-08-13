@@ -2,17 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
-from pathlib import Path
 
-
-DATA_PROCESS = Path(__file__).resolve().parents[1] / "data_layer" / "data_process"
-if str(DATA_PROCESS) not in sys.path:
-    sys.path.insert(0, str(DATA_PROCESS))
-
-from wt_server import TelemetryService  # noqa: E402
-from wt_telemetry import (  # noqa: E402
+from wt_server import TelemetryService
+from wt_telemetry import (
     ConnectionState,
     HudMessage,
     Indicators,

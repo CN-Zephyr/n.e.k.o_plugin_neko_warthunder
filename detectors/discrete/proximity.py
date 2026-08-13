@@ -11,15 +11,15 @@ from typing import Any
 
 from ...core.contracts import BattleEvent, BattleState
 from .._base import DiscreteDetector
-from ._common import as_float as _as_float
-from ._common import as_int as _as_int
-from ._common import is_rear as _is_behind
-from ._common import safe_short_text as _safe_short_text
 from ._common import (
     PROXIMITY_TAIL_CONFIRM_EVENTS,
     PROXIMITY_TAIL_DISTANCE_M,
     PROXIMITY_TAIL_WINDOW_SECONDS,
 )
+from ._common import as_float as _as_float
+from ._common import as_int as _as_int
+from ._common import is_rear as _is_behind
+from ._common import safe_short_text as _safe_short_text
 
 
 class ProximityDetector(DiscreteDetector):

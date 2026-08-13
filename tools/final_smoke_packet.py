@@ -10,22 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
-import types
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.tools.live_test_plan import build_compact_plan  # noqa: E402
-from neko_warthunder.tools.rc_gap_summary import build_gap_summary  # noqa: E402
-from neko_warthunder.tools.release_readiness import build_handoff, build_release_scope  # noqa: E402
-from neko_warthunder.tools.v2_release_matrix import build_v2_release_matrix  # noqa: E402
-from neko_warthunder.tools.v2_readiness import build_v2_readiness  # noqa: E402
-
+from _bootstrap import PLUGIN_ROOT as _BASE
+from neko_warthunder.tools.live_test_plan import build_compact_plan
+from neko_warthunder.tools.rc_gap_summary import build_gap_summary
+from neko_warthunder.tools.release_readiness import build_handoff, build_release_scope
+from neko_warthunder.tools.v2_readiness import build_v2_readiness
+from neko_warthunder.tools.v2_release_matrix import build_v2_release_matrix
 
 RUNTIME_FOCUS_CHECKS: tuple[dict[str, Any], ...] = (
     {

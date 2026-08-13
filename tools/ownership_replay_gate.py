@@ -12,17 +12,14 @@ import pathlib as _pathlib
 import sys as _sys
 
 _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
-from _common import ensure_package, run_gate_cli  # noqa: E402
-
 from typing import Any
 
-_BASE = ensure_package(__file__)
-
-from neko_warthunder.adapters.telemetry_client import parse_telemetry  # noqa: E402
-from neko_warthunder.core.contracts import BattleState  # noqa: E402
-from neko_warthunder.detectors._base import DetectorEngine  # noqa: E402
-from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detectors  # noqa: E402
-from neko_warthunder.tools.replay_8112_server import ReplayState  # noqa: E402
+from _common import run_gate_cli
+from neko_warthunder.adapters.telemetry_client import parse_telemetry
+from neko_warthunder.core.contracts import BattleState
+from neko_warthunder.detectors._base import DetectorEngine
+from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detectors
+from neko_warthunder.tools.replay_8112_server import ReplayState
 
 
 def _frame() -> dict[str, Any]:

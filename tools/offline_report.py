@@ -5,18 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
-import types
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.tools.sample_replay import replay_sample_root  # noqa: E402
-from neko_warthunder.tools.live_test_plan import build_quick_checklist, build_step_from_item  # noqa: E402
+from _bootstrap import PLUGIN_ROOT as _BASE
+from neko_warthunder.tools.live_test_plan import build_quick_checklist, build_step_from_item
+from neko_warthunder.tools.sample_replay import replay_sample_root
 
 
 def build_markdown_report(root: str | pathlib.Path, *, player_name: str = "tl0sr2") -> str:

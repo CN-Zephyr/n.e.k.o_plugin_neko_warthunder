@@ -1,1 +1,1 @@
-"""Runtime modules for the vendored War Thunder telemetry service."""
+"""Importable War Thunder telemetry service for source and frozen runtimes."""

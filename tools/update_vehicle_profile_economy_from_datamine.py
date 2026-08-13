@@ -23,7 +23,6 @@ import pathlib
 import re
 from typing import Any
 
-
 BASE = pathlib.Path(__file__).resolve().parent.parent
 DATA_PROCESS = BASE / "data_layer" / "data_process"
 DEFAULT_PROFILES = DATA_PROCESS / "vehicle_profiles.json"

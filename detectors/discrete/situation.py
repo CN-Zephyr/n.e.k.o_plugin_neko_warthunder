@@ -12,15 +12,15 @@ from typing import Any
 
 from ...core.contracts import BattleEvent, BattleState
 from .._base import DiscreteDetector
-from ._common import as_float as _as_float
-from ._common import as_int as _as_int
-from ._common import is_rear as _is_rear
-from ._common import safe_short_text as _safe_short_text
 from ._common import (
     SITUATION_TAIL_CONFIRM_FRAMES,
     SITUATION_TAIL_DISTANCE_M,
     SITUATION_TAIL_WINDOW_SECONDS,
 )
+from ._common import as_float as _as_float
+from ._common import as_int as _as_int
+from ._common import is_rear as _is_rear
+from ._common import safe_short_text as _safe_short_text
 
 _DEFAULT_TARGET_DISTANCE_M = 3000.0
 _DEFAULT_AIR_THREAT_DISTANCE_M = 5000.0

@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
 from neko_warthunder.detectors._base import ConditionDetector, DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
-from neko_warthunder.detectors.discrete.lifecycle import BattleEndDetector, DeathDetector, KillDetector, SpawnDetector
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
+from neko_warthunder.detectors.discrete.lifecycle import BattleEndDetector, DeathDetector, KillDetector, SpawnDetector
 from neko_warthunder.detectors.discrete.notices import HudNoticeDetector
 from neko_warthunder.detectors.discrete.proximity import ProximityDetector
 from neko_warthunder.detectors.discrete.radio import RadioCommandDetector, parse_radio_command
@@ -1254,7 +1253,8 @@ def test_once_per_battle_rearms_after_engine_reset():
 
     assert d.feed(prev, low) is not None
     d.mark_delivered()
-    d.feed(prev, clear); d.feed(prev, clear)
+    d.feed(prev, clear)
+    d.feed(prev, clear)
     assert d.feed(prev, low) is None
 
     d.reset()
@@ -1344,7 +1344,8 @@ def test_condition_without_once_per_battle_still_rearms():
     off = C.BattleState()
 
     assert d.feed(prev, on) is not None
-    d.feed(prev, off); d.feed(prev, off)
+    d.feed(prev, off)
+    d.feed(prev, off)
     assert d.feed(prev, on) is not None
 
 

@@ -13,7 +13,6 @@ import tomllib
 import zipfile
 from typing import Any
 
-
 REQUIRED_PLUGIN_FILES = (
     "plugin.toml",
     "pyproject.toml",

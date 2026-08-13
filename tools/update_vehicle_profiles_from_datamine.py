@@ -15,19 +15,11 @@ import json
 import os
 import pathlib
 import re
-import sys
 from typing import Any, Iterable
 
-
-BASE = pathlib.Path(__file__).resolve().parent.parent
-DATA_PROCESS = BASE / "data_layer" / "data_process"
-if str(DATA_PROCESS) not in sys.path:
-    sys.path.insert(0, str(DATA_PROCESS))
-if str(BASE / "tools") not in sys.path:
-    sys.path.insert(0, str(BASE / "tools"))
-
-import datamine_profile_candidates as candidates  # noqa: E402
-
+import datamine_profile_candidates as candidates
+from _bootstrap import DATA_PROCESS_ROOT as DATA_PROCESS
+from _bootstrap import PLUGIN_ROOT as BASE
 
 DEFAULT_PROFILES = DATA_PROCESS / "vehicle_profiles.json"
 DEFAULT_REPORT = BASE / "local_test_logs" / "vehicle_profiles_datamine_update.json"

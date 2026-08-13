@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from neko_warthunder.adapters import identity_client as module
-
 from neko_warthunder.adapters.identity_client import (
     build_identity_url,
     identity_summary_from_combat,

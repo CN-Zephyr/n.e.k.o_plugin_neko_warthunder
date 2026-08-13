@@ -11,13 +11,10 @@ import pathlib as _pathlib
 import sys as _sys
 
 _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parent))
-from _common import ensure_package, run_gate_cli  # noqa: E402
-
 from typing import Any
 
-_BASE = ensure_package(__file__)
-
-from neko_warthunder.core.contracts import WtConfig  # noqa: E402
+from _common import run_gate_cli
+from neko_warthunder.core.contracts import WtConfig
 
 
 def run_gate() -> dict[str, Any]:

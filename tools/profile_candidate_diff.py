@@ -10,24 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
-import types
 from dataclasses import dataclass
 from typing import Any
 
-
-BASE = pathlib.Path(__file__).resolve().parent.parent
-DATA_PROCESS = BASE / "data_layer" / "data_process"
-if str(DATA_PROCESS) not in sys.path:
-    sys.path.insert(0, str(DATA_PROCESS))
-if "neko_warthunder" not in sys.modules:
-    pkg = types.ModuleType("neko_warthunder")
-    pkg.__path__ = [str(BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = pkg
-
-import datamine_profile_candidates as candidates_tool  # noqa: E402
-from wt_processor import TelemetryProcessor, _merge_profile  # noqa: E402
-
+import datamine_profile_candidates as candidates_tool
+from _bootstrap import DATA_PROCESS_ROOT as DATA_PROCESS
+from _bootstrap import PLUGIN_ROOT as BASE
+from wt_processor import TelemetryProcessor, _merge_profile
 
 DEFAULT_PROFILES = DATA_PROCESS / "vehicle_profiles.json"
 DEFAULT_CANDIDATES = BASE / "local_test_logs" / "datamine_profile_candidates.json"

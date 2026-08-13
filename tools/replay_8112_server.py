@@ -25,7 +25,6 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-
 JsonDict = dict[str, Any]
 Clock = Callable[[], float]
 

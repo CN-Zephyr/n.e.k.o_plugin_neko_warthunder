@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 _EVENT_LABELS: dict[str, str] = {
     "stall_risk": "失速风险",
     "high_aoa": "攻角过大",

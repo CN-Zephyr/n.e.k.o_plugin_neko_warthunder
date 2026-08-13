@@ -11,17 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
-import types
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.tools.final_smoke_packet import RUNTIME_FOCUS_CHECKS  # noqa: E402
+from neko_warthunder.tools.final_smoke_packet import RUNTIME_FOCUS_CHECKS
 
 _BATTLE_COALESCE_KEY = "neko_warthunder:battle_event"
 _SHORT_TTS_CONTRACT = "short_tts_line"

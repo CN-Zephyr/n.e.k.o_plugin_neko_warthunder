@@ -123,9 +123,10 @@ def test_offline_report_cli_creates_output_parent_directory():
 
 
 def test_offline_report_cli_can_print_compact_json_without_raw_text():
-    from neko_warthunder.tools import offline_report
     import contextlib
     import io
+
+    from neko_warthunder.tools import offline_report
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

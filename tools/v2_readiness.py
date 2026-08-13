@@ -10,19 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
-import sys
-import types
 from typing import Any
 
-_BASE = pathlib.Path(__file__).resolve().parent.parent
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
-    sys.modules["neko_warthunder"] = _pkg
-
-from neko_warthunder.tools.proximity_gate import run_gate as run_proximity_gate  # noqa: E402
-from neko_warthunder.tools.rc_gap_summary import build_gap_summary  # noqa: E402
-
+from neko_warthunder.tools.proximity_gate import run_gate as run_proximity_gate
+from neko_warthunder.tools.rc_gap_summary import build_gap_summary
 
 V2_EVENTS = [
     "enemy_nearby",

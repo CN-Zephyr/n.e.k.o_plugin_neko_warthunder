@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-import importlib.util
 import asyncio
 import contextlib
+import importlib.util
 import inspect
 import pathlib
 import sys
@@ -19,6 +19,12 @@ import types
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent
 _PLUGIN_DIR = _TESTS_DIR.parent
+_TOOLS_DIR = _PLUGIN_DIR / "tools"
+_DATA_PROCESS_DIR = _PLUGIN_DIR / "data_layer" / "data_process"
+
+for _path in (_TOOLS_DIR, _DATA_PROCESS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 if "neko_warthunder" not in sys.modules:
     _pkg = types.ModuleType("neko_warthunder")
