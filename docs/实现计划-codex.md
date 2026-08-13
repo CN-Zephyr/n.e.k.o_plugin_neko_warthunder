@@ -65,7 +65,7 @@
 ## 当前边界
 
 - 插件与数据层唯一数据边界是 HTTP `:8112`，主入口是 `/api/telemetry`；L8 只负责可选启动/关闭自己拉起的 vendored 数据层进程。
-- 运行时不把 `data_layer/` 当 Python 包 import；插件主链路与数据层唯一运行数据边界是 HTTP :8112。vendored `data_layer/data process/` 源码与 profile JSON 可以作为显式数据层合同/profile 维护项更新，后续仍以整包合并或明确的数据层维护任务为主。
+- 插件主链路与数据层的运行数据边界仍是 HTTP :8112；宿主内置启动仅通过 `data_layer.data_process` 包入口加载服务。vendored 源码与 profile JSON 仍按显式数据层维护任务更新。
 - 输出只走 `adapters/neko_dispatcher.py`。
 - dry_run 默认开启；真机确认前不要关闭。
 - Detector / Scenario / Arbiter 只处理事件语义，不承担自由文本过滤职责。
@@ -182,7 +182,7 @@
 
 ## 已知坑 / 不要回退
 
-- 不要把 `data_layer/` 当 Python 包 import；`data process` 目录名带空格。
+- `data_layer/data_process` 是可编译的 Python 包入口，便于无外置 Python 的桌面打包运行；业务主链路仍不得绕过 HTTP :8112 直接耦合其内部状态。
 - 不要把自由文本过滤塞进 Detector / Scenario / Arbiter。
 - 不要复活旧的 `vehicle_valid` 作为 `you_died` 主路径。
 - 不要把 recovery 作为 v1 当前任务；它只保留测试方案和 TODO。

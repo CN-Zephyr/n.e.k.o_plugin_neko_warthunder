@@ -1166,6 +1166,39 @@ def test_set_identity_persists_player_name_to_runtime_state(tmp_path):
     assert plugin.state.combat["player_name"] == "CN-Zephyr"
 
 
+def test_runtime_state_migrates_to_external_data_without_touching_legacy(tmp_path):
+    plugin = _plugin_for_action_tests()
+    legacy = tmp_path / "plugin" / ".runtime_state.json"
+    primary = tmp_path / "storage" / "data" / ".runtime_state.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"player_name": "legacy"}', encoding="utf-8")
+    plugin._legacy_runtime_state_path = legacy
+    plugin._runtime_state_path = primary
+
+    plugin._save_runtime_state({"broadcast_frequency": "normal"})
+
+    assert json.loads(primary.read_text(encoding="utf-8")) == {
+        "broadcast_frequency": "normal",
+        "player_name": "legacy",
+    }
+    assert legacy.read_text(encoding="utf-8") == '{"player_name": "legacy"}'
+
+
+def test_runtime_state_uses_new_sdk_data_path_when_available(tmp_path):
+    plugin = _plugin_for_action_tests()
+    plugin._legacy_runtime_state_path = tmp_path / "plugin" / ".runtime_state.json"
+    plugin.data_path = lambda *parts: tmp_path / "storage" / "data" / pathlib.Path(*parts)
+
+    assert plugin._resolve_runtime_state_path() == tmp_path / "storage" / "data" / ".runtime_state.json"
+
+
+def test_startup_log_error_code_excludes_runner_paths():
+    Plugin = _runtime_plugin_class()
+    raw = r"all_data_layer_runners_failed: C:\Users\tester\python.exe: FileNotFoundError"
+
+    assert Plugin._diagnostic_error_code(raw) == "all_data_layer_runners_failed"
+
+
 def test_dashboard_identity_uses_saved_player_name_before_combat_frame():
     plugin = _plugin_for_action_tests()
     plugin.cfg = WtConfig(player_name="CN-Zephyr")

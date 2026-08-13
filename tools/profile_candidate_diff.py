@@ -17,7 +17,7 @@ from typing import Any
 
 
 BASE = pathlib.Path(__file__).resolve().parent.parent
-DATA_PROCESS = BASE / "data_layer" / "data process"
+DATA_PROCESS = BASE / "data_layer" / "data_process"
 if str(DATA_PROCESS) not in sys.path:
     sys.path.insert(0, str(DATA_PROCESS))
 if "neko_warthunder" not in sys.modules:

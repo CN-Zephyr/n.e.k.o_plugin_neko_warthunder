@@ -14,7 +14,7 @@ from typing import Any
 
 
 BASE = pathlib.Path(__file__).resolve().parent.parent
-DATA_PROCESS = BASE / "data_layer" / "data process"
+DATA_PROCESS = BASE / "data_layer" / "data_process"
 DEFAULT_PROFILES = DATA_PROCESS / "vehicle_profiles.json"
 DEFAULT_REPORT = BASE / "local_test_logs" / "vehicle_family_coverage.json"
 

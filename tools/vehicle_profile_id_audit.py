@@ -15,7 +15,7 @@ from typing import Any
 
 
 BASE = pathlib.Path(__file__).resolve().parent.parent
-DATA_PROCESS = BASE / "data_layer" / "data process"
+DATA_PROCESS = BASE / "data_layer" / "data_process"
 DEFAULT_PROFILES = DATA_PROCESS / "vehicle_profiles.json"
 DEFAULT_VETTED_IDS = DATA_PROCESS / "vehicle_profile_vetted_ids.json"
 DEFAULT_REVIEWED_ALIASES = DATA_PROCESS / "vehicle_profile_identity_aliases.json"

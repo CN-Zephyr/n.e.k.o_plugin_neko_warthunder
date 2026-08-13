@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _load_recorder_module():
-    data_process = Path(__file__).resolve().parents[1] / "data_layer" / "data process"
+    data_process = Path(__file__).resolve().parents[1] / "data_layer" / "data_process"
     spec = importlib.util.spec_from_file_location("wt_recorder_test_module", data_process / "wt_recorder.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

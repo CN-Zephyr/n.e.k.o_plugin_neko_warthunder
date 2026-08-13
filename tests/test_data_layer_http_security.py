@@ -1,30 +1,14 @@
 from __future__ import annotations
 
 import http.client
-import importlib.util
+import importlib
 import json
-import pathlib
-import sys
 import threading
 from contextlib import contextmanager
 
 
 def _server_module():
-    module_name = "neko_warthunder.__wt_server_security_test__"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    data_dir = pathlib.Path(__file__).resolve().parent.parent / "data_layer" / "data process"
-    spec = importlib.util.spec_from_file_location(module_name, data_dir / "wt_server.py")
-    assert spec and spec.loader
-    old_path = list(sys.path)
-    sys.path.insert(0, str(data_dir))
-    try:
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = old_path
-    return module
+    return importlib.import_module("neko_warthunder.data_layer.data_process.wt_server")
 
 
 class _Recorder:

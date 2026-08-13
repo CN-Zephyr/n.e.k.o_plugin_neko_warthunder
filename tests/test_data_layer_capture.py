@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def _load_capture_module():
-    data_process = Path(__file__).resolve().parents[1] / "data_layer" / "data process"
+    data_process = Path(__file__).resolve().parents[1] / "data_layer" / "data_process"
     spec = importlib.util.spec_from_file_location(
         "wt_capture_test_module",
         data_process / "wt_capture.py",

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import pathlib
-import sys
 import threading
 import time
 import types
@@ -13,21 +12,7 @@ import pytest
 
 
 def _server_module():
-    module_name = "neko_warthunder.__wt_server_battle_state_test__"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    data_dir = pathlib.Path(__file__).resolve().parent.parent / "data_layer" / "data process"
-    spec = importlib.util.spec_from_file_location(module_name, data_dir / "wt_server.py")
-    assert spec and spec.loader
-    old_path = list(sys.path)
-    sys.path.insert(0, str(data_dir))
-    try:
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-    finally:
-        sys.path[:] = old_path
-    return module
+    return importlib.import_module("neko_warthunder.data_layer.data_process.wt_server")
 
 
 def _service(module):
@@ -131,7 +116,7 @@ def test_suppressed_alerts_also_reset_derived_level():
     module = _server_module()
     source = (
         pathlib.Path(__file__).resolve().parent.parent
-        / "data_layer" / "data process" / "wt_server.py"
+        / "data_layer" / "data_process" / "wt_server.py"
     ).read_text(encoding="utf-8")
 
     assert '"alerts": [], "flags": {}, "level": "info"' in source
@@ -147,7 +132,7 @@ def test_cold_start_drain_failure_does_not_keep_zero_recovery_cursor():
     """
     source = (
         pathlib.Path(__file__).resolve().parent.parent
-        / "data_layer" / "data process" / "wt_server.py"
+        / "data_layer" / "data_process" / "wt_server.py"
     ).read_text(encoding="utf-8")
 
     assert "if last_evt or last_dmg:" in source

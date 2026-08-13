@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 
-DATA_PROCESS = Path(__file__).resolve().parents[1] / "data_layer" / "data process"
+DATA_PROCESS = Path(__file__).resolve().parents[1] / "data_layer" / "data_process"
 if str(DATA_PROCESS) not in sys.path:
     sys.path.insert(0, str(DATA_PROCESS))
 
@@ -1241,7 +1241,7 @@ def test_proximity_thresholds_use_public_resolver_not_private_symbols():
     processor.profiles = profiles
     assert resolve_proximity_thresholds(profiles, "air", "f-4f_kws_lv", processor.resolve_profile) == (5000, None)
 
-    data_dir = pathlib.Path(__file__).resolve().parent.parent / "data_layer" / "data process"
+    data_dir = pathlib.Path(__file__).resolve().parent.parent / "data_layer" / "data_process"
     prox_src = (data_dir / "wt_proximity.py").read_text(encoding="utf-8")
     server_src = (data_dir / "wt_server.py").read_text(encoding="utf-8")
     assert "_merge_profile" not in prox_src

@@ -45,7 +45,7 @@ class ExitedProcess:
 def _fake_plugin_root() -> TemporaryDirectory[str]:
     temp = TemporaryDirectory()
     root = Path(temp.name)
-    data_process = root / "data_layer" / "data process"
+    data_process = root / "data_layer" / "data_process"
     data_process.mkdir(parents=True)
     (data_process / "wt_server.py").write_text("# fake server\n", encoding="utf-8")
     return temp
@@ -153,6 +153,88 @@ def test_invalid_port_does_not_blacklist_python_runners():
     assert status["python_cmd"] == ""
 
 
+def test_windows_store_python_aliases_are_not_runtime_candidates():
+    python_alias = r"C:\Users\tester\AppData\Local\Microsoft\WindowsApps\python.exe"
+    py_alias = r"C:\Users\tester\AppData\Local\Microsoft\WindowsApps\py.exe"
+    assert module._looks_like_python(python_alias) is False
+
+    original_executable = module.sys.executable
+    original_base_executable = getattr(module.sys, "_base_executable", None)
+    original_python_env = module.os.environ.pop("PYTHON", None)
+    original_which = module.shutil.which
+    try:
+        module.sys.executable = "projectneko_server.exe"
+        module.sys._base_executable = ""
+        module.shutil.which = lambda name: py_alias if name == "py" else None
+        assert module._python_command_prefixes() == []
+    finally:
+        module.sys.executable = original_executable
+        module.sys._base_executable = original_base_executable
+        module.shutil.which = original_which
+        if original_python_env is not None:
+            module.os.environ["PYTHON"] = original_python_env
+
+
+def test_base_python_precedes_uv_venv_launcher():
+    base = r"C:\Python311\python.exe"
+    launcher = r"C:\project\.venv\Scripts\python.exe"
+    original_executable = module.sys.executable
+    original_base_executable = getattr(module.sys, "_base_executable", None)
+    original_python_env = module.os.environ.pop("PYTHON", None)
+    original_which = module.shutil.which
+    try:
+        module.sys._base_executable = base
+        module.sys.executable = launcher
+        module.shutil.which = lambda _name: None
+
+        assert module._python_command_prefixes() == [[base], [launcher]]
+    finally:
+        module.sys.executable = original_executable
+        module.sys._base_executable = original_base_executable
+        module.shutil.which = original_which
+        if original_python_env is not None:
+            module.os.environ["PYTHON"] = original_python_env
+
+
+def test_packaged_runtime_uses_embedded_data_layer_without_system_python(tmp_path):
+    data_dir = tmp_path / "data_layer" / "data_process"
+    data_dir.mkdir(parents=True)
+    (data_dir / "wt_server.py").write_text("", encoding="utf-8")
+    embedded_process = FakeProcess()
+    seen: dict[str, object] = {}
+
+    def fake_spawn(data_process_dir: Path, *, host: str, port: int):
+        seen.update(path=data_process_dir, host=host, port=port)
+        return embedded_process
+
+    original_is_packaged = module._is_packaged_runtime
+    original_prefixes = module._python_command_prefixes
+    original_spawn_embedded = module._spawn_embedded_data_layer
+    try:
+        module._is_packaged_runtime = lambda: True
+        module._python_command_prefixes = lambda: (_ for _ in ()).throw(
+            AssertionError("packaged runtime must not inspect system Python")
+        )
+        module._spawn_embedded_data_layer = fake_spawn
+        manager = DataLayerProcessManager(WtConfig(), plugin_root=tmp_path)
+        process = manager._spawn()
+    finally:
+        module._is_packaged_runtime = original_is_packaged
+        module._python_command_prefixes = original_prefixes
+        module._spawn_embedded_data_layer = original_spawn_embedded
+
+    assert process is embedded_process
+    assert manager._python_cmd == ["embedded"]
+    assert seen == {"path": data_dir, "host": "127.0.0.1", "port": 8112}
+
+
+def test_embedded_loader_imports_packaged_data_layer_module():
+    wt_server = module._load_wt_server_module()
+
+    assert wt_server.__name__.endswith("data_layer.data_process.wt_server")
+    assert callable(wt_server.create_http_server)
+
+
 def test_pre_health_python_failure_tries_the_next_candidate_in_same_start():
     cfg = WtConfig(data_layer_auto_start=True, data_layer_startup_timeout_seconds=0.2)
     checks = iter([False, False, True])
@@ -251,22 +333,27 @@ def test_exited_managed_process_preserves_failure_when_auto_start_is_disabled():
 
 def test_exited_data_layer_reports_stderr_tail():
     cfg = WtConfig(data_layer_auto_start=True, data_layer_startup_timeout_seconds=3)
+    original_spawn_embedded = module._spawn_embedded_data_layer
+    module._spawn_embedded_data_layer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("embedded unavailable")
+    )
+    try:
+        with _fake_plugin_root() as root:
+            def fake_popen(_args, **kwargs):
+                kwargs["stderr"].write("Traceback: port 8112 already in use\n")
+                kwargs["stderr"].flush()
+                return ExitedProcess(1)
 
-    with _fake_plugin_root() as root:
-        def fake_popen(_args, **kwargs):
-            kwargs["stderr"].write("Traceback: port 8112 already in use\n")
-            kwargs["stderr"].flush()
-            return ExitedProcess(1)
-
-        manager = DataLayerProcessManager(
-            cfg,
-            plugin_root=Path(root),
-            health_check=lambda _url, _timeout: False,
-            popen_factory=fake_popen,
-            sleep=lambda _seconds: None,
-        )
-
-        status = manager.start_if_needed()
+            manager = DataLayerProcessManager(
+                cfg,
+                plugin_root=Path(root),
+                health_check=lambda _url, _timeout: False,
+                popen_factory=fake_popen,
+                sleep=lambda _seconds: None,
+            )
+            status = manager.start_if_needed()
+    finally:
+        module._spawn_embedded_data_layer = original_spawn_embedded
 
     assert status["mode"] == "failed"
     assert status["started_by_plugin"] is False
@@ -307,7 +394,7 @@ def test_missing_python_runner_uses_embedded_fallback():
     assert status["mode"] == "managed"
     assert status["python_cmd"] == "embedded"
     assert embedded_calls
-    assert embedded_calls[0][0].name == "data process"
+    assert embedded_calls[0][0].name == "data_process"
     assert embedded_calls[0][1:] == ("127.0.0.1", 8112)
     assert proc.terminated is True
     assert manager._stdout_handle is None
@@ -316,16 +403,21 @@ def test_missing_python_runner_uses_embedded_fallback():
 
 def test_spawn_failure_closes_log_handles():
     cfg = WtConfig(data_layer_auto_start=True)
-
-    with _fake_plugin_root() as root:
-        manager = DataLayerProcessManager(
-            cfg,
-            plugin_root=Path(root),
-            health_check=lambda _url, _timeout: False,
-            popen_factory=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("spawn failed")),
-        )
-
-        status = manager.start_if_needed()
+    original_spawn_embedded = module._spawn_embedded_data_layer
+    module._spawn_embedded_data_layer = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("embedded unavailable")
+    )
+    try:
+        with _fake_plugin_root() as root:
+            manager = DataLayerProcessManager(
+                cfg,
+                plugin_root=Path(root),
+                health_check=lambda _url, _timeout: False,
+                popen_factory=lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("spawn failed")),
+            )
+            status = manager.start_if_needed()
+    finally:
+        module._spawn_embedded_data_layer = original_spawn_embedded
 
     assert status["mode"] == "failed"
     assert "spawn failed" in status["last_error"]

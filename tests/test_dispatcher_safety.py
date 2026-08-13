@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
+import pytest
+
+from neko_warthunder.adapters.neko_dispatcher import (
+    NekoDispatcher,
+    PushMessageSubmissionRejected,
+    ensure_push_message_submitted,
+)
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.core.contracts import BattleEvent, WtConfig
 from neko_warthunder.core.instructions import WT_CONTEXT_INSTRUCTIONS
@@ -45,6 +51,32 @@ def test_post_acceptance_observer_failure_does_not_retry_delivered_event():
     assert result.startswith("pushed(")
     assert len(plugin.calls) == 1
     assert warnings == ["post-acceptance output bookkeeping failed: RuntimeError"]
+
+
+def test_explicit_push_rejection_is_not_committed():
+    plugin = FakePlugin()
+    plugin.cfg.global_rate_limit_seconds = 0
+    plugin.cfg.output_backpressure_seconds = 0
+    plugin.cfg.dialogue_intrusion_mode = "allow_interrupt"
+    plugin.push_message = lambda **_kwargs: {"submitted": False, "reason": "backpressure"}
+    observed: list[dict[str, object]] = []
+    dispatcher = NekoDispatcher(plugin, clock=lambda: 100.0)
+    dispatcher._observer = SimpleNamespace(
+        record_event=lambda _event, **kwargs: observed.append(kwargs)
+    )
+
+    with pytest.raises(PushMessageSubmissionRejected, match="backpressure"):
+        dispatcher.push_event(BattleEvent("spawn", ts=100.0), dry_run=False)
+
+    assert dispatcher._last_push_at is None
+    assert observed[-1]["stage"] == "dispatcher_failed"
+    assert observed[-1]["reason"] == "backpressure"
+    assert observed[-1]["pushed"] is False
+
+
+def test_push_submission_receipt_remains_compatible_with_old_sdk():
+    ensure_push_message_submitted(None)
+    ensure_push_message_submitted({"submitted": True})
 
 
 def test_kill_event_unsafe_victim_name_does_not_enter_prompt():
