@@ -10,6 +10,8 @@ import pathlib
 import sys
 import types
 
+import pytest
+
 _PLUGIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 _TOOLS_DIR = _PLUGIN_DIR / "tools"
 _DATA_PROCESS_DIR = _PLUGIN_DIR / "data_layer" / "data_process"
@@ -18,7 +20,13 @@ for _path in (_TOOLS_DIR, _DATA_PROCESS_DIR):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-if "neko_warthunder" not in sys.modules:
-    _pkg = types.ModuleType("neko_warthunder")
-    _pkg.__path__ = [str(_PLUGIN_DIR)]  # type: ignore[attr-defined]
+_pkg = types.ModuleType("neko_warthunder")
+_pkg.__path__ = [str(_PLUGIN_DIR)]  # type: ignore[attr-defined]
+sys.modules["neko_warthunder"] = _pkg
+
+
+@pytest.fixture(autouse=True)
+def _restore_lightweight_plugin_package():
+    """Keep tests that load the real plugin package isolated from later tests."""
+    yield
     sys.modules["neko_warthunder"] = _pkg
