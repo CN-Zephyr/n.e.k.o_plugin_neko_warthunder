@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import builtins
 import pathlib
 import sys
 import types
@@ -59,10 +60,23 @@ def _install_sdk_stubs() -> None:
 
 _install_sdk_stubs()
 
+_ORIGINAL_PRINT = builtins.print
+_HOST_MIGRATION_PREFIXES = ("Migrated memory file:", "Migrated memory directory:")
+
+
+def _route_host_migration_diagnostics(*args, **kwargs):
+    """Keep host first-run migration diagnostics out of JSON stdout assertions."""
+    is_host_migration = args and isinstance(args[0], str) and args[0].startswith(_HOST_MIGRATION_PREFIXES)
+    if kwargs.get("file") is None and is_host_migration:
+        kwargs = {**kwargs, "file": sys.stderr}
+    return _ORIGINAL_PRINT(*args, **kwargs)
+
 
 @pytest.fixture(autouse=True)
 def _restore_lightweight_plugin_package():
     """Keep tests that load the real plugin package isolated from later tests."""
+    builtins.print = _route_host_migration_diagnostics
     yield
+    builtins.print = _ORIGINAL_PRINT
     sys.modules["neko_warthunder"] = _pkg
     _install_sdk_stubs()
