@@ -13,6 +13,7 @@ import json
 import pathlib
 import sys
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C

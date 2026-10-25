@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core.arbiter import Arbiter

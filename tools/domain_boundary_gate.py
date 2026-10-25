@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.core.contracts import BattleState
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors

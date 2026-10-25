@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import sys
+
+
+def test_release_candidate_subprocess_decodes_utf8_output(tmp_path):
+    from neko_warthunder.tools import build_release_candidate
+
+    completed = build_release_candidate._run(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write('发布门禁通过 ✓'.encode('utf-8'))"], cwd=tmp_path,
+    )
+    assert completed.stdout.strip() == "发布门禁通过 ✓"
 
 
 def _write_plugin_manifest(root, version="0.1.0"):

@@ -110,6 +110,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self.engine = self._build_engine()
 
         self.state = BattleState()
+        self._last_battle_id: str | None = None
         self._state_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -143,10 +144,10 @@ class NekoWarthunderPlugin(NekoPluginBase):
             self.logger.warning(f"config load failed, using defaults: {type(exc).__name__}")
         runtime_state = self._load_runtime_state()
         await self._migrate_urgent_output_tts_default(data, runtime_state, config_loaded=config_loaded)
-        if not str(data.get("player_name") or "").strip():
-            saved_player_name = str(runtime_state.get("player_name") or "").strip()
-            if saved_player_name:
-                data["player_name"] = saved_player_name
+        # An explicit panel selection (including clearing the name) supersedes
+        # legacy profile values, just like the other saved panel preferences.
+        if "player_name" in runtime_state:
+            data["player_name"] = str(runtime_state.get("player_name") or "").strip()
         saved_dialogue_mode = self._normalize_dialogue_intrusion_mode(runtime_state.get("dialogue_intrusion_mode"))
         if saved_dialogue_mode in _DIALOGUE_INTRUSION_PRESETS:
             user_window, battle_window = _DIALOGUE_INTRUSION_PRESETS[saved_dialogue_mode]
@@ -557,7 +558,8 @@ class NekoWarthunderPlugin(NekoPluginBase):
     def _evaluate(self, prev: BattleState, cur: BattleState) -> None:
         """Scenario(D-B1) + Detector(D-B3) → 候选 → Arbiter(D-B4) → dispatcher。"""
         now = time.time()
-        if cur.battle_id and cur.battle_id != prev.battle_id:
+        last_battle_id = getattr(self, "_last_battle_id", None) or prev.battle_id
+        if cur.battle_id and cur.battle_id != last_battle_id:
             # battle_id is stable across deaths and respawns. A new non-empty id
             # therefore marks a true battle boundary and is the right place to
             # discard detector, scenario, and arbitration state from the prior match.
@@ -573,6 +575,10 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 life_index=cur.life_index,
                 safe_summary="battle/new/reset",
             )
+        # An HTTP failure produces an empty BattleState. Retain the last valid
+        # identity across it so reconnecting cannot replay persistent feeds.
+        if cur.battle_id:
+            self._last_battle_id = cur.battle_id
         cur.scenario = self.resolver.resolve(cur, now, self.cfg.spawn_grace_seconds)
         candidates = self.engine.feed(prev, cur)
         if cur.replay:

@@ -14,6 +14,8 @@ import sys
 import types
 from typing import Any, Callable
 
+import _bootstrap as _bootstrap  # initialize standalone namespace before callers import it
+
 
 def ensure_package(tool_file: str) -> pathlib.Path:
     """Register the plugin directory as a lightweight top-level package.

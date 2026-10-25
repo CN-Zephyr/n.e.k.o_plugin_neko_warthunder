@@ -26,6 +26,60 @@ def _service(module):
     return service
 
 
+def test_failed_vehicle_polls_cannot_refresh_old_alerts_and_cache_expires():
+    from unittest.mock import patch
+
+    module = _server_module()
+    moment = [1000.0]
+
+    class Client:
+        state_ok = True
+
+        def get_indicators_with_status(self):
+            return (True, module.ConnectionState.IN_BATTLE,
+                    module.Indicators(valid=True, army="air"), module.MapInfo(valid=True))
+
+        def get_state_with_status(self):
+            return self.state_ok, module.VehicleState(valid=self.state_ok, ias_kmh=90.0)
+
+    client = Client()
+    service = module.TelemetryService(client)
+    service._state = module.ConnectionState.IN_BATTLE
+    service._battle_entry_ts = service._life_entry_ts = 100.0
+    processed = {"flags": {"stall_critical": True}, "alerts": [{"code": "stall_critical"}],
+                 "ias_kmh": 90.0, "level": "critical"}
+    service.processor.process = lambda *_: types.SimpleNamespace(to_dict=lambda: dict(processed))
+    with patch.object(module.time, "time", side_effect=lambda: moment[0]):
+        service._poll_fast()
+        initial = service.get_snapshot()
+        assert initial["processed"]["flags"]["stall_critical"] is True
+
+        client.state_ok = False
+        moment[0] = 1000.4
+        service._poll_fast()
+        cached = service.get_snapshot()
+        assert cached["vehicle"]["valid"] is True  # a short failure must not fake death/respawn
+        assert cached["processed"]["flags"] == {}
+        assert cached["processed"]["alerts"] == []
+        assert cached["processed"]["level"] == "info"
+        assert cached["meta"]["vehicle"]["age_sec"] == 0.4
+
+        moment[0] = 1060.0
+        service._poll_fast()
+        stale = service.get_snapshot()
+        assert stale["vehicle"]["valid"] is False
+        assert stale["processed"] is None
+        assert stale["meta"]["vehicle"]["age_sec"] == 60.0
+
+        client.state_ok = True
+        moment[0] = 1060.1
+        service._poll_fast()
+        recovered = service.get_snapshot()
+        assert recovered["vehicle"]["valid"] is True
+        assert recovered["processed"]["flags"]["stall_critical"] is True
+        assert recovered["meta"]["vehicle"]["age_sec"] == 0.0
+
+
 def test_replay_detection_treats_midnight_wrap_as_forward_time():
     """座舱时钟是当日秒数，跨 00:00 会从 ~86399 跳回 0，不能判成回放拖时间轴。
 

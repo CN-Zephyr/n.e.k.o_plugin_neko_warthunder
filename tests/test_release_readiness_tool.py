@@ -5,9 +5,25 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import sys
 import tempfile
 import types
 from pathlib import Path
+
+
+def test_release_readiness_preserves_utf8_subprocess_diagnostics(tmp_path):
+    from neko_warthunder.tools import release_readiness
+
+    code = (
+        "import sys; "
+        "sys.stdout.buffer.write('检查通过 ✓'.encode('utf-8')); "
+        "sys.stderr.buffer.write('诊断信息 ✓'.encode('utf-8'))"
+    )
+    checks = [release_readiness.Check("UTF-8 diagnostics", tmp_path, [sys.executable, "-c", code])]
+    result = release_readiness.run_checks(checks, stream_output=False)
+    assert result["status"] == "pass"
+    assert result["checks"][0]["stdout"] == "检查通过 ✓"
+    assert result["checks"][0]["stderr"] == "诊断信息 ✓"
 
 
 def test_release_readiness_plan_lists_offline_release_gates():

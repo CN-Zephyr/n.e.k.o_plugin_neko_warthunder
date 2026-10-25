@@ -1087,7 +1087,7 @@ class NekoDispatcher:
                 **freshness,
             )
         target_lanlan = _resolve_target_lanlan(self.plugin, event)
-        if event.event_id == "you_killed":
+        if not _quiet_window_bypass(self.plugin, event):
             refresh_user_activity = getattr(self.plugin, "_refresh_user_chat_activity", None)
             if callable(refresh_user_activity):
                 try:

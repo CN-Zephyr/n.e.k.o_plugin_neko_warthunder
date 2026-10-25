@@ -13,6 +13,7 @@ import json
 import pathlib
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.tools.sample_replay import replay_sample_root
 
 _CHECK_TO_TRACK = {

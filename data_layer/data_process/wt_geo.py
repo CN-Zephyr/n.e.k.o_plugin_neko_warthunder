@@ -107,21 +107,32 @@ def clock_position(relative: float | None) -> int | None:
 
 
 def grid_cell(nx: float, ny: float, map_info: Any) -> str | None:
-    """归一化坐标 -> 网格标签（如 B4）。缺参数返回 None。"""
+    """归一化坐标 -> 网格标签（如 B4）。缺参数或落在网格区域外返回 None。
+
+    与游戏内战术地图一致：字母为行（自上而下 A、B、C…），数字为列（自左而右 1、2、3…）。
+    世界坐标 y 轴向北为正，grid_zero 是网格区域左上角（西北角），
+    因此行号按 grid_zero.y 向南累计，归一化 ny=0 对应 map_max.y。
+    """
     span = _world_span(map_info)
     steps = getattr(map_info, "grid_steps", None)
     zero = getattr(map_info, "grid_zero", None)
     if not span or not steps or not zero or steps[0] == 0 or steps[1] == 0:
         return None
     mn = getattr(map_info, "map_min", None) or (0.0, 0.0)
-    # 归一化 -> 世界米坐标，相对网格原点 grid_zero 再按格距取整
-    world_x = mn[0] + nx * span[0]
-    world_y = mn[1] + ny * span[1]
-    col = int((world_x - zero[0]) // steps[0])
-    row = int((world_y - zero[1]) // steps[1])
-    if not (0 <= col < len(_LETTERS)) or row < 0:
+    mx = getattr(map_info, "map_max", None) or (mn[0] + span[0], mn[1] + span[1])
+    # 归一化 -> 世界米坐标（东为 x 正、北为 y 正），再相对网格左上角按格距取整
+    east = mn[0] + nx * span[0] - zero[0]
+    south = zero[1] - (mx[1] - ny * span[1])
+    size = getattr(map_info, "grid_size", None)
+    if east < 0 or south < 0:
         return None
-    return f"{_LETTERS[col]}{row + 1}"
+    if size and size[0] and size[1] and (east >= size[0] or south >= size[1]):
+        return None
+    row = int(south // steps[1])
+    col = int(east // steps[0])
+    if row >= len(_LETTERS):
+        return None
+    return f"{_LETTERS[row]}{col + 1}"
 
 
 _GROUND_CATEGORY = {

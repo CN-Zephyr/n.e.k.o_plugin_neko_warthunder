@@ -42,6 +42,27 @@ INSTALLED_REQUIRED_FILES = (
 DEVELOPMENT_DIR_NAMES = frozenset({".pytest_cache", ".ruff_cache", ".venv", "__pycache__"})
 LOCALE_NAMES = frozenset({"en", "es", "ja", "ko", "pt", "ru", "zh-CN", "zh-TW"})
 
+# Run in the host environment. Current hosts expose these supported package
+# APIs; the old `verify` CLI command is gone and runtime CLI install is disabled.
+# Both extraction roots below are newly created temporary directories.
+_VERIFY_AND_INSTALL_SCRIPT = """
+import sys
+from plugin.neko_plugin_cli.core import inspect_package, install_package
+
+package, plugins_root, profiles_root = sys.argv[1:]
+inspected = inspect_package(package)
+if inspected.payload_hash_verified is not True:
+    raise ValueError('official package payload verification failed')
+installed = install_package(
+    package, plugins_root=plugins_root, profiles_root=profiles_root,
+    on_conflict='fail',
+)
+if installed.payload_hash_verified is not True:
+    raise ValueError('temporary installation payload verification failed')
+print('payload_hash=' + inspected.payload_hash)
+print('payload_hash_verified=True')
+"""
+
 
 def _plugin_version(source_root: pathlib.Path) -> str:
     with (source_root / "plugin.toml").open("rb") as handle:
@@ -123,6 +144,8 @@ def _run(command: list[str], *, cwd: pathlib.Path) -> subprocess.CompletedProces
         command,
         cwd=cwd,
         text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -199,24 +222,15 @@ def build_release_candidate(
             raise RuntimeError(f"package artifact gate failed: {artifact_gate['failures']}")
 
         verify_result = _run(
-            ["uv", "run", "python", "-m", "plugin.neko_plugin_cli.cli", "verify", str(staged_package)],
-            cwd=host_root,
-        )
-        _run(
             [
                 "uv",
                 "run",
                 "python",
-                "-m",
-                "plugin.neko_plugin_cli.cli",
-                "install",
+                "-c",
+                _VERIFY_AND_INSTALL_SCRIPT,
                 str(staged_package),
-                "--plugins-root",
                 str(plugins_root),
-                "--profiles-root",
                 str(profiles_root),
-                "--on-conflict",
-                "fail",
             ],
             cwd=host_root,
         )

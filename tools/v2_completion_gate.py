@@ -12,6 +12,7 @@ import json
 import pathlib
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.tools.v2_output_policy_gate import run_gate as run_output_policy_gate
 from neko_warthunder.tools.v2_readiness import build_v2_readiness
 from neko_warthunder.tools.v2_release_matrix import build_v2_release_matrix

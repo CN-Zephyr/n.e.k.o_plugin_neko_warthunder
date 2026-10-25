@@ -12,6 +12,7 @@ import json
 import pathlib
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.tools.proximity_gate import run_gate as run_proximity_gate
 from neko_warthunder.tools.rc_gap_summary import build_gap_summary
 

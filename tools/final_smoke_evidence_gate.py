@@ -13,6 +13,7 @@ import json
 import pathlib
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.tools.final_smoke_packet import RUNTIME_FOCUS_CHECKS
 
 _BATTLE_COALESCE_KEY = "neko_warthunder:battle_event"

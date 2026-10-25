@@ -13,6 +13,7 @@ import json
 import pathlib
 from typing import Any
 
+import _bootstrap as _bootstrap  # standalone package namespace
 from neko_warthunder.tools.v2_readiness import build_v2_readiness
 
 CAPABILITIES: list[dict[str, Any]] = [

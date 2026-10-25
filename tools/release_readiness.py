@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 from dataclasses import dataclass
@@ -255,6 +256,8 @@ def run_checks(checks: Sequence[Check], *, stream_output: bool = True) -> dict[s
             cwd=check.cwd,
             capture_output=not stream_output,
             text=not stream_output,
+            encoding="utf-8" if not stream_output else None,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         item = {
             "name": check.name,

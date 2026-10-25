@@ -428,6 +428,101 @@ def test_new_battle_id_resets_cross_battle_runtime_state_once():
         module.time.time = original_time
 
 
+def test_same_battle_reconnect_does_not_replay_an_owned_death():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 101.0, 102.0, 103.0])
+    try:
+        alive = BattleState(connected=True, conn_state="in_battle", in_battle=True,
+                            vehicle_valid=True, domain="ground", battle_id="battle-1")
+        dead = BattleState(connected=True, conn_state="in_battle", in_battle=True,
+                           vehicle_valid=True, domain="ground", battle_id="battle-1", dead=True,
+                           timestamp=100.0, combat={"feed": [{"id": 7, "is_my_death": True}]})
+        offline = BattleState()
+        plugin._evaluate(alive, dead)
+        plugin._evaluate(dead, offline)
+        plugin._evaluate(offline, dead)
+        new_battle_dead = BattleState(**{**dead.__dict__, "battle_id": "battle-2", "timestamp": 103.0})
+        plugin._evaluate(dead, new_battle_dead)
+
+        assert [event.event_id for event in plugin.pushed_events] == ["you_died", "you_died"]
+        boundaries = [record for record in plugin.timeline.snapshot()["recent_timeline"]
+                      if record.get("stage") == "battle_boundary"]
+        assert len(boundaries) == 1
+    finally:
+        module.time.time = original_time
+
+
+def test_new_battle_after_offline_resets_runtime_state():
+    plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 101.0, 102.0])
+    resets = []
+    reset = plugin.engine.reset
+    plugin.engine.reset = lambda: (resets.append(True), reset())[-1]
+    try:
+        first = BattleState(connected=True, conn_state="in_battle", in_battle=True,
+                            vehicle_valid=True, domain="ground", battle_id="battle-1")
+        offline = BattleState()
+        plugin._evaluate(first, first)
+        plugin._evaluate(first, offline)
+        second = BattleState(**{**first.__dict__, "battle_id": "battle-2"})
+        plugin._evaluate(offline, second)
+        assert resets == [True]
+    finally:
+        module.time.time = original_time
+
+
+def test_chat_bus_quiet_window_applies_to_all_eligible_battle_events():
+    from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
+
+    plugin = _plugin_for_action_tests()
+    plugin.cfg.target_lanlan = "test-character"
+    plugin.cfg.dialogue_intrusion_mode = "no_interrupt"
+    plugin._last_user_chat_at = 0.0
+    plugin._last_user_chat_mode = "unknown"
+    reads = []
+    record = types.SimpleNamespace(timestamp=100.0, raw={
+        "type": "user_message", "lanlan": "test-character", "is_voice": False,
+    })
+
+    def get_sync(bucket, **kwargs):
+        assert bucket == "test-character"
+        reads.append(True)
+        return [record]
+
+    plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=types.SimpleNamespace(get_sync=get_sync)))
+    for event_id in ("overheat", "spawn", "player_radio_command", "air_threat_nearby", "stall_risk"):
+        dispatcher = NekoDispatcher(plugin, clock=lambda: 102.0)
+        level = "critical" if event_id == "stall_risk" else "warning"
+        result = dispatcher.push_event(BattleEvent(event_id, ts=102.0, level=level,
+                                                   payload={"domain": "air"}), dry_run=False)
+        assert "reason=user_chat_quiet_window" in result, (event_id, result)
+    assert len(reads) == 5
+    assert plugin.pushed_messages == []
+
+    plugin.cfg.dialogue_intrusion_mode = "critical_only"
+    result = NekoDispatcher(plugin, clock=lambda: 102.0).push_event(
+        BattleEvent("stall_risk", ts=102.0, level="critical", payload={"domain": "air"}), dry_run=False,
+    )
+    assert result.startswith("pushed(")
+    assert len(plugin.pushed_messages) == 1
+
+
+def test_saved_identity_and_explicit_clear_override_old_config_on_reload(tmp_path):
+    for saved_name in ("new-test-name", ""):
+        plugin = _plugin_for_action_tests()
+        plugin._runtime_state_path = tmp_path / ("saved.json" if saved_name else "cleared.json")
+        plugin.cfg.player_name = "old-test-name"
+        plugin.engine = plugin._build_engine()
+
+        class Config:
+            async def dump(self, timeout=5.0):
+                return {"neko_warthunder": {"player_name": "old-test-name"}}
+
+        plugin.config = Config()
+        persisted = asyncio.run(plugin._persist_identity_name(saved_name))
+        assert persisted["ok"] is True
+        asyncio.run(plugin._reload_config())
+        assert plugin.cfg.player_name == saved_name
+
+
 def test_takeoff_low_alt_grace_suppresses_low_altitude_event_only():
     plugin, module, original_time = _plugin_for_runtime_evaluate_tests(clock_values=[100.0, 110.0, 112.0])
     try:

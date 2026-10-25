@@ -136,6 +136,9 @@ _TERMINAL_MISSION_STATUSES = frozenset({
 # 8111/本地 HTTP 单次延迟不等于离开战局。战局内探针失败在此窗口内保留上一帧，
 # 只有持续失败才切到 offline；真实的 map_info.valid=false 响应仍立即判定离局。
 _PROBE_FAILURE_GRACE_SEC = 5.0
+# Keep a brief instrument cache across a failed /state request, but never
+# repeat its alarms as fresh observations. Longer failures invalidate it.
+_VEHICLE_FAILURE_GRACE_SEC = 5.0
 
 # 阵亡待命态检测（玩家被击杀后→重生/观战窗口）：实测玩家死亡后，8111 的座舱遥测会
 # 冻结在“死车残骸”上（速度=0、坠机后高度不变、乘员减员），而 processor 仍把它当活载具，
@@ -195,6 +198,8 @@ class TelemetryService:
         # -- 缓存（均为整体替换，读取时拷贝引用即可） --
         self._state = ConnectionState.OFFLINE
         self._fast_ts = 0.0
+        self._vehicle_sample_ts = 0.0
+        self._vehicle_sample_count = 0
         self._indicators = Indicators(valid=False)
         self._vehicle = VehicleState(valid=False)
         self._map_objects: list[Any] = []
@@ -379,15 +384,26 @@ class TelemetryService:
             state_ok, vehicle = self.client.get_state_with_status()
             if state_ok:
                 processed = self.processor.process(vehicle, ind, now).to_dict()
-            else:
-                # 单帧 /state 失败时保留上一帧，避免空战被误判死亡后又假出生。
                 with self._lock:
-                    vehicle = self._vehicle
-                    processed = self._processed
+                    self._vehicle_sample_ts = now
+                    self._vehicle_sample_count += 1
+            else:
+                # Preserve instruments briefly to avoid a false life edge, but
+                # cached flags cannot confirm or heartbeat a live alert.
+                with self._lock:
+                    cache_valid = (self._vehicle_sample_ts > 0
+                                   and now - self._vehicle_sample_ts <= _VEHICLE_FAILURE_GRACE_SEC)
+                    vehicle = self._vehicle if cache_valid else VehicleState(valid=False)
+                    processed = ({**self._processed, "alerts": [], "flags": {}, "level": "info"}
+                                 if cache_valid and self._processed is not None else None)
+                if not cache_valid:
+                    self.processor.reset()
                 self.recorder.mark({"_event": "vehicle_state_poll_failed"})
         else:
             vehicle = VehicleState(valid=False)
             processed = None
+            with self._lock:
+                self._vehicle_sample_ts = 0.0
             self.processor.reset()
         with self._lock:
             prev = self._state
@@ -927,6 +943,11 @@ class TelemetryService:
                 "count": m["count"],
                 "age_sec": round(now - m["last"], 3) if m["last"] else None,
             }
+        out["vehicle"] = {
+            "interval": self.intervals["fast"],
+            "count": self._vehicle_sample_count,
+            "age_sec": round(now - self._vehicle_sample_ts, 3) if self._vehicle_sample_ts else None,
+        }
         return out
 
     def get_health(self) -> dict[str, Any]:
