@@ -46,7 +46,10 @@ def _parametrized_cases(fn) -> list[tuple[dict[str, object], str]]:
     for mark in getattr(fn, "pytestmark", []):
         if getattr(mark, "name", None) != "parametrize":
             continue
-        names = [name.strip() for name in str(mark.args[0]).split(",")]
+        argnames = mark.args[0]
+        if isinstance(argnames, str):
+            argnames = argnames.split(",")
+        names = [str(name).strip() for name in argnames]
         expanded: list[tuple[dict[str, object], str]] = []
         for base_kwargs, base_label in cases:
             for index, value in enumerate(mark.args[1]):

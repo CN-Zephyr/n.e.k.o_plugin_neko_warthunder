@@ -33,7 +33,7 @@ AUDITED_FILES = [
 # 当前已验证的逻辑自检基线。加/减测试后只改这一个常量：
 # REQUIRED_SNIPPETS 与 REQUIRED_FILE_SNIPPETS 都由它派生，
 # 旧值请追加到 STALE_BASELINES，保证文档不会停留在过期计数上。
-CURRENT_BASELINE = 579
+CURRENT_BASELINE = 622
 
 STALE_BASELINES = [
     "29/29 passed",
@@ -154,6 +154,10 @@ STALE_BASELINES = [
     "571 passed",
     "575/575 passed",
     "575 passed",
+    "579/579 passed",
+    "579 passed",
+    "595/595 passed",
+    "595 passed",
 ]
 
 REQUIRED_SNIPPETS = [
