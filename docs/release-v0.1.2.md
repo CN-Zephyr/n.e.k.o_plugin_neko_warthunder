@@ -34,4 +34,18 @@
 
 本机原始检查日志和恢复副本位于工作区 archive/release-v0.1.2-20261101；这些本机证据不打入插件包。GitHub 标准发布工作流会对推送的提交重新验证，并附带包、检查文本和 market-evidence.json，市场下载应核对该工作流产物。
 
-本地 RC 为 406759 字节，archive SHA256 为 `f6415ac1c46dc746914dab6d5535f593a493ec51a83c7b8ace9f8e2b58950b93`，payload hash 为 `0689f45d4494283e3c852181e05eabe96ef5d7d03766bc7d9a9907b80b576fb8`。这是本机构建候选，不是未来公开 CI 包的 hash；公开下载须以对应工作流证据为准。
+本地 RC 为 406759 字节，archive SHA256 为 `f6415ac1c46dc746914dab6d5535f593a493ec51a83c7b8ace9f8e2b58950b93`，payload hash 为 `0689f45d4494283e3c852181e05eabe96ef5d7d03766bc7d9a9907b80b576fb8`。这是本机构建候选，不是公开 CI 包的 hash；公开下载须以对应工作流证据为准。
+
+
+## 公开发布回执
+
+2026-11-01：v0.1.2 已由标准工作流发布到 GitHub，并经官方 CLI 成功通知插件市场。公开目录中的插件 ID 21、neko_warthunder 仍为 approved；最新版本为 0.1.2 / stable / verification_status=passed。其下载地址、archive SHA256 和 payload hash 与本轮实际下载核验的正式包一致。
+
+- 源提交与版本标签：`cdc50639b1267e56c5e9a44be3c7c9360ea9e433` / `v0.1.2`。
+- [main Verify](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/actions/runs/41223215949)、[tag Verify](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/actions/runs/41223383951) 与 [Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/actions/runs/41223383916) 均成功。
+- [正式插件包](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/download/v0.1.2/neko_warthunder.neko-plugin)：406532 字节。
+- archive SHA256：`95d6af92858cb80b589dc6b870464e88257f38d69229896b1e4126ae412d8bbc`。
+- payload hash：`154a6e8a830649781dc7b9ee1d7caf7cd55f6a92bd8454d940f16df10f2d6fdb`。
+- 正式包的版本/身份、CRC、发布证据、74 个提交源码文件及临时目录安装 smoke 均通过。比较文本时仅容许 Windows 工作树与 Linux CI 的换行差异。
+
+发布回执在发布后独立文档提交中回填，不移动 v0.1.2 标签；该文档提交不改变正式包源码。实际用户宿主没有安装本正式包或重启；发行状态、磁盘同步和真实加载/实战验收分别记录。公开页面视觉验收因浏览器读取超时未完成；以上上架结论来自公开市场目录及实际下载校验，不宣称已点击宿主安装。

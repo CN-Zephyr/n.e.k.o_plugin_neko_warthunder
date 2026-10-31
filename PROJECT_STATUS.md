@@ -1,6 +1,6 @@
 # Project Status
 
-v0.1.2 版本范围：四域只读能力、遥测可靠性、聊天避让及低压力陪伴提示词已纳入源码；默认输出边界保持。版本验证与已知限制见[版本记录](docs/release-v0.1.2.md)，正式发布状态以 GitHub Release 与插件市场为准。
+2026-11-01：**v0.1.2 已发布**到 [GitHub Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/tag/v0.1.2) 与 N.E.K.O 插件市场，公开目录为 approved / stable / verification passed。源提交 cdc5063；正式下载包 hash、74 个提交源码文件和隔离安装 smoke 已核对。默认输出边界保持；本轮未安装或重启实际宿主，游戏/模型/TTS/Electron 验收缺口保留。详见[发布回执与已知限制](docs/release-v0.1.2.md)。
 
 此前提示词优化轮（2026-11-01）：常驻场景、每事件要求、风格元数据与直出短句统一为不责怪、不嘲讽、不催战绩，紧急提醒保留必要动作。最新完整 **1571 passed**（新增41，定向142），Ruff、模式边界和发布默认值检查通过；模型语气/TTS尚未试听，真实输出边界不变。该轮同步与生效状态见[优化记录](docs/低压力陪伴提示词-20261101.md)，未 commit、push、发布或重建 RC。
 
