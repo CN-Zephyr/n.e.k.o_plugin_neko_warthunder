@@ -49,12 +49,12 @@ _VERIFY_AND_INSTALL_SCRIPT = """
 import sys
 from plugin.neko_plugin_cli.core import inspect_package, install_package
 
-package, plugins_root, profiles_root = sys.argv[1:]
+package, plugins_root = sys.argv[1:]
 inspected = inspect_package(package)
 if inspected.payload_hash_verified is not True:
     raise ValueError('official package payload verification failed')
 installed = install_package(
-    package, plugins_root=plugins_root, profiles_root=profiles_root,
+    package, plugins_root=plugins_root,
     on_conflict='fail',
 )
 if installed.payload_hash_verified is not True:
@@ -101,8 +101,8 @@ def release_check_command(
 
 def validate_installed_tree(
     installed_plugin: pathlib.Path,
-    installed_profile: pathlib.Path | None = None,
 ) -> dict[str, Any]:
+    """Validate deployed code; current install_package does not export profiles."""
     missing = sorted(relative for relative in INSTALLED_REQUIRED_FILES if not (installed_plugin / relative).is_file())
     locale_dir = installed_plugin / "i18n"
     locales = {path.stem for path in locale_dir.glob("*.json")} if locale_dir.is_dir() else set()
@@ -125,16 +125,12 @@ def validate_installed_tree(
         )
     if development_entries:
         failures.append({"name": "installed_development_files", "detail": development_entries})
-    profile_default_present = installed_profile is None or (installed_profile / "default.toml").is_file()
-    if not profile_default_present:
-        failures.append({"name": "installed_default_profile", "detail": "default.toml is missing"})
     return {
         "status": "pass" if not failures else "fail",
         "missing_runtime_files": missing,
         "missing_locales": missing_locales,
         "extra_locales": extra_locales,
         "development_entries": development_entries,
-        "profile_default_present": profile_default_present,
         "failures": failures,
     }
 
@@ -204,10 +200,8 @@ def build_release_candidate(
         temp_root = pathlib.Path(temporary)
         staging_root = temp_root / "staging"
         plugins_root = temp_root / "installed" / "plugins"
-        profiles_root = temp_root / "installed" / "profiles"
         staging_root.mkdir(parents=True)
         plugins_root.mkdir(parents=True)
-        profiles_root.mkdir(parents=True)
 
         _run(
             release_check_command(source_root, staging_root, skip_tests=skip_tests),
@@ -230,14 +224,10 @@ def build_release_candidate(
                 _VERIFY_AND_INSTALL_SCRIPT,
                 str(staged_package),
                 str(plugins_root),
-                str(profiles_root),
             ],
             cwd=host_root,
         )
-        install_gate = validate_installed_tree(
-            plugins_root / PLUGIN_ID,
-            profiles_root / PLUGIN_ID,
-        )
+        install_gate = validate_installed_tree(plugins_root / PLUGIN_ID)
         if install_gate["status"] != "pass":
             raise RuntimeError(f"temporary installation gate failed: {install_gate['failures']}")
 

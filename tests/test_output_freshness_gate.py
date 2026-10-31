@@ -34,7 +34,7 @@ def test_output_freshness_gate_passes_required_contracts():
     assert real_push["visibility"] == []
     assert real_push["dialogue_policy_owner"] == "plugin"
     assert real_push["plugin_owned_output"] is False
-    assert real_push["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert real_push["plugin_recommended_reply"] == "离地过低，立即拉起！"
     assert real_push["replace_pending"] is True
     assert real_push["interrupt_battle_event"] is True
     assert real_push["interrupt_pending"] is True

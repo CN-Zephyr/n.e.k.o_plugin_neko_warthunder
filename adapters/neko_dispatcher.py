@@ -15,6 +15,9 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..core.contracts import (
+    GROUND_STATUS_GATED_EVENTS,
+    HELICOPTER_DRY_RUN_ONLY_EVENTS,
+    NAVAL_DRY_RUN_ONLY_EVENTS,
     BattleEvent,
     broadcast_frequency_multiplier,
     classify_battle_result,
@@ -168,29 +171,32 @@ COPILOT_ROLE_BOUNDARY = (
 # 它们在 dict 查找前就已 return，写在这里只会成为永不生效的死配置。
 _INTENT: dict[str, str] = {
     "stall_risk": "濒临失速，提醒 {MASTER_NAME} 加速/松杆改出",
-    "high_aoa": "攻角过大，提醒 {MASTER_NAME} 松杆改出，别继续硬拉",
-    "over_g": "过载过大，提醒 {MASTER_NAME} 松杆/回正，别继续硬拉",
+    "high_aoa": "攻角过大，提醒 {MASTER_NAME} 松杆改出",
+    "over_g": "过载过大，提醒 {MASTER_NAME} 松杆/回正",
     "low_alt_danger": "离地太近还在下沉，提醒 {MASTER_NAME} 立刻拉起",
-    "overspeed": "速度过头，提醒 {MASTER_NAME} 收油门改出，别硬拉",
+    "overspeed": "速度过高，提醒 {MASTER_NAME} 收油门改出",
     "overheat": "发动机温度高，提醒 {MASTER_NAME} 收油门散热",
     "low_fuel": "油不多了，提醒 {MASTER_NAME} 留油返航",
     "ground_laser_warning": "陆战激光告警，提醒 {MASTER_NAME} 可能被测距或锁定，短促说一句找掩体或动一下",
-    "ground_crew_loss": "陆战乘员损失，提醒 {MASTER_NAME} 车组受损，短促说一句收住、找掩体或别贪",
-    "ground_gunner_disabled": "陆战炮手失能，提醒 {MASTER_NAME} 暂时别硬拼输出，短促说一句先缩回去",
-    "ground_driver_disabled": "陆战驾驶员失能，提醒 {MASTER_NAME} 机动受限，短促说一句先找掩体",
-    "ground_ammo_empty": "陆战一级弹药打空，提醒 {MASTER_NAME} 装填会变慢，短促说一句别硬拼",
-    "ground_ammo_low": "陆战一级弹药偏少，提醒 {MASTER_NAME} 后续装填会慢，短促说一句规划节奏",
+    "ground_crew_loss": "陆战乘员损失，提醒 {MASTER_NAME} 车组受损，注意掩护",
+    "ground_gunner_disabled": "陆战炮手失能，提醒 {MASTER_NAME} 留意掩护",
+    "ground_driver_disabled": "陆战驾驶员失能，提醒 {MASTER_NAME} 机动受限",
+    "ground_ammo_empty": "陆战一级弹药打空，提醒 {MASTER_NAME} 留意装填",
+    "ground_ammo_low": "陆战一级待发弹偏少，提醒 {MASTER_NAME} 规划交战节奏；不推断全车余弹、弹架容量或装填速度",
+    "heli_vrs_risk": "直升机涡环风险观察，仅为 {MASTER_NAME} 作 dry-run 记录；不确认已进入涡环，不生成飞行动作建议",
+    "naval_map_contact": "仅为 {MASTER_NAME} 记录海战地图出现敌方水面/地面图标；不确认敌舰、距离、航向或锁定，不生成战术动作建议",
+    "naval_air_contact": "仅为 {MASTER_NAME} 记录海战地图出现敌方空中图标；不确认空袭、距离、高度或锁定，不生成战术动作建议",
     "ground_target_nearby": "报任务目标点接近，提醒 {MASTER_NAME} 看方位",
     "enemy_nearby": "报附近接触，提醒 {MASTER_NAME} 保持观察",
     "air_threat_nearby": "报可信的水平钟点方位，提醒 {MASTER_NAME} 确认空中威胁；没有高度差数据，不提供垂直方向指令",
-    "enemy_on_six": "报后方威胁，提醒 {MASTER_NAME} 别让对面贴住",
+    "enemy_on_six": "报后方威胁，提醒 {MASTER_NAME} 注意规避",
     "tailing_risk": "报后方持续贴近，提醒 {MASTER_NAME} 立刻改出",
     "free_text_activity": "提醒 {MASTER_NAME} 检测到战场文字来源，只做安全泛化提示，不复读原文",
     "player_radio_command": "听到 {MASTER_NAME} 发出的固定无线电口令；只按标准化口令短回应，不引用聊天原文",
-    "you_died": "确认己方载具损失；对 {MASTER_NAME} 回应一次；不复盘或补充未提供的战术细节",
+    "you_died": "确认己方载具损失；陪伴 {MASTER_NAME} 一句，不评价操作；不复盘或补充未提供的战术细节",
 }
 
-_RECOVERY_INTENT = "刚才的危险解除了，跟 {MASTER_NAME} 说句'好险、稳住了'之类的"
+_RECOVERY_INTENT = "刚才的危险解除了，向 {MASTER_NAME} 平静确认一次，不追加催促"
 
 
 def _cfg_float(plugin: Any, name: str, default: float) -> float:
@@ -242,6 +248,10 @@ def _dialogue_intrusion_mode(plugin: Any) -> str:
 
 def _v2_live_verified_real_output_enabled(plugin: Any) -> bool:
     return _cfg_bool(plugin, "v2_live_verified_real_output_enabled")
+
+
+def _ground_status_real_output_enabled(plugin: Any) -> bool:
+    return _cfg_bool(plugin, "ground_status_real_output_enabled")
 
 
 def _plugin_reply_hint_enabled(plugin: Any) -> bool:
@@ -399,17 +409,17 @@ def _reply_style_contract(event: BattleEvent) -> str:
     if event.event_id == "battle_end" and result_kind == "victory":
         return (
             "Boundary: exactly one Chinese line celebrating the verified victory; the character owns the emotion and "
-            "wording; no invented battle details, analysis, or follow-up."
+            "wording within a calm, non-judgmental style; no invented battle details, analysis, or follow-up."
         )
     if event.event_id == "battle_end" and result_kind == "defeat":
         return (
             "Boundary: exactly one Chinese line comforting the player after the verified defeat; the character owns "
-            "the emotion and wording; no blame, invented battle details, analysis, or follow-up."
+            "the emotion and wording within a calm, non-judgmental style; no blame, invented battle details, analysis, or follow-up."
         )
     if event.event_id == "you_killed":
         if event.payload.get("trade_death"):
             return (
-                "Boundary: exactly one Chinese line about the verified trade; the character owns the emotion and wording; "
+                "Boundary: exactly one Chinese line about the verified trade; the character owns the emotion and wording within a calm, non-judgmental style; "
                 "no analysis, tactical invention, or follow-up."
             )
         try:
@@ -419,14 +429,14 @@ def _reply_style_contract(event: BattleEvent) -> str:
         if kill_count > 1:
             return (
                 "Boundary: exactly one Chinese line for the merged verified kills; the character owns the emotion and "
-                "wording; do not enumerate kills, analyze tactics, or follow up."
+                "wording within a calm, non-judgmental style; do not enumerate kills, analyze tactics, or follow up."
             )
         return (
-            "Boundary: exactly one Chinese line about the verified kill; the character owns the emotion and wording; "
+            "Boundary: exactly one Chinese line about the verified kill; the character owns the emotion and wording within a calm, non-judgmental style; "
             "no analysis, tactical invention, or follow-up."
         )
     return (
-        "Boundary: exactly one short Chinese line about the verified event; the character owns the emotion and wording; "
+        "Boundary: exactly one short Chinese line about the verified event; the character owns the emotion and wording within a calm, non-judgmental style; "
         "no analysis, tactical invention, takeover, or follow-up."
     )
 
@@ -462,21 +472,18 @@ def _payload_domain(event: BattleEvent) -> str:
 def _spawn_domain_hint(event: BattleEvent) -> str:
     domain = _payload_domain(event)
     if domain == "air":
-        return "当前模式：空战/飞行。角色：后座或僚机。可用语境：上机、升空、跟上、护住你"
+        return "当前模式：空战/飞行。角色：后座或僚机；不要串到其他载具域"
     if domain == "heli":
         return (
-            "当前模式：直升机/旋翼机。角色：机组搭档。"
-            "可用语境：起飞、贴地、悬停、看高度、跟上；不要串到其他载具域"
+            "当前模式：直升机/旋翼机。角色：机组搭档；不要串到其他载具域"
         )
     if domain == "ground":
         return (
-            "当前模式：陆战/地面载具。角色：车组搭档。"
-            "可用语境：上车、出击、车组、装填、掩体、看路；不要串到其他载具域"
+            "当前模式：陆战/地面载具。角色：车组搭档；不要串到其他载具域"
         )
     if domain == "naval":
         return (
-            "当前模式：海战/舰艇。角色：舰桥观察员。"
-            "可用语境：上舰、出航、舰桥、航向、海面；不要串到其他载具域"
+            "当前模式：海战/舰艇。角色：舰桥观察员；不要串到其他载具域"
         )
     return "当前模式：未知载具域。只确认进入战局，不猜载具类型或战场事实"
 
@@ -503,8 +510,8 @@ def _metadata_domain_prompt_contract(event: BattleEvent) -> str:
 
 
 def _persona_wording_contract() -> str:
-    # 适用于所有事件（不只击杀）：措辞/情绪归当前人设，插件不写台词。
-    return "回应方式由你根据当前人设与对话上下文决定；插件不指定情绪或措辞，不套固定话。"
+    # Every event carries the boundary even if the persistent context was not loaded.
+    return "回应方式由你根据当前人设与对话上下文决定；轻松陪伴，不责怪、不嘲讽、不催战绩，不套固定话。"
 
 
 def _recommended_reply_line(event: BattleEvent) -> str:
@@ -518,31 +525,31 @@ def _recommended_reply_line(event: BattleEvent) -> str:
         # emotion and wording belong to the active character persona.
         return ""
     if event.event_id == "stall_risk":
-        return "加速，快失速了！"
+        return "注意失速，加速改出。"
     if event.event_id == "high_aoa":
-        return "松杆，迎角过大！"
+        return "攻角过大，松杆改出。"
     if event.event_id == "over_g":
-        return "松杆，过载太大！"
+        return "过载偏高，松杆回正。"
     if event.event_id == "low_alt_danger":
-        return "拉起来，要撞地了！"
+        return "离地过低，立即拉起！"
     if event.event_id == "overspeed":
-        return "收油，速度太快！"
+        return "速度过高，收油减速。"
     if event.event_id == "ground_laser_warning":
-        return "被照了，找掩体！"
+        return "激光照射，注意找掩体。"
     if event.event_id == "ground_crew_loss":
-        return "车组受损，先收一下！"
+        return "车组受损，注意掩护。"
     if event.event_id == "ground_gunner_disabled":
-        return "炮手没了，先别硬拼！"
+        return "炮手失能，留意掩护。"
     if event.event_id == "ground_driver_disabled":
-        return "驾驶没了，找掩体！"
+        return "驾驶员失能，机动受限。"
     if event.event_id == "ground_ammo_empty":
-        return "一级弹药空了，别硬拼！"
+        return "一级弹药已空，留意装填。"
     if event.event_id == "ground_ammo_low":
-        return "待发弹不多了，控节奏！"
+        return "待发弹偏少，留意余量。"
     if event.event_id == "enemy_on_six":
-        return "六点钟，甩开它！"
+        return "六点钟有威胁，注意规避！"
     if event.event_id == "tailing_risk":
-        return "后方咬住了，机动！"
+        return "后方威胁接近，注意机动！"
     if event.event_id == "air_threat_nearby":
         clock = p.get("clock")
         if isinstance(clock, int) and 1 <= clock <= 12:
@@ -590,9 +597,13 @@ def _event_intent(event: BattleEvent) -> str:
     if event.edge == "recovery":
         return _RECOVERY_INTENT
     if event.event_id == "spawn":
+        # A spawn/life edge establishes presence, not motion or takeoff.
+        # The domain supplies a role, not evidence that the vehicle moved.
+        fact = "已完成重生" if event.payload.get("respawn") is True else "已进入战局"
         return (
-            f"确认 {{MASTER_NAME}} 已进入战局或完成重生；"
+            f"仅确认 {{MASTER_NAME}} {fact}；"
             f"{_spawn_domain_hint(event)}；"
+            "事件不证明载具运动状态，不能宣称已执行任何未提供的动作；"
             "回应方式由当前人设和对话上下文决定；别报敌情/方位/锁定/击杀/威胁"
         )
     if event.event_id == "you_killed":
@@ -651,6 +662,8 @@ def _output_shape_contract(event: BattleEvent) -> str:
 
 
 def _domain_vocab_contract(event: BattleEvent) -> str:
+    if event.event_id == "spawn":
+        return "语境：只按本条事件的载具域回应；未确认的动作和战况不描述。"
     domain = _payload_domain(event)
     if domain == "air":
         return "语境：只用空战飞行词，不串其他载具域。"
@@ -877,7 +890,7 @@ def _ground_vehicle_fact(event_id: str, payload: dict[str, Any]) -> str:
     if event_id == "ground_ammo_empty":
         return "一级弹药打空"
     if event_id == "ground_ammo_low":
-        return "一级弹药偏少"
+        return "一级待发弹偏少（不代表全车余弹不足）"
     return ""
 
 
@@ -1068,10 +1081,16 @@ class NekoDispatcher:
                 pushed=False,
             )
             return f"dry_run(event={event.event_id}/{event.edge}/{event.level}, prio={event.priority}, preempt={event.preempt_eligible})"
+        if event.event_id in HELICOPTER_DRY_RUN_ONLY_EVENTS:
+            return self._suppress_event(event, "heli_vrs_dry_run_only")
+        if event.event_id in NAVAL_DRY_RUN_ONLY_EVENTS:
+            return self._suppress_event(event, "naval_dry_run_only")
         if event.event_id in FREE_TEXT_DRY_RUN_ONLY_EVENTS:
             return self._suppress_event(event, "free_text_dry_run_only")
         if self._is_v2_live_evidence_gated(event):
             return self._suppress_event(event, "v2_live_evidence_pending")
+        if event.event_id in GROUND_STATUS_GATED_EVENTS and not _ground_status_real_output_enabled(self.plugin):
+            return self._suppress_event(event, "ground_status_output_disabled")
         now = self._clock()
         freshness = _event_freshness_metadata(event, now, self.plugin)
         if self._is_expired(event, now):

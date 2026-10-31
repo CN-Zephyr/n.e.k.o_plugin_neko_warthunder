@@ -30,6 +30,7 @@ def run_gate() -> dict[str, Any]:
             "dry_run_first": True,
             "free_text_real_output_allowed": False,
             "v2_live_verified_real_output_enabled": False,
+            "ground_status_real_output_enabled": False,
             "debug_timeline_enabled": False,
             "plugin_reply_hint_enabled": True,
             "plugin_owned_battle_output_enabled": False,
@@ -52,6 +53,11 @@ def _checks(defaults: WtConfig, empty_mapping: WtConfig) -> list[dict[str, Any]]
             "v2_live_verified_real_output_default_closed",
             defaults.v2_live_verified_real_output_enabled is False
             and empty_mapping.v2_live_verified_real_output_enabled is False,
+        ),
+        _expect(
+            "ground_status_real_output_default_closed",
+            defaults.ground_status_real_output_enabled is False
+            and empty_mapping.ground_status_real_output_enabled is False,
         ),
         _expect(
             "debug_timeline_default_closed",

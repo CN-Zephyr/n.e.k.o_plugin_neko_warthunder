@@ -26,6 +26,7 @@ CONDITION_FLAG_GROUPS: dict[str, list[tuple[str, str]]] = {
     "ground_ammo_low": [("ammo_low", "")],
     "ground_ammo_empty": [("ammo_empty", "")],
     "ground_laser_warning": [("", "laser_warning")],
+    "heli_vrs_risk": [("vrs_warning", "vrs_critical")],
     # overspeed：数据层 v1.6 已提供 warning/critical flag；插件侧只消费，不自行算阈值。
     "overspeed": [("overspeed_warn", "overspeed_critical")],
 }

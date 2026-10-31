@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
+
+from ..core.contracts import NAVAL_DRY_RUN_ONLY_EVENTS
 
 _OUTPUT_STAGES = {
     "dispatcher_dry_run",
@@ -51,7 +54,16 @@ _ACTIVITY_KEYS = (
     "level",
     "dry_run",
     "pushed",
+    "trace_id",
 )
+
+_NAVAL_DECISION_STAGES = {"arbiter_allowed", "arbiter_dropped", "arbiter_cooldown", "arbiter_scenario_gated",
+                          "arbiter_preempted", "arbiter_suppressed"}
+_NAVAL_OUTPUT_STAGES = {"dispatcher_dry_run", "dispatcher_suppressed", "dispatcher_failed", "dispatcher_pushed"}
+_NAVAL_REASONS = {"detected", "selected", "cooldown_active", "scenario_gated", "preempted_by_critical",
+                  "broadcast_category_disabled", "broadcast_category_disabled_on_flush", "expired_before_flush",
+                  "lost_in_window", "rate_limited", "naval_dry_run_only", "naval_contact_cleared",
+                  "dry_run_enabled", "paused", "tripped"}
 # record_stage 提取的通用阶段元数据键。
 _STAGE_CORE_KEYS = (
     "trace_id",
@@ -158,6 +170,8 @@ class RuntimeTimeline:
         self._last_decision: dict[str, Any] | None = None
         self._last_output_status: dict[str, Any] | None = None
         self._last_tick_at: str | None = None
+        # At most two observations, with three small summaries each; independent of debug/history retention.
+        self._naval_results: dict[str, dict[str, Any]] = {}
 
     def configure(
         self,
@@ -248,9 +262,42 @@ class RuntimeTimeline:
                     self._records.append(record)
                 if stage in _ACTIVITY_STAGES:
                     self._activity_records.append(_activity_record(record))
+                self._record_naval_result(record, metadata.get("map_sample_count"))
         except Exception:
             # 观测层永不反噬主链路；record_stage 编码错误只能靠测试兜底。
             return
+
+    def _record_naval_result(self, record: dict[str, Any], sample_count: Any) -> None:
+        """Called under the timeline lock; no raw payload or identity is retained."""
+        event_id, trace_id, stage = record.get("event_id"), record.get("trace_id"), record.get("stage")
+        if (event_id not in NAVAL_DRY_RUN_ONLY_EVENTS or not isinstance(trace_id, str)
+                or re.fullmatch(r"[0-9a-f]{32}", trace_id) is None):
+            return
+        group = ("candidate" if stage == "detector_candidate" else "decision" if stage in _NAVAL_DECISION_STAGES
+                 else "output" if stage in _NAVAL_OUTPUT_STAGES else None)
+        if group is None:
+            return
+        current = self._naval_results.get(event_id)
+        if group == "candidate":
+            if current is not None and current["trace_id"] == trace_id:
+                return  # A retry of this candidate must not clear its existing decision/output.
+            current = {"trace_id": trace_id, "candidate": None, "decision": None, "output": None}
+            self._naval_results[event_id] = current
+        if current is None or current["trace_id"] != trace_id:
+            return  # An unregistered or late result cannot be attached to a newer observation.
+        reason = str(record.get("reason") or "").split("(", 1)[0]
+        summary = {"stage": stage, "reason": reason if reason in _NAVAL_REASONS else "unknown",
+                   "seq": record["seq"], "ts": record["ts"], "trace_id": trace_id}
+        if group == "candidate" and isinstance(sample_count, int) and not isinstance(sample_count, bool) and sample_count > 0:
+            summary["map_sample_count"] = sample_count
+        current[group] = summary
+
+    def naval_result(self, event_id: str, trace_id: str | None) -> dict[str, Any] | None:
+        with self._lock:
+            result = self._naval_results.get(event_id)
+            if result is None or result["trace_id"] != trace_id:
+                return None
+            return {key: dict(result[key]) if result[key] else None for key in ("candidate", "decision", "output")}
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -308,6 +355,7 @@ def arbiter_chain_to_observe_records(chain: list[dict[str, Any]], *, scenario: s
                     "event_id": item.get("event_id"),
                     "edge": item.get("edge"),
                     "level": item.get("level"),
+                    "trace_id": item.get("trace_id"),
                     "scenario": scenario,
                 }
             )

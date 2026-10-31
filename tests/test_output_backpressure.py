@@ -516,9 +516,9 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert plugin.calls[0]["visibility"] == []
     assert plugin.calls[0]["ai_behavior"] == "respond"
     assert "{MASTER_NAME}" in plugin.calls[0]["parts"][0]["text"]
-    assert "建议台词：拉起来，要撞地了！" in plugin.calls[0]["parts"][0]["text"]
+    assert "建议台词：离地过低，立即拉起！" in plugin.calls[0]["parts"][0]["text"]
     assert metadata["plugin_owned_output"] is False
-    assert metadata["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert metadata["plugin_recommended_reply"] == "离地过低，立即拉起！"
     assert metadata["reply_style_contract"].startswith("Boundary: exactly one short Chinese line")
     assert "character owns the emotion and wording" in metadata["reply_style_contract"]
     assert metadata["dialogue_policy_owner"] == "plugin"
@@ -540,7 +540,7 @@ def test_real_event_push_metadata_requests_short_tts_output_contract():
     assert status["ai_behavior"] == "respond"
     assert status["visibility"] == []
     assert status["plugin_owned_output"] is False
-    assert status["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert status["plugin_recommended_reply"] == "离地过低，立即拉起！"
     assert status["reply_style_contract"].startswith("Boundary: exactly one short Chinese line")
     assert status["dialogue_policy_owner"] == "plugin"
     assert status["plugin_dialogue_policy"]["owner"] == "plugin"
@@ -592,7 +592,7 @@ def test_kill_prompt_requests_one_response_without_prescribing_style():
     assert "合并后的可信战果" in prompt
     assert "只回应一次" in prompt
     assert "不逐条念" in prompt
-    assert "插件不指定情绪或措辞" in prompt
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in prompt
     assert "轻夸" not in prompt
     assert "坏笑" not in prompt
 

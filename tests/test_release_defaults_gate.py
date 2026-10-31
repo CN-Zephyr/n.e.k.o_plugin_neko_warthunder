@@ -18,6 +18,7 @@ def test_release_defaults_gate_passes_with_conservative_defaults():
         "dry_run_first": True,
         "free_text_real_output_allowed": False,
         "v2_live_verified_real_output_enabled": False,
+        "ground_status_real_output_enabled": False,
         "debug_timeline_enabled": False,
         "plugin_reply_hint_enabled": True,
         "plugin_owned_battle_output_enabled": False,
@@ -33,6 +34,7 @@ def test_release_defaults_gate_passes_with_conservative_defaults():
     assert {item["name"] for item in result["checks"]} >= {
         "default_dry_run_true",
         "v2_live_verified_real_output_default_closed",
+        "ground_status_real_output_default_closed",
         "debug_timeline_default_closed",
         "plugin_reply_hint_default_enabled",
         "plugin_owned_battle_output_default_closed",

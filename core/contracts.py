@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -22,6 +23,12 @@ COMBAT_STRESS = "COMBAT_STRESS"
 CRITICAL_RISK = "CRITICAL_RISK"
 DEAD = "DEAD"
 BATTLE_ENDED = "BATTLE_ENDED"
+
+# 检测与 dry_run 保持运行；真实输出在仲裁和投递两个边界共用此门控。
+GROUND_STATUS_GATED_EVENTS = frozenset({"ground_crew_loss", "ground_ammo_empty", "ground_ammo_low"})
+# 直升机专项先做 dry-run 决策链路；不提供启用真实输出的配置开关。
+HELICOPTER_DRY_RUN_ONLY_EVENTS = frozenset({"heli_vrs_risk"})
+NAVAL_DRY_RUN_ONLY_EVENTS = frozenset({"naval_map_contact", "naval_air_contact"})
 
 ALL_SCENARIOS = (
     OUT_OF_BATTLE,
@@ -137,6 +144,9 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "ground_driver_disabled": EventSpec("ground_driver_disabled", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 5),
     "ground_ammo_empty": EventSpec("ground_ammo_empty", CAT_SAFETY_IMPORTANT, 5, False, 25, 5, 5),
     "ground_ammo_low": EventSpec("ground_ammo_low", CAT_SAFETY_MINOR, 3, False, 45, 2, 2),
+    "heli_vrs_risk": EventSpec("heli_vrs_risk", CAT_SAFETY_IMPORTANT, 6, False, 20, 5, 7),
+    "naval_map_contact": EventSpec("naval_map_contact", CAT_MAP_AWARENESS, 3, False, 30, 2, 2),
+    "naval_air_contact": EventSpec("naval_air_contact", CAT_MAP_AWARENESS, 3, False, 30, 2, 2),
     "ground_target_nearby": EventSpec("ground_target_nearby", CAT_MAP_AWARENESS, 2, False, 35, 2, 2),
     "enemy_nearby":   EventSpec("enemy_nearby", CAT_MAP_AWARENESS, 2, False, 25, 2, 2),
     "air_threat_nearby": EventSpec("air_threat_nearby", CAT_MAP_AWARENESS, 3, False, 20, 3, 3),
@@ -173,6 +183,9 @@ EVENT_MAX_AGE_OVERRIDES_SECONDS: dict[str, float] = {
     "ground_driver_disabled": 6.0,
     "ground_ammo_empty": 8.0,
     "ground_ammo_low": 8.0,
+    "heli_vrs_risk": 4.0,
+    "naval_map_contact": 4.0,
+    "naval_air_contact": 4.0,
     "player_radio_command": 10.0,
     # Kill/death/battle-end can tolerate a little more host latency, but still
     # should not be replayed as old news.
@@ -238,6 +251,20 @@ def _dialogue_intrusion_mode(value: Any) -> str:
     }
     mode = aliases.get(mode, mode)
     return mode if mode in {"no_interrupt", "critical_only", "allow_interrupt"} else "critical_only"
+
+
+# 小地图敌我颜色默认值，与数据层 wt_telemetry 的 8111 实测默认配色一致。
+DEFAULT_ALLY_COLOR = "#174DFF"
+DEFAULT_ENEMY_COLOR = "#FA0C00"
+
+
+_HEX_COLOR_RE = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def normalize_hex_color(value: Any, default: str) -> str:
+    """规范为大写 "#RRGGBB"；非法时返回 default。"""
+    match = _HEX_COLOR_RE.fullmatch(str(value or "").strip())
+    return "#" + match.group(1).upper() if match else default
 
 
 def normalize_broadcast_frequency(value: Any) -> str:
@@ -313,6 +340,9 @@ class WtConfig:
     safety_failure_limit: int = 5
     player_name: str = ""
     target_lanlan: str = ""
+    # 游戏设置里可自定义的小地图敌我颜色；数据层按“离哪个更近”判阵营。
+    ally_color: str = DEFAULT_ALLY_COLOR
+    enemy_color: str = DEFAULT_ENEMY_COLOR
     plugin_reply_hint_enabled: bool = True
     plugin_owned_battle_output_enabled: bool = False
     plugin_owned_urgent_output_enabled: bool = False
@@ -321,6 +351,7 @@ class WtConfig:
     observability_max_events: int = 100
     observability_include_prompt_preview: bool = False
     v2_live_verified_real_output_enabled: bool = False
+    ground_status_real_output_enabled: bool = False
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any] | None) -> "WtConfig":
@@ -354,6 +385,8 @@ class WtConfig:
             safety_failure_limit=int(_clamp(raw.get("safety_failure_limit"), 5, 1, 100)),
             player_name=str(raw.get("player_name") or "").strip(),
             target_lanlan=str(raw.get("target_lanlan") or raw.get("lanlan_name") or "").strip(),
+            ally_color=normalize_hex_color(raw.get("ally_color"), DEFAULT_ALLY_COLOR),
+            enemy_color=normalize_hex_color(raw.get("enemy_color"), DEFAULT_ENEMY_COLOR),
             plugin_reply_hint_enabled=bool(raw.get("plugin_reply_hint_enabled", True)),
             plugin_owned_battle_output_enabled=bool(raw.get("plugin_owned_battle_output_enabled", False)),
             plugin_owned_urgent_output_enabled=bool(raw.get("plugin_owned_urgent_output_enabled", False)),
@@ -362,6 +395,7 @@ class WtConfig:
             observability_max_events=int(_clamp(raw.get("observability_max_events"), 100, 1, 1000)),
             observability_include_prompt_preview=bool(raw.get("observability_include_prompt_preview", False)),
             v2_live_verified_real_output_enabled=bool(raw.get("v2_live_verified_real_output_enabled", False)),
+            ground_status_real_output_enabled=bool(raw.get("ground_status_real_output_enabled", False)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -391,6 +425,7 @@ class BattleState:
     has_player: bool = False                # map situation found the player marker
     domain: str = "unknown"                 # air / heli / ground / naval / menu / unknown
     domain_label: str | None = None
+    domain_source: str = "unavailable"       # whitelist provenance, never raw army/icon text
     vehicle_type: str | None = None
     profile_matched: bool | None = None
     profile_source: str | None = None
@@ -407,6 +442,8 @@ class BattleState:
     aoa_deg: float | None = None
     altitude_m: float | None = None
     radio_altitude_m: float | None = None
+    rotor_rpm: float | None = None          # 直升机只读旋翼转速，不派生告警
+    vario_ms: float | None = None           # 直升机升降速度，负值表示下降
     climb_ms: float | None = None
     mach: float | None = None
     g_now: float | None = None
@@ -423,6 +460,7 @@ class BattleState:
     gear_position: int | None = None
     gunner_state: float | None = None
     driver_state: float | None = None
+    laser_warning_state: float | None = None  # LWS: -1无设备 / 0待机 / 1告警 / 2损坏
 
     # 离散来源
     hud_events: list[dict[str, Any]] = field(default_factory=list)
@@ -447,8 +485,23 @@ class BattleState:
         """危急集合对应的数据层 critical 级 flag 是否激活（驱动 CRITICAL_RISK）。"""
         return any(self.flag(code) for code in CRITICAL_FLAG_CODES)
 
+    @property
+    def life_key(self) -> tuple[str, int] | None:
+        """Authoritative life identity, when the data layer supplies both parts."""
+        if self.battle_id and self.life_index is not None:
+            return self.battle_id, self.life_index
+        return None
+
     def is_alive(self) -> bool:
         if not self.in_battle or self.dead:
+            return False
+        # 8111 may expose valid, populated telemetry for this loading placeholder.
+        # An unlisted real model is still usable; profile matching is unrelated.
+        if isinstance(self.vehicle_type, str) and self.vehicle_type.strip().lower() == "dummy_plane":
+            return False
+        # Modern snapshots explicitly label the loading gap unknown/menu, even
+        # if /state still says valid. Preserve legacy snapshots with no domain.
+        if self.domain in {"unknown", "menu"} and self.raw.get("domain") in ("unknown", "menu"):
             return False
         if self.vehicle_valid:
             return True
@@ -467,6 +520,14 @@ class BattleEvent:
     payload: dict[str, Any] = field(default_factory=dict)
     ts: float = 0.0
     level: str = "warning"                  # warning / critical（来自数据层 flag 档）
+    # Local observation correlation only; excluded from payload, equality and delivery serialization.
+    trace_id: str | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def naval_trace_id(self) -> str | None:
+        value = self.trace_id
+        return value if (self.event_id in NAVAL_DRY_RUN_ONLY_EVENTS and isinstance(value, str)
+                         and re.fullmatch(r"[0-9a-f]{32}", value)) else None
 
     @property
     def spec(self) -> EventSpec:

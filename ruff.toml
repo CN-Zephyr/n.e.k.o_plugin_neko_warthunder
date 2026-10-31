@@ -2,7 +2,8 @@
 # managed-template: plugin-market-actions-v1
 target-version = "py311"
 line-length = 120
-extend-exclude = ["vendor"]
+# Captures and isolated plugin copies are generated evidence, not source.
+extend-exclude = ["vendor", "local_test_logs"]
 respect-gitignore = false
 
 [lint]

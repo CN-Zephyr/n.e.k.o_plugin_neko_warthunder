@@ -46,7 +46,7 @@ def test_failed_vehicle_polls_cannot_refresh_old_alerts_and_cache_expires():
     service = module.TelemetryService(client)
     service._state = module.ConnectionState.IN_BATTLE
     service._battle_entry_ts = service._life_entry_ts = 100.0
-    processed = {"flags": {"stall_critical": True}, "alerts": [{"code": "stall_critical"}],
+    processed = {"vehicle_class": "air", "flags": {"stall_critical": True}, "alerts": [{"code": "stall_critical"}],
                  "ias_kmh": 90.0, "level": "critical"}
     service.processor.process = lambda *_: types.SimpleNamespace(to_dict=lambda: dict(processed))
     with patch.object(module.time, "time", side_effect=lambda: moment[0]):

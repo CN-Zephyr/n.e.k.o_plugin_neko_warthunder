@@ -1,8 +1,12 @@
-# D-B4｜提示仲裁规则（Arbiter，v1 · RB 空战）
+# D-B4｜提示仲裁规则（Arbiter）
 
-> 状态：v0.2（汇合后）· 范围：v1 RB 空战，9 个事件，消费数据层 flags
+> 更新：2026-10-27。适用于当前多域候选；代码以 `core/arbiter.py` / `core/contracts.py` 为准，原始示意和阈值草案不代表仍处于早期汇合阶段。见 [统一状态](当前开发状态.md)。
 > 用途：定义**唯一仲裁者**——把"本 tick 的候选 BattleEvent + 当前 Scenario"收敛成"这一刻到底开不开口、说哪一条"
 > 关联：D-B1（Scenario 门控矩阵）/ D-B2（severity/priority/cooldown/抢占/类别）/ D-B3（候选来源）/ D-B5（事件→数据层映射）
+
+## VRS dry-run 增量
+
+`heli_vrs_risk` 先复核当前模式/存活/采样时效与等级，再进入普通仲裁；真实模式在单槽与冷却前过滤，切换模式也清除已有缓冲。priority 6、非抢占，不改变危急集合；Dispatcher 另有不可由配置绕过的硬阻断。见 [VRS 记录](直升机VRS-dry-run-20261027.md)。
 
 ## 0. 定位
 
@@ -19,7 +23,7 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 数据层给两级 flag（`_warning` / `_critical`）。映射规则：
 
 - 数据层 **`_critical`** → 该事件取**高 severity 档**；数据层 **`_warning`** → **中 severity 档**。
-- ⚠️ **抢占资格 ≠ 数据层 critical**。抢占资格 = **我们的危急集合 `{stall_risk, low_alt_danger, overspeed}` ∪ `{you_died}`，且数据层报 critical 级**——两条件都满足才抢占。
+- ⚠️ **抢占资格 ≠ 数据层 critical**。抢占资格 = **我们的危急集合 `{stall_risk, high_aoa, over_g, low_alt_danger, overspeed}` ∪ `{you_died}`，且数据层报 critical 级**——两条件都满足才抢占。
 - 因此：`overheat`/`low_fuel` 即便数据层报 `_critical`，**也只抬高 severity、绝不抢占**（它们是慢性/提醒，不属危急集合）。
 
 ## 3. 仲裁流水线（每 tick 跑一遍）
@@ -114,3 +118,20 @@ Arbiter = **猫这一张嘴的总闸**。所有 Detector 产出的候选都汇�
 ---
 
 > Track B 建模到此完成（D-B1~B5 全）。数据层 v1.6 已合并，T-Safety 已完成。下一步不再是等待补 overspeed/hudmsg，而是用真实 `/api/telemetry` 验证 v1.6 DTO 接缝，并保证自由文本正式播报始终通过 T-Safety prompt 合同。
+
+
+## 当前陆战前置复核与投递记账
+
+- `decide(..., current_state=cur)` 先撤销当前激光/弹药条件已失效的缓冲和重试候选；原因分别为 `ground_laser_condition_cleared`、`ground_ammo_condition_cleared`。
+- 真实模式下，乘员/弹药开关关闭时先过滤三类候选并释放旧槽；dry_run 仍可观察；Dispatcher 保留最终输出闸。激光不受该专用开关控制。
+- 选中事件不代表宿主接受或 TTS 已完成。投递失败/未提交时回滚冷却和输出时钟；失败重试仍受当前条件与事件新鲜度约束。不要把仲裁的 spoken/selected 日志直接当作已听到语音。
+
+## 海战 dry-run 硬边界（2026-10-27）
+
+naval_map_contact / naval_air_contact 在真实模式于单槽/冷却前过滤，原因 naval_dry_run_only；Dispatcher 同样在 prompt/LLM/直出前硬阻断，无开关可绕过。
+
+仲裁前复核当前图标类别、来源 5 秒时效、战局/生命和成功计数；条件清除、计数回退、旧生命或失效来源撤销缓冲及失败重试，原因 naval_contact_cleared。事件自身 4 秒时效仍适用，不撤回已记录的历史观察。
+
+## 海战检测结果对照（2026-10-28）
+
+本轮只在原有仲裁记录上透传合法海战关联标识，仲裁策略和 spoken/result 语义不变。诊断卡按同次标识分别展示候选、实际仲裁与 DispatchObserver 的记录结果，不把 selected 当作记录成功或真实语音。普通模式保留每类最近一次的三个安全摘要，不依赖 debug 历史，未知原因只投影为 unknown。 真实输出继续双边界硬关闭，见 [结果对照记录](海战检测结果对照-20261028.md)。

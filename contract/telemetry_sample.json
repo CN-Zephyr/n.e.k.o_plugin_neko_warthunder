@@ -95,6 +95,11 @@
   },
   "mission_status": "running",
   "meta": {
+    "naval_indicators": {
+      "status": "unavailable",
+      "count": 0,
+      "age_sec": null
+    },
     "fast": {
       "age_sec": 0.1
     }

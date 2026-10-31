@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -29,32 +30,47 @@ from plugin.sdk.plugin import (
 )
 
 from .adapters.data_layer_process import DataLayerProcessManager
+from .adapters.faction_colors_client import set_faction_colors as request_set_faction_colors
+from .adapters.flight_diagnostics import snapshot_flight_diagnostics
+from .adapters.ground_ammo_explanation import snapshot_ground_ammo_explanation
 from .adapters.identity_client import identity_summary_from_combat
 from .adapters.identity_client import set_identity as request_set_identity
+from .adapters.naval_instrument_fields import snapshot_naval_instrument_fields
+from .adapters.naval_static_reference import snapshot_naval_static_reference
 from .adapters.neko_dispatcher import (
     COMMITTED_RESULT_PREFIXES,
     NekoDispatcher,
     PushMessageSubmissionRejected,
     ensure_push_message_submitted,
 )
+from .adapters.on_demand_explanation import OnDemandExplanation, current_host_role
 from .adapters.runtime_timeline import RuntimeTimeline, arbiter_chain_to_observe_records
 from .adapters.telemetry_client import TelemetryClient
+from .adapters.trusted_facts import snapshot_trusted_facts
 from .core.arbiter import Arbiter
 from .core.contracts import (
     BROADCAST_CATEGORY_DEFAULTS,
     BROADCAST_FREQUENCIES,
+    DEFAULT_ALLY_COLOR,
+    DEFAULT_ENEMY_COLOR,
+    GROUND_STATUS_GATED_EVENTS,
+    HELICOPTER_DRY_RUN_ONLY_EVENTS,
+    NAVAL_DRY_RUN_ONLY_EVENTS,
     BattleEvent,
     BattleState,
     WtConfig,
     normalize_broadcast_categories,
     normalize_broadcast_frequency,
+    normalize_hex_color,
 )
 from .core.instructions import WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS
 from .core.safety_guard import SafetyGuard
 from .core.scenario import ScenarioResolver
+from .core.telemetry_freshness import naval_map_source
 from .detectors._base import DetectorEngine
 from .detectors.condition.flight_safety import build_condition_detectors
 from .detectors.discrete.lifecycle import build_discrete_detectors
+from .detectors.discrete.naval_situation import NavalContactDetector
 
 _CONFIG_SECTION = "neko_warthunder"
 _RUNTIME_STATE_FILENAME = ".runtime_state.json"
@@ -74,6 +90,8 @@ _DEFERRED_HUD_NOTICE_CODES = frozenset({"powertrain_failure"})
 # 运行态文件读-改-写的互斥锁。放模块级：测试常用 object.__new__ 构造部分实例，
 # 实例属性不保证存在；且同路径多实例写入也应互斥。
 _RUNTIME_STATE_LOCK = threading.Lock()
+# 仅用于面板显示降级，对齐数据层载具缓存的 5 秒有效窗口；不改变检测或播报。
+_VEHICLE_STATUS_MAX_AGE_SECONDS = 5.0
 _BLOCKED_FREE_TEXT_SOURCES = {
     "awards": ("free_text_awards", ("awards", "feed")),
     "combat_feed": ("free_text_combat_feed", ("combat", "feed")),
@@ -127,9 +145,12 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self._last_battle_respond_at = 0.0
         self._pending_dispatch_event: BattleEvent | None = None
         self._startup_completed = False
+        self._faction_colors_sync_pending = False
+        self._faction_colors_retry_at = 0.0
         # 会话内 dry_run 覆盖：set_dry_run 动作写入，_apply_config 重建 cfg 后重放，
         # 防止无关 config_change 把它静默回滚。刻意不落盘——重启回到安全默认。
         self._session_dry_run_override: bool | None = None
+        self._on_demand = OnDemandExplanation(self, self._on_demand_facts, current_host_role)
 
     # ------------------------------------------------------------------ 配置
     async def _reload_config(self) -> None:
@@ -154,6 +175,9 @@ class NekoWarthunderPlugin(NekoPluginBase):
             data["dialogue_intrusion_mode"] = saved_dialogue_mode
             data["user_chat_quiet_window_seconds"] = user_window
             data["battle_output_quiet_window_seconds"] = battle_window
+        for key in ("ally_color", "enemy_color"):
+            if key in runtime_state:
+                data[key] = runtime_state.get(key)
         if "broadcast_frequency" in runtime_state:
             data["broadcast_frequency"] = normalize_broadcast_frequency(runtime_state.get("broadcast_frequency"))
         if "broadcast_categories" in runtime_state:
@@ -244,6 +268,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
     # --------------------------------------------------------------- 生命周期
     @lifecycle(id="startup")
     async def startup(self, **_):
+        self._on_demand_controller().configure(False)
         await self._reload_config()
         if self._thread is not None and self._thread.is_alive():
             # The old thread may still be inside a blocking HTTP tick. Starting
@@ -255,6 +280,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         # 不能阻塞宿主事件循环。
         data_layer_status = await asyncio.to_thread(self.data_layer_manager.start_if_needed)
         identity_result = await asyncio.to_thread(self._restore_identity_to_data_layer)
+        await asyncio.to_thread(self._restore_faction_colors_to_data_layer)
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, args=(self._stop,), daemon=True, name="wt-poll"
@@ -282,6 +308,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     def shutdown(self, **_):
+        self._on_demand_controller().configure(False)
         self._startup_completed = False
         self._stop.set()
         if self._thread and self._thread.is_alive():
@@ -298,6 +325,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
     @lifecycle(id="config_change")
     async def on_config_change(self, **_):
         old_connection = (self.cfg.data_layer_url, self.cfg.data_layer_auto_start)
+        old_colors = (self.cfg.ally_color, self.cfg.enemy_color)
         await self._reload_config()
         new_connection = (self.cfg.data_layer_url, self.cfg.data_layer_auto_start)
         data_layer_status = self.data_layer_manager.snapshot()
@@ -307,6 +335,10 @@ class NekoWarthunderPlugin(NekoPluginBase):
             data_layer_status = await asyncio.to_thread(self.data_layer_manager.start_if_needed)
             if data_layer_status.get("health"):
                 identity_result = await asyncio.to_thread(self._restore_identity_to_data_layer)
+                await asyncio.to_thread(self._restore_faction_colors_to_data_layer)
+        elif (getattr(self, "_startup_completed", False)
+              and old_colors != (self.cfg.ally_color, self.cfg.enemy_color)):
+            await asyncio.to_thread(self._restore_faction_colors_to_data_layer)
         return Ok(
             {
                 "status": "reloaded",
@@ -345,17 +377,45 @@ class NekoWarthunderPlugin(NekoPluginBase):
         ctx = getattr(self, "ctx", None)
         bus = getattr(ctx, "bus", None)
         memory = getattr(bus, "memory", None)
-        get_sync = getattr(memory, "get_sync", None)
-        if not callable(get_sync):
+        get_memory = getattr(memory, "get", None)
+        if not callable(get_memory):
+            return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
+
+        # The public SDK adapts get() to the calling thread. Never create an
+        # unawaited coroutine or block its owner loop from this sync helper.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
             return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
 
         try:
-            records = get_sync(target, limit=1, timeout=0.25)
+            records = get_memory(bucket_id=target, limit=1, timeout=0.25)
             record = list(records)[-1] if records else None
+            raw = record
+            # Older SDKs publicly dump {value: host_record}; the host record's
+            # own dump contains its raw mapping. Read those public dumps only,
+            # with a bound for malformed/cyclic wrappers. Fixed SDKs are flat.
+            for _ in range(4):
+                dump = getattr(raw, "dump", None)
+                if callable(dump):
+                    raw = dump()
+                if not isinstance(raw, dict):
+                    break
+                if raw.get("type") and raw["type"] != "user_message":
+                    break
+                if raw.get("type") == "user_message" and "lanlan" in raw:
+                    break
+                if isinstance(raw.get("raw"), dict):
+                    raw = raw["raw"]
+                elif "value" in raw:
+                    raw = raw["value"]
+                else:
+                    break
         except Exception:  # noqa: BLE001 - optional activity hint must never block battle output
             return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
 
-        raw = getattr(record, "raw", record)
         if not isinstance(raw, dict) or str(raw.get("type") or "") != "user_message":
             return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
         if str(raw.get("lanlan") or "").strip() != target:
@@ -365,7 +425,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             observed_at = float(getattr(record, "timestamp", None) or raw.get("_ts") or 0.0)
         except (TypeError, ValueError):
             observed_at = 0.0
-        if observed_at <= 0:
+        if not math.isfinite(observed_at) or observed_at <= 0:
             return str(getattr(self, "_last_user_chat_mode", "unknown") or "unknown")
 
         voice_flag = raw.get("is_voice")
@@ -489,6 +549,20 @@ class NekoWarthunderPlugin(NekoPluginBase):
             self.logger.warning("identity restore to data layer failed")
         return {"ok": restored, "restored": restored, "player_name": name if restored else ""}
 
+    def _restore_faction_colors_to_data_layer(self) -> dict[str, Any]:
+        # 默认色也照发：外部数据层可能还保留着上次设置的自定义颜色。
+        requested = (self.cfg.ally_color, self.cfg.enemy_color)
+        result = request_set_faction_colors(
+            self.cfg.data_layer_url,
+            self.cfg.http_timeout_seconds,
+            ally=requested[0],
+            enemy=requested[1],
+        )
+        applied = bool(result.get("ok")) and requested == (self.cfg.ally_color, self.cfg.enemy_color)
+        self._faction_colors_sync_pending = not applied
+        self._faction_colors_retry_at = time.monotonic() + 5.0 if not applied else 0.0
+        return {"ok": applied, "conflict": bool(result.get("conflict", False))}
+
     # ------------------------------------------------------------------ 轮询
     def _loop(self, stop: threading.Event | None = None) -> None:
         # stop 以参数捕获本线程自己的 Event：startup 换新 Event 后，join 超时遗留的
@@ -514,6 +588,12 @@ class NekoWarthunderPlugin(NekoPluginBase):
         with self._state_lock:
             prev = self.state
             self.state = new_state
+        if new_state.connected and (
+            not prev.connected
+            or (getattr(self, "_faction_colors_sync_pending", False)
+                and time.monotonic() >= getattr(self, "_faction_colors_retry_at", 0.0))
+        ):
+            self._restore_faction_colors_to_data_layer()
         self._sync_game_context(prev, new_state)
         self._evaluate(prev, new_state)
         self._report()
@@ -622,6 +702,8 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 outcome="candidate",
                 reason="detected",
                 event_id=candidate.event_id,
+                trace_id=candidate.naval_trace_id,
+                map_sample_count=(candidate.payload.get("map_sample_count") if candidate.naval_trace_id else None),
                 edge=candidate.edge,
                 level=candidate.level,
                 priority=candidate.priority,
@@ -632,7 +714,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             )
         output_clock_checkpoint = self.safety.output_clock_checkpoint()
         arbiter_checkpoint = self.arbiter.checkpoint()
-        chosen, chain = self.arbiter.decide(candidates, cur.scenario, now)
+        chosen, chain = self.arbiter.decide(candidates, cur.scenario, now, current_state=cur)
         for record in arbiter_chain_to_observe_records(chain, scenario=cur.scenario):
             self.timeline.record_stage(**record)
             self.timeline.record_decision(
@@ -979,6 +1061,173 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "flags": dict(sorted((s.flags or {}).items())),
         }
 
+    @staticmethod
+    def _status_number(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return None
+        return float(value)
+
+    def _vehicle_status_snapshot(self, s: BattleState) -> dict[str, Any]:
+        """Shared read-only availability and source age for vehicle status cards."""
+        number = self._status_number
+        raw = s.raw if isinstance(s.raw, dict) else {}
+        meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+        vehicle_meta = meta.get("vehicle") if isinstance(meta.get("vehicle"), dict) else {}
+        sample_age = number(vehicle_meta.get("age_sec"))
+        sample_age = sample_age if sample_age is not None and sample_age >= 0 else None
+        fast_age = max(0.0, number(s.age_seconds) or 0.0)
+        timestamp = number(s.timestamp) or 0.0
+        # meta 年龄是在收到快照时计算的；context 读取缓存 BattleState 时仍需继续计龄。
+        # timestamp 是 fast 成功/尝试时间，加 fast 年龄才是该 HTTP 快照的观察时间。
+        elapsed = max(0.0, time.time() - timestamp - fast_age) if timestamp > 0 else 0.0
+        if sample_age is not None:
+            sample_age = round(sample_age + elapsed, 3)
+        stale = max(elapsed, fast_age, sample_age or 0.0) > _VEHICLE_STATUS_MAX_AGE_SECONDS
+        if not s.connected or s.conn_state == "offline":
+            status = "offline"
+        elif s.replay:
+            status = "replay"
+        elif not s.in_battle:
+            status = "waiting"
+        elif s.dead:
+            status = "dead"
+        elif stale:
+            status = "stale"
+        elif not s.vehicle_valid:
+            status = "unavailable"
+        else:
+            status = "ready"
+
+        return {"status": status, "sample_age_seconds": sample_age}
+
+    def _ground_status_snapshot(self, s: BattleState) -> dict[str, Any] | None:
+        """Read-only, numeric ground facts; never turn missing or stale data into zero."""
+        if (s.domain or "").lower() != "ground":
+            return None
+        snapshot = self._vehicle_status_snapshot(s)
+
+        def integer(value: Any, *, signed: bool = False) -> int | None:
+            value = self._status_number(value)
+            if value is None or not value.is_integer() or (not signed and value < 0):
+                return None
+            return int(value)
+
+        crew_current, crew_total = integer(s.crew_current), integer(s.crew_total)
+        if crew_total == 0 or (crew_current is not None and crew_total is not None and crew_current > crew_total):
+            crew_current = crew_total = None
+        facts = {
+            "crew_current": crew_current,
+            "crew_total": crew_total,
+            "ammo_first_stage": integer(s.ammo_first_stage),
+            "gun_stabilizer": s.gun_stabilizer if isinstance(s.gun_stabilizer, bool) else None,
+            "gear_position": integer(s.gear_position, signed=True),
+            "gunner_state": integer(s.gunner_state),
+            "driver_state": integer(s.driver_state),
+            "laser_warning_state": integer(s.laser_warning_state, signed=True),
+        }
+        return {**snapshot,
+                **{key: value if snapshot["status"] == "ready" else None for key, value in facts.items()}}
+
+    def _helicopter_status_snapshot(self, s: BattleState) -> dict[str, Any] | None:
+        """Project helicopter instruments only; no VRS, RPM thresholds or output policy."""
+        if (s.domain or "").lower() != "heli":
+            return None
+        snapshot = self._vehicle_status_snapshot(s)
+        facts = {key: self._status_number(getattr(s, key))
+                 for key in ("rotor_rpm", "radio_altitude_m", "vario_ms")}
+        for key in ("rotor_rpm", "radio_altitude_m"):
+            if facts[key] is not None and facts[key] < 0:
+                facts[key] = None
+        return {**snapshot,
+                **{key: value if snapshot["status"] == "ready" else None for key, value in facts.items()}}
+
+    def _map_status_snapshot(self, s: BattleState) -> dict[str, Any]:
+        """Whitelist map facts, independently aged and bound to the sampled life."""
+        number = self._status_number
+        raw = s.raw if isinstance(s.raw, dict) else {}
+        meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+        sample = meta.get("map_objects") if isinstance(meta.get("map_objects"), dict) else {}
+        age, fast_age, timestamp = number(sample.get("age_sec")), number(s.age_seconds), number(s.timestamp)
+        known_age = (age is not None and age >= 0 and fast_age is not None and fast_age >= 0
+                     and timestamp is not None and timestamp > 0)
+        elapsed = max(0.0, time.time() - timestamp - fast_age) if known_age else 0.0
+        sample_age = round(age + elapsed, 3) if known_age else None
+        life = number(sample.get("life_index"))
+        same_life = life is not None and life.is_integer() and life >= 1 and life == s.life_index
+        situation = s.situation if isinstance(s.situation, dict) else {}
+        player = situation.get("player") if isinstance(situation.get("player"), dict) else {}
+        has_position = situation.get("has_player") is True and all(
+            (value := number(player.get(key))) is not None and 0 <= value <= 1 for key in ("x", "y")
+        )
+        if not s.connected or s.conn_state == "offline":
+            status = "offline"
+        elif s.replay:
+            status = "replay"
+        elif not s.in_battle:
+            status = "waiting"
+        elif s.dead:
+            status = "dead"
+        elif known_age and max(age + elapsed, fast_age, elapsed) > _VEHICLE_STATUS_MAX_AGE_SECONDS:
+            status = "stale"
+        elif not known_age or not same_life:
+            status = "unavailable"
+        elif not has_position:
+            status = "no_player"
+        else:
+            status = "ready"
+
+        def count(key: str) -> int | None:
+            value = number(situation.get(key))
+            return int(value) if value is not None and value >= 0 and value.is_integer() else None
+
+        enemy, ally, air = count("enemy_count"), count("ally_count"), count("air_threat_count")
+        if enemy is None or (air is not None and air > enemy):
+            air = None
+        nearest = situation.get("nearest_enemy")
+        nearest = nearest if isinstance(nearest, dict) else {}
+        distance, bearing = number(nearest.get("distance_m")), number(nearest.get("bearing_deg"))
+        map_info = raw.get("map_info") if isinstance(raw.get("map_info"), dict) else {}
+        # wt_geo can fall back to grid_size, which is not the full map scale.
+        # Do not call the first unsortable contact "nearest" without a known world span.
+        bounds = [map_info.get(key) for key in ("map_min", "map_max")]
+        scale_known = map_info.get("valid") is True and all(
+            isinstance(bound, (list, tuple)) and len(bound) == 2
+            and all(number(value) is not None for value in bound) for bound in bounds
+        )
+        if scale_known:
+            scale_known = all(bounds[1][i] > bounds[0][i] for i in (0, 1))
+        contact_known = (scale_known and enemy is not None and enemy > 0
+                         and distance is not None and distance >= 0
+                         and nearest.get("type") in {"aircraft", "ground_model"})
+        facts = {
+            "enemy_count": enemy, "ally_count": ally, "air_contact_count": air,
+            "nearest_type": nearest.get("type") if contact_known else None,
+            "nearest_distance_m": distance if contact_known else None,
+            "nearest_bearing_deg": bearing if contact_known and bearing is not None and 0 <= bearing < 360 else None,
+        }
+        return {"status": status, "sample_age_seconds": sample_age,
+                **{key: value if status == "ready" else None for key, value in facts.items()}}
+
+    def _naval_detection_snapshot(self, s: BattleState) -> dict[str, Any] | None:
+        if s.domain != "naval" and not (s.domain == "unknown" and (s.in_battle or s.situation)):
+            return None
+        source = naval_map_source(s, time.time())
+        detectors = {det.id: det for det in getattr(getattr(self, "engine", None), "detectors", [])
+                     if isinstance(det, NavalContactDetector)}
+        progress = []
+        for event_id in sorted(NAVAL_DRY_RUN_ONLY_EVENTS):
+            det = detectors.get(event_id)
+            row = det.diagnostic(source) if det else {
+                "event_id": event_id, "status": "pending" if source.sample else "blocked", "hits": 0, "required": 2}
+            if not self.cfg.enabled:
+                row = {**row, "status": "disabled", "hits": 0}
+            trace_id = row.pop("trace_id", None)
+            row["result"] = self.timeline.naval_result(event_id, trace_id) if self.cfg.enabled and trace_id else None
+            progress.append(row)
+        return {"source_status": source.reason, "sample_age_seconds": source.sample_age_seconds,
+                "map_sample_count": source.sample[2] if source.sample else None,
+                "detection_enabled": bool(self.cfg.enabled), "real_output_enabled": False, "detectors": progress}
+
     def _takeoff_protection_snapshot(self, s: BattleState) -> dict[str, Any]:
         # 只读同一套判定，不推进 AGL 迟滞状态机（那是抑制路径的职责）。
         flags = self._takeoff_grace_flags(s, time.time(), advance_state=False)
@@ -1033,6 +1282,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         }
 
     def _dashboard_payload(self, s: BattleState) -> dict[str, Any]:
+        naval_inventory = snapshot_naval_instrument_fields(s, time.time())
         identity = identity_summary_from_combat(s.combat)
         saved_player_name = str(self.cfg.player_name or "").strip()
         runtime_state = self._load_runtime_state()
@@ -1040,7 +1290,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         if saved_player_name:
             identity["saved_player_name"] = saved_player_name
             identity["player_name"] = identity.get("player_name") or saved_player_name
-        return {
+        payload = {
             "enabled": self.cfg.enabled,
             "dry_run": self.cfg.dry_run,
             "connected": s.connected,
@@ -1050,6 +1300,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "dead": s.dead,
             "domain": s.domain,
             "domain_label": s.domain_label,
+            "domain_source": s.domain_source,
             "vehicle_type": s.vehicle_type,
             "profile_matched": s.profile_matched,
             "profile_source": s.profile_source,
@@ -1062,12 +1313,29 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 "trigger": "first_plugin_start",
             },
             "identity": identity,
+            "faction_colors": {
+                "ally_color": self.cfg.ally_color,
+                "enemy_color": self.cfg.enemy_color,
+                "default_ally_color": DEFAULT_ALLY_COLOR,
+                "default_enemy_color": DEFAULT_ENEMY_COLOR,
+            },
             "data_layer": self.data_layer_manager.snapshot(),
             "telemetry": self._telemetry_snapshot(s),
+            "ground_status": self._ground_status_snapshot(s),
+            "helicopter_status": self._helicopter_status_snapshot(s),
+            "naval_status": self._map_status_snapshot(s) if s.domain == "naval" else None,
+            "map_status": (self._map_status_snapshot(s) if s.domain == "unknown" and (s.in_battle or s.situation) else None),
+            "naval_detection": self._naval_detection_snapshot(s),
+            "naval_instrument_fields": naval_inventory,
+            "naval_static_reference": snapshot_naval_static_reference(s, naval_inventory),
             "takeoff_protection": self._takeoff_protection_snapshot(s),
             "output_policy": {
                 "v2_live_verified_real_output_enabled": self.cfg.v2_live_verified_real_output_enabled,
                 "v2_live_evidence_gated_events": ["enemy_on_six", "tailing_risk", "ground_target_nearby"],
+                "ground_status_real_output_enabled": self.cfg.ground_status_real_output_enabled,
+                "ground_status_gated_events": sorted(GROUND_STATUS_GATED_EVENTS),
+                "helicopter_dry_run_only_events": sorted(HELICOPTER_DRY_RUN_ONLY_EVENTS),
+                "naval_dry_run_only_events": sorted(NAVAL_DRY_RUN_ONLY_EVENTS),
                 "dialogue_intrusion_mode": self._dialogue_intrusion_mode(),
                 "user_chat_quiet_window_seconds": self.cfg.user_chat_quiet_window_seconds,
                 "battle_output_quiet_window_seconds": self.cfg.battle_output_quiet_window_seconds,
@@ -1079,7 +1347,27 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "awareness": self._awareness_snapshot(s),
             "safety": self.safety.snapshot(),
             "observe": self.timeline.snapshot(),
+            "on_demand": self._on_demand_controller().snapshot(),
         }
+        # Reuse the same domain cards; the summary never feeds detectors or dispatches.
+        # The extra source is internal input, not another public telemetry payload.
+        payload["trusted_facts"] = snapshot_trusted_facts(
+            s, {**payload, "vehicle_source": self._vehicle_status_snapshot(s)}, time.time())
+        payload["ground_ammo_explanation"] = snapshot_ground_ammo_explanation(s, payload["trusted_facts"])
+        payload["flight_diagnostics"] = snapshot_flight_diagnostics(s, payload["trusted_facts"], time.time())
+        return payload
+
+    def _on_demand_controller(self) -> OnDemandExplanation:
+        controller = getattr(self, "_on_demand", None)
+        if controller is None:  # Compatibility with lightweight SDK/test instances.
+            controller = OnDemandExplanation(self, self._on_demand_facts, current_host_role)
+            self._on_demand = controller
+        return controller
+
+    def _on_demand_facts(self) -> dict[str, Any]:
+        with self._state_lock:
+            state = self.state
+        return self._dashboard_payload(state)["trusted_facts"]
 
     # -------------------------------------------------------------- Hosted UI
     @ui.context(id="dashboard", title="战雷猫娘副驾驶")
@@ -1089,6 +1377,17 @@ class NekoWarthunderPlugin(NekoPluginBase):
         return self._dashboard_payload(s)
 
     # ------------------------------------------------------------------ 动作
+    @ui.action(id="set_on_demand_explanation", label="会话按需解释", group="runtime", order=19,
+               confirm="仅本次会话绑定当前角色。工具定义和结果增加对话 token；普通回复可能按宿主设置发声，战斗播报开关不变。")
+    @plugin_entry(id="set_on_demand_explanation", name="会话按需解释", timeout=2,
+                  description="供面板显式启用/停用只读解释，不是模型查询入口，不保存设置。",
+                  input_schema={"type": "object", "properties": {"enabled": {"type": "boolean"}},
+                                "required": ["enabled"], "additionalProperties": False})
+    async def set_on_demand_explanation(self, enabled: bool = False, **kwargs):
+        if not isinstance(enabled, bool) or set(kwargs) - {"_ctx"}:
+            return Ok({"ok": False, "reason": "INVALID_ARGUMENTS"})
+        return Ok(self._on_demand_controller().configure(enabled))
+
     @ui.action(id="set_dry_run", label="设置 dry_run", tone="primary", group="runtime", order=10, refresh_context=True)
     @plugin_entry(
         id="set_dry_run",
@@ -1334,6 +1633,50 @@ class NekoWarthunderPlugin(NekoPluginBase):
                         combat[key] = result.get(key)
                 self.state.combat = combat
         return Ok({"identity": result})
+
+    @ui.action(id="set_faction_colors", label="设置敌我颜色", tone="primary", group="runtime", order=55, refresh_context=True)
+    @plugin_entry(
+        id="set_faction_colors",
+        name="设置敌我颜色",
+        description="同步游戏设置里的小地图队友/敌人颜色（#RRGGBB），数据层据此判断单位阵营；reset=true 恢复默认蓝/红。",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ally_color": {"type": "string", "default": DEFAULT_ALLY_COLOR},
+                "enemy_color": {"type": "string", "default": DEFAULT_ENEMY_COLOR},
+                "reset": {"type": "boolean", "default": False},
+            },
+        },
+    )
+    async def set_faction_colors(
+        self,
+        ally_color: str = DEFAULT_ALLY_COLOR,
+        enemy_color: str = DEFAULT_ENEMY_COLOR,
+        reset: bool = False,
+        **_,
+    ):
+        if reset:
+            ally, enemy = DEFAULT_ALLY_COLOR, DEFAULT_ENEMY_COLOR
+        else:
+            ally = normalize_hex_color(ally_color, "")
+            enemy = normalize_hex_color(enemy_color, "")
+            if not ally or not enemy:
+                return Err(SdkError("invalid color, expected #RRGGBB"))
+        # 数据层未运行时也先保存，下次启动/重连时恢复。
+        self.cfg.ally_color = ally
+        self.cfg.enemy_color = enemy
+        self._save_runtime_state({"ally_color": ally, "enemy_color": enemy})
+        result = await asyncio.to_thread(self._restore_faction_colors_to_data_layer)
+        return Ok(
+            {
+                "faction_colors": {
+                    "ally_color": ally,
+                    "enemy_color": enemy,
+                    "conflict": bool(result.get("conflict", False)),
+                    "applied": bool(result.get("ok")),
+                }
+            }
+        )
 
     @ui.action(id="complete_onboarding", label="完成新手教程", tone="primary", group="runtime", order=60, refresh_context=True)
     @plugin_entry(

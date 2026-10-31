@@ -59,6 +59,105 @@ type TelemetryState = {
   flags?: Record<string, boolean>
 }
 
+type FlightDiagnosticsState = {
+  oil: { status: string; max_c: number | null; observed_channels: number; unavailable_channels: number }
+  fuel_estimate: { status: string; burn_kgs: number | null; remaining_sec: number | null;
+    age_sec: number | null; max_age_sec: number | null }
+}
+
+const FLIGHT_SOURCE_LABELS: Record<string, string> = {
+  ready: "可用", partial: "部分通道可用", waiting: "等待有效数据", stale: "已过期，收起估算",
+  unavailable: "暂无有效数据", unknown_age: "来源时间未知", invalid_clock: "来源时钟异常",
+  offline: "离线", dead: "已阵亡", replay: "回放中",
+}
+
+type TrustedFactsState = {
+  version: number
+  readonly: boolean
+  domain: string
+  status: string
+  sources: { id: string; status: string; age_seconds: number | null; life_binding: string }[]
+  facts: { id: string; source: string; status: string; value: number | boolean | null; total?: number | null }[]
+  capabilities: string[]
+  limits: string[]
+  output: { mode: string; ground_status_enabled: boolean; v2_enabled: boolean }
+}
+
+type OnDemandState = {
+  enabled?: boolean
+  status?: string
+  role?: string | null
+  supported?: boolean
+  cleanup_pending?: boolean
+}
+
+type GroundStatusState = {
+  status?: string
+  sample_age_seconds?: number | null
+  crew_current?: number | null
+  crew_total?: number | null
+  ammo_first_stage?: number | null
+  gun_stabilizer?: boolean | null
+  gear_position?: number | null
+  gunner_state?: number | null
+  driver_state?: number | null
+  laser_warning_state?: number | null
+}
+
+type HelicopterStatusState = {
+  status?: string
+  sample_age_seconds?: number | null
+  rotor_rpm?: number | null
+  radio_altitude_m?: number | null
+  vario_ms?: number | null
+}
+
+type NavalStatusState = {
+  status?: string
+  sample_age_seconds?: number | null
+  enemy_count?: number | null
+  ally_count?: number | null
+  air_contact_count?: number | null
+  nearest_type?: string | null
+  nearest_distance_m?: number | null
+  nearest_bearing_deg?: number | null
+}
+
+type NavalDetectionState = {
+  source_status?: string
+  sample_age_seconds?: number | null
+  map_sample_count?: number | null
+  detection_enabled?: boolean
+  real_output_enabled?: boolean
+  detectors?: { event_id: string; status: string; hits: number; required: number; result?: NavalDetectionResult | null }[]
+}
+
+type NavalResultRecord = { stage: string; reason: string; ts?: string; map_sample_count?: number }
+type NavalDetectionResult = { candidate?: NavalResultRecord | null; decision?: NavalResultRecord | null; output?: NavalResultRecord | null }
+
+type NavalInstrumentFields = {
+  source_status?: string
+  response_age_seconds?: number | null
+  sampling_status?: string
+  sample_age_seconds?: number | null
+  sample_count?: number | null
+  sample_life_bound?: boolean
+  fields?: { id: string; status: string }[]
+}
+
+type NavalStaticReference = {
+  status: string
+  source?: { repository: string; ref: string; version: string } | null
+  indexed_files: number
+  vehicle?: { id: string; blob_sha: string; type_code?: string | null; engine_entry_count?: number | null; propulsion_count?: number | null;
+    crew_station_count?: number | null; crew_distribution_total?: number | null;
+    configuration?: { status: string; base_status: string; declared_count: number; common_definition_count: number;
+      local_override_count: number; template_reference_count: number; explicit_empty_block_count: number;
+      missing_common_definition_count: number; missing_dependency_count: number; cycle_node_count: number;
+      missing_template_count: number; uninterpreted_effect_value_count: number } } | null
+  field_mapping: { id: string; raw_key: string; normalized_key: string; static_paths: string[]; relation: string }[]
+}
+
 type TakeoffProtectionState = {
   active?: boolean
   radio_altitude_m?: number | null
@@ -119,6 +218,7 @@ type AwarenessState = {
 }
 
 type OutputPolicyState = {
+  ground_status_real_output_enabled?: boolean
   dialogue_intrusion_mode?: string | null
   user_chat_quiet_window_seconds?: number | null
   battle_output_quiet_window_seconds?: number | null
@@ -134,6 +234,13 @@ type OnboardingState = {
   trigger?: string
 }
 
+type FactionColorsState = {
+  ally_color?: string
+  enemy_color?: string
+  default_ally_color?: string
+  default_enemy_color?: string
+}
+
 type DashboardState = {
   enabled?: boolean
   dry_run?: boolean
@@ -144,6 +251,7 @@ type DashboardState = {
   dead?: boolean
   domain?: string
   domain_label?: string | null
+  domain_source?: string
   vehicle_type?: string | null
   profile_matched?: boolean | null
   profile_source?: string | null
@@ -152,8 +260,20 @@ type DashboardState = {
   level?: string
   onboarding?: OnboardingState
   identity?: IdentityState
+  faction_colors?: FactionColorsState
   data_layer?: DataLayerState
   telemetry?: TelemetryState
+  flight_diagnostics?: FlightDiagnosticsState | null
+  trusted_facts?: TrustedFactsState
+  on_demand?: OnDemandState
+  ground_status?: GroundStatusState | null
+  ground_ammo_explanation?: { status: string } | null
+  helicopter_status?: HelicopterStatusState | null
+  naval_status?: NavalStatusState | null
+  map_status?: NavalStatusState | null
+  naval_detection?: NavalDetectionState | null
+  naval_instrument_fields?: NavalInstrumentFields | null
+  naval_static_reference?: NavalStaticReference | null
   takeoff_protection?: TakeoffProtectionState
   output_policy?: OutputPolicyState
   awareness?: AwarenessState
@@ -261,6 +381,12 @@ const BROADCAST_CATEGORY_OPTIONS = [
 ]
 
 const EVENT_LABELS: Record<string, string> = {
+  ground_crew_loss: "乘员减员",
+  ground_ammo_low: "待发弹偏少",
+  heli_vrs_risk: "直升机涡环风险",
+  naval_map_contact: "海战水面/地面图标出现",
+  naval_air_contact: "海战空中图标出现",
+  ground_ammo_empty: "待发弹打空",
   spawn: "进入战斗",
   battle_end: "战斗结束",
   you_killed: "确认击毁",
@@ -367,6 +493,20 @@ const PANEL_STYLES = `
   .wt-health[data-tone="danger"] .wt-health-mark { border-color: #d94747; }
   .wt-health-title { margin: 0; font-size: 18px; font-weight: 700; }
   .wt-health-detail { margin: 8px 0 0; color: var(--wt-muted-soft); font-size: 15px; line-height: 1.55; }
+  .wt-vehicle-status { margin: 22px 0 0; padding: 18px 20px; border: 1px solid var(--wt-border); border-radius: 8px; background: var(--wt-surface); }
+  .wt-naval-results { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--wt-border); font-weight: 400; }
+  .wt-naval-results ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  .wt-naval-results li + li { margin-top: 10px; }
+  .wt-naval-results strong { display: block; margin-bottom: 4px; font-size: 12px; }
+  .wt-vehicle-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .wt-vehicle-heading h3 { margin: 0; font-size: 17px; }
+  .wt-vehicle-detail, .wt-vehicle-note { color: var(--wt-muted-soft); font-size: 13px; line-height: 1.6; }
+  .wt-vehicle-detail { margin: 10px 0 0; }
+  .wt-vehicle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 16px; margin: 18px 0; }
+  .wt-vehicle-stat { min-width: 0; }
+  .wt-vehicle-stat dt { margin: 0 0 5px; color: var(--wt-muted-soft); font-size: 13px; }
+  .wt-vehicle-stat dd { margin: 0; color: var(--wt-text); font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+  .wt-vehicle-note { margin: 6px 0 0; }
   .wt-identity { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 28px 0 8px; }
   .wt-identity-name { margin: 0; font-size: 18px; font-weight: 700; }
   .wt-identity-meta { margin: 7px 0 0; color: var(--wt-muted-soft); font-size: 15px; }
@@ -464,6 +604,8 @@ const PANEL_STYLES = `
   .wt-settings-copy p { margin: 0; color: var(--wt-muted-soft); font-size: 14px; line-height: 1.5; }
   .wt-settings-control { display: flex; justify-content: flex-end; }
   .wt-settings-control.is-wide { width: min(100%, 430px); }
+  .wt-color-row { display: flex; gap: 16px; }
+  .wt-color-row input[type="color"] { width: 72px; height: 36px; padding: 2px; cursor: pointer; }
   .wt-frequency-control { display: grid; grid-template-columns: repeat(3, minmax(72px, 1fr)); width: 100%; }
   .wt-category-list { display: grid; width: 100%; border-top: 1px solid var(--wt-border); }
   .wt-category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; min-height: 58px; border-bottom: 1px solid var(--wt-border); }
@@ -790,6 +932,18 @@ function activityStatus(record: ObserveRecord): { status: string; tone: PanelTon
   if (outputWasPushed(record)) {
     return { status: "已交给猫娘", tone: "success", kind: "delivered", detail: "请求已经提交给猫娘，等待宿主继续处理。" }
   }
+  if (reason === "heli_vrs_dry_run_only") {
+    return { status: "直升机风险仅记录", tone: "info", kind: "suppressed", detail: "涡环风险目前只验证检测与决策，不产生语音播报。" }
+  }
+  if (reason === "naval_dry_run_only") {
+    return { status: "海战态势仅记录", tone: "info", kind: "suppressed", detail: "海战地图图标事件目前仅作 dry-run 观察，真实输出保持关闭。" }
+  }
+  if (reason === "naval_contact_cleared") {
+    return { status: "海战态势记录已失效", tone: "default", kind: "suppressed", detail: "地图接触、来源时效或生命已变化，旧记录已撤销。" }
+  }
+  if (reason === "heli_vrs_condition_cleared") {
+    return { status: "直升机风险记录已失效", tone: "default", kind: "suppressed", detail: "最新数据已不再确认该等级的涡环风险，旧记录已撤销。" }
+  }
   if (stage === "dispatcher_dry_run" || record.dry_run === true || outcome === "dry_run") {
     return { status: "仅记录", tone: "info", kind: "recorded", detail: "插件已识别该事件，当前不会提交语音。" }
   }
@@ -816,6 +970,15 @@ function activityStatus(record: ObserveRecord): { status: string; tone: PanelTon
   }
   if (reason === "free_text_dry_run_only" || reason === "free_text_blocked") {
     return { status: "仅安全观察", tone: "info", kind: "recorded", detail: "检测到自由文本来源，但不会读取或播报原文。" }
+  }
+  if (reason === "ground_status_output_disabled") {
+    return { status: "陆战状态未开启", tone: "info", kind: "suppressed", detail: "乘员减员、待发弹偏少或打空提醒默认只记录，允许陆战状态播报后才会出声。" }
+  }
+  if (reason === "ground_ammo_condition_cleared") {
+    return { status: "弹药状态已变化", tone: "default", kind: "suppressed", detail: "当前待发弹状态已不再符合这条提醒，旧提醒已撤销。" }
+  }
+  if (reason === "ground_laser_condition_cleared") {
+    return { status: "激光告警已失效", tone: "default", kind: "suppressed", detail: "最新数据已不再确认激光告警，旧提醒已撤销。" }
   }
   if (reason === "v2_live_evidence_pending") {
     return { status: "等待真机验证", tone: "info", kind: "suppressed", detail: "该提醒仍处于验证阶段，本次只保留安全记录。" }
@@ -866,6 +1029,9 @@ function buildActivityItems(state: DashboardState, limit = 5): ActivityItem[] {
 
   for (const fallback of [observe.last_output_status, observe.last_decision, observe.last_event]) {
     if (!fallback) continue
+    // last_event 只有事件名；已有带结果的历史记录时，不再凭它补一条“已识别”。
+    if (!fallback.stage && !fallback.outcome && !fallback.reason
+        && candidates.some((record) => record.event_id === fallback.event_id)) continue
     const duplicate = candidates.some((record) =>
       record.event_id === fallback.event_id
       && record.stage === fallback.stage
@@ -1005,12 +1171,477 @@ function diagnosticGuidance(state: DashboardState, kind: string): string {
   return "点击“测试开口”可独立验证猫娘接收和声音输出，不需要先进入战局或开启战斗播报。"
 }
 
+function groundStationText(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return "暂无数据"
+  const labels: Record<number, string> = { 0: "正常", 1: "岗位空缺", 2: "正在补位" }
+  return labels[value] || `待确认（${value}）`
+}
+
+function TrustedFactsCard(props: { facts: TrustedFactsState; openActivity: () => void }) {
+  const summary = props.facts
+  const statuses: Record<string, string> = {
+    ready: "事实已读取", partial: "部分事实可用", unavailable: "等待可信数据", offline: "连接已断开",
+    waiting: "等待进场", dead: "已阵亡，收起旧事实", replay: "回放期间不展示事实",
+    stale: "来源已过期", no_player: "缺少自身位置", unknown_age: "采样时间未知", invalid_clock: "采样时间异常",
+  }
+  const capabilities: Record<string, string> = {
+    flight_safety: "飞行安全提醒", owned_combat: "我方战果反馈", air_awareness: "有限空中态势",
+    ground_status: "乘员与待发弹状态", laser_warning: "激光告警观察", heli_instruments: "直升机仪表",
+    vrs_dry_run: "VRS 仅检测记录", map_observation: "地图可见图标观察", naval_dry_run: "海战图标仅检测记录",
+    static_reference: "舰艇静态资料参考", generic_map: "通用地图观察",
+  }
+  const limits: Record<string, string> = {
+    agl_not_msl: "离地高度与海拔分开显示。", v2_gated: "后方、尾随和任务点提醒沿用 V2 输出开关。",
+    ready_rack_only: "一级待发弹不代表全车余弹。", roles_readonly: "岗位状态只读，尚无岗位播报。",
+    laser_not_missile: "激光告警不等于已确认导弹来袭。", vrs_no_speech: "VRS 只记录，不真实播报。",
+    no_rotor_alarm: "旋翼转速不生成告警。", map_icons_only: "地图只反映可见图标，不确认敌舰、空袭或锁定。",
+    naval_values_hidden: "舰艇仪表语义未验证，暂不显示读数。", static_not_effective: "静态声明不代表当前安装或生效参数。",
+    domain_unconfirmed: "载具域未确认，不借用其他域的仪表。",
+  }
+  const labels: Record<string, string> = {
+    ias_kmh: "指示空速", mach: "马赫数", radio_altitude_m: "离地高度（AGL）", altitude_m: "海拔高度（MSL）",
+    fuel_fraction: "燃油余量", crew_current: "乘员", ammo_first_stage: "一级待发弹", laser_warning_state: "激光告警器",
+    gun_stabilizer: "火炮稳定器", gear_position: "档位", rotor_rpm: "旋翼转速", vario_ms: "升降速度",
+    enemy_count: "敌方可见图标", ally_count: "友方可见图标", air_contact_count: "敌方空中图标",
+    nearest_distance_m: "最近敌方图标平面距离", nearest_bearing_deg: "图标绝对方位",
+  }
+  const valueText = (fact: TrustedFactsState["facts"][number]) => {
+    if (fact.status !== "available") return fact.status === "unknown" ? "未知" : "暂不可用"
+    if (fact.id === "gun_stabilizer" && typeof fact.value === "boolean") return fact.value ? "开启" : "关闭"
+    if (typeof fact.value !== "number" || !Number.isFinite(fact.value)) return "未知"
+    if (fact.id === "crew_current") return typeof fact.total === "number" ? `${fact.value} / ${fact.total} 人` : "未知"
+    if (fact.id === "laser_warning_state") return groundLaserText(fact.value)
+    if (fact.id === "gear_position") return fact.value === 0 ? "空挡" : `${fact.value > 0 ? "前进" : "倒车"} ${Math.abs(fact.value)} 挡`
+    if (fact.id === "fuel_fraction") return `${(fact.value * 100).toFixed(1)}%`
+    const units: Record<string, string> = { ias_kmh: " km/h", radio_altitude_m: " m", altitude_m: " m",
+      ammo_first_stage: " 发", rotor_rpm: " rpm", vario_ms: " m/s", nearest_distance_m: " m", nearest_bearing_deg: "°" }
+    return numberText(fact.value, units[fact.id] || "", fact.id.endsWith("count") || fact.id === "ammo_first_stage" ? 0 : 1)
+  }
+  const modes: Record<string, string> = { disabled: "检测已停用", paused: "战斗播报已暂停", dry_run: "战斗播报仅记录",
+    existing_policy: "战斗播报仍受现有仲裁、偏好与开关约束" }
+  return (
+    <section className="wt-vehicle-status" role="region" aria-label="可信事实摘要" data-trusted-domain={summary.domain} data-trusted-status={summary.status}>
+      <div className="wt-vehicle-heading">
+        <h3>可信事实摘要 · {mappedText(summary.domain, DOMAIN_LABELS)}</h3>
+        <StatusBadge tone={summary.status === "ready" ? "success" : "info"} label={statuses[summary.status] || "等待可信数据"} />
+      </div>
+      <p className="wt-vehicle-detail">可帮助：{summary.capabilities.map(code => capabilities[code]).filter(Boolean).join("、") || "等待确认载具域"}。以下仅为只读事实，不代表提醒已触发。</p>
+      {summary.sources.map(source => (
+        <p className="wt-vehicle-note" key={source.id} data-trusted-source={source.status}>
+          来源：{source.id === "map" ? "地图采样" : "载具采样"} · {statuses[source.status] || "等待数据"}
+          {typeof source.age_seconds === "number" && Number.isFinite(source.age_seconds) ? ` · ${source.age_seconds.toFixed(1)} 秒前` : " · 时间未知"}
+          {source.life_binding === "sample" ? " · 已核对当前出场" : " · 独立出场归属未确认"}
+        </p>
+      ))}
+      <dl className="wt-vehicle-grid">
+        {summary.facts.filter(fact => labels[fact.id]).map(fact => (
+          <div key={fact.id} className="wt-vehicle-stat" data-trusted-fact={fact.id} data-trusted-fact-status={fact.status}>
+            <dt>{labels[fact.id]}</dt><dd>{valueText(fact)}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="wt-vehicle-note">{summary.limits.map(code => limits[code]).filter(Boolean).join(" ")}</p>
+      <p className="wt-vehicle-note">本摘要不发声。{modes[summary.output.mode] || "输出策略未知"}。
+        {summary.domain === "ground" ? `乘员/弹药真实输出开关：${summary.output.ground_status_enabled ? "开启" : "关闭"}；激光沿用原策略。` : ""}
+        {summary.domain === "air" ? `受限 V2 真实输出开关：${summary.output.v2_enabled ? "开启" : "关闭"}。` : ""}
+      </p>
+      <Button className="wt-link-action" onClick={props.openActivity}>查看活动与未播原因</Button>
+    </section>
+  )
+}
+
+function groundLaserText(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isInteger(value)) return "暂无数据"
+  const labels: Record<number, string> = { [-1]: "无设备", 0: "待机", 1: "正在告警", 2: "设备损坏" }
+  return labels[value] || `待确认（${value}）`
+}
+
+function GroundStatusCard(props: {
+  ground: GroundStatusState; dryRun: boolean; realOutput: boolean; explanation?: { status: string } | null
+}) {
+  const ground = props.ground
+  const states: Record<string, { label: string; detail: string; tone: PanelTone }> = {
+    ready: { label: "已读取", detail: "显示最近一次采样的载具状态。", tone: "success" },
+    waiting: { label: "等待进场", detail: "进入陆战后显示当前载具状态。", tone: "info" },
+    unavailable: { label: "等待数据", detail: "暂未取得有效载具数据，未知值不会当作零。", tone: "info" },
+    stale: { label: "数据过期", detail: "等待新的载具采样，暂不显示旧车状态。", tone: "warning" },
+    offline: { label: "已断开", detail: "数据连接已断开，等待恢复。", tone: "warning" },
+    dead: { label: "已阵亡", detail: "阵亡期间收起旧车状态，重生后重新读取。", tone: "info" },
+    replay: { label: "回放已暂停", detail: "回放期间不显示可能失真的载具状态。", tone: "info" },
+  }
+  const summary = states[ground.status || "unavailable"] || states.unavailable
+  const ready = ground.status === "ready"
+  const crew = ready && Number.isInteger(ground.crew_current) && Number.isInteger(ground.crew_total)
+    && typeof ground.crew_current === "number" && typeof ground.crew_total === "number"
+    && ground.crew_total > 0 && ground.crew_current >= 0 && ground.crew_current <= ground.crew_total
+    ? `${ground.crew_current} / ${ground.crew_total} 人` : "暂无数据"
+  const ammo = ready && typeof ground.ammo_first_stage === "number" && Number.isInteger(ground.ammo_first_stage)
+    && ground.ammo_first_stage >= 0
+    ? `${ground.ammo_first_stage} 发` : "暂无数据"
+  const gear = ready && typeof ground.gear_position === "number" && Number.isInteger(ground.gear_position)
+    ? ground.gear_position > 0 ? `前进 ${ground.gear_position} 挡`
+      : ground.gear_position < 0 ? `倒车 ${Math.abs(ground.gear_position)} 挡` : "空挡"
+    : "暂无数据"
+  const stabilizer = ready && typeof ground.gun_stabilizer === "boolean"
+    ? ground.gun_stabilizer ? "开启" : "关闭" : "暂无数据"
+  const explanations: Record<string, string> = {
+    source_unavailable: "当前来源不可用于解释，等待新数据。",
+    count_unknown: "当前一级待发弹数量未知，不能当作零发。",
+    conflicting: "当前数量或标记无法一致解释，暂不作判断。",
+    zero_unconfirmed: "当前读数为 0，未取得一致的耗尽标记；不能据此判定全车无弹。",
+    empty_flagged: "当前读数为 0，数据层给出待发弹耗尽标记；不代表全车无弹或已经播报。",
+    low_flagged: "当前读到待发弹，数据层给出偏少标记；不能据此推算满弹容量或剩余开火次数。",
+    observed_count: "当前已读到待发弹，未取得一致的偏少或耗尽标记；不代表弹量充足或已补满。",
+  }
+  const explanationCode = ready && Object.prototype.hasOwnProperty.call(explanations, props.explanation?.status || "")
+    ? props.explanation!.status : "source_unavailable"
+  const rows = [
+    { key: "crew", label: "乘员", value: crew },
+    { key: "ammo", label: "一级待发弹", value: ammo },
+    { key: "stabilizer", label: "火炮稳定器", value: stabilizer },
+    { key: "gear", label: "档位", value: gear },
+    { key: "gunner", label: "炮手岗位", value: ready ? groundStationText(ground.gunner_state) : "暂无数据" },
+    { key: "driver", label: "驾驶员岗位", value: ready ? groundStationText(ground.driver_state) : "暂无数据" },
+    { key: "laser", label: "激光告警器", value: ready ? groundLaserText(ground.laser_warning_state) : "暂无数据" },
+  ]
+  return (
+    <section className="wt-vehicle-status" role="region" aria-label="陆战状态">
+      <div className="wt-vehicle-heading">
+        <h3>陆战状态</h3>
+        <StatusBadge tone={summary.tone} label={summary.label} />
+      </div>
+      <p className="wt-vehicle-detail">{summary.detail}</p>
+      <p className="wt-vehicle-note">
+        {typeof ground.sample_age_seconds === "number" && Number.isFinite(ground.sample_age_seconds) && ground.sample_age_seconds >= 0
+          ? `最近载具采样：${ground.sample_age_seconds.toFixed(1)} 秒前` : "载具采样时间未知"}
+      </p>
+      <dl className="wt-vehicle-grid">
+        {rows.map((row) => <div key={row.key} className="wt-vehicle-stat"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}
+      </dl>
+      <p className="wt-vehicle-note">一级待发弹不代表全车弹药；未知岗位状态保留编号。</p>
+      <p className="wt-vehicle-note" data-ammo-explanation={explanationCode}>
+        待发弹说明：{explanations[explanationCode]} 检测候选与输出结果请在活动页对照。
+      </p>
+      {ready && ground.laser_warning_state === 1 && (
+        <p className="wt-vehicle-note" role="status">最近采样检测到激光告警，注意观察并寻找掩体；不能据此确认导弹来袭。</p>
+      )}
+      <p className="wt-vehicle-note">乘员与弹药提醒：{!props.dryRun && props.realOutput ? "已允许播报" : "仅记录"}。</p>
+    </section>
+  )
+}
+
+function HelicopterStatusCard(props: { helicopter: HelicopterStatusState }) {
+  const helicopter = props.helicopter
+  const states: Record<string, { label: string; detail: string; tone: PanelTone }> = {
+    ready: { label: "已读取", detail: "显示最近一次采样的直升机仪表数据。", tone: "success" },
+    waiting: { label: "等待进场", detail: "进入直升机战局后显示当前载具状态。", tone: "info" },
+    unavailable: { label: "等待数据", detail: "暂未取得有效载具数据，未知值不会当作零。", tone: "info" },
+    stale: { label: "数据过期", detail: "等待新的载具采样，暂不显示旧仪表数据。", tone: "warning" },
+    offline: { label: "已断开", detail: "数据连接已断开，等待恢复。", tone: "warning" },
+    dead: { label: "已阵亡", detail: "阵亡期间收起旧仪表数据，重生后重新读取。", tone: "info" },
+    replay: { label: "回放已暂停", detail: "回放期间不显示可能失真的载具状态。", tone: "info" },
+  }
+  const summary = states[helicopter.status || "unavailable"] || states.unavailable
+  const ready = helicopter.status === "ready"
+  const instrument = (value: number | null | undefined, unit: string, signed = false) =>
+    ready && typeof value === "number" && Number.isFinite(value) && (signed || value >= 0)
+      ? numberText(value, ` ${unit}`, 1) : "暂无数据"
+  const rows = [
+    { key: "rotor", label: "旋翼转速", value: instrument(helicopter.rotor_rpm, "rpm") },
+    { key: "agl", label: "离地高度（AGL）", value: instrument(helicopter.radio_altitude_m, "m") },
+    { key: "vario", label: "升降速度", value: instrument(helicopter.vario_ms, "m/s", true) },
+  ]
+  return (
+    <section className="wt-vehicle-status" role="region" aria-label="直升机状态">
+      <div className="wt-vehicle-heading">
+        <h3>直升机状态</h3>
+        <StatusBadge tone={summary.tone} label={summary.label} />
+      </div>
+      <p className="wt-vehicle-detail">{summary.detail}</p>
+      <p className="wt-vehicle-note">
+        {typeof helicopter.sample_age_seconds === "number" && Number.isFinite(helicopter.sample_age_seconds)
+          && helicopter.sample_age_seconds >= 0
+          ? `最近载具采样：${helicopter.sample_age_seconds.toFixed(1)} 秒前` : "载具采样时间未知"}
+      </p>
+      <dl className="wt-vehicle-grid">
+        {rows.map((row) => <div key={row.key} className="wt-vehicle-stat"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}
+      </dl>
+      <p className="wt-vehicle-note">升降速度为负表示下降；离地高度不等于海拔高度。</p>
+      <p className="wt-vehicle-note">仅显示仪表数据，不触发旋翼转速或涡环风险播报。</p>
+    </section>
+  )
+}
+
+function MapStatusCard(props: { naval: NavalStatusState; confirmedNaval: boolean }) {
+  const naval = props.naval
+  const title = props.confirmedNaval ? "海战地图态势" : "地图态势（载具未确认）"
+  const states: Record<string, { label: string; detail: string; tone: PanelTone }> = {
+    ready: { label: "已读取", detail: "显示本次生命内最近成功采样的地图态势。", tone: "success" },
+    waiting: { label: "等待进场", detail: "进入战局并取得自身地图位置后显示态势。", tone: "info" },
+    unavailable: { label: "等待数据", detail: "等待本次生命的新地图采样，未知值不会当作零。", tone: "info" },
+    no_player: { label: "自身位置未知", detail: "地图尚未定位自身，暂不显示相对态势。", tone: "info" },
+    stale: { label: "数据过期", detail: "等待新的地图采样，暂不显示旧图标数据。", tone: "warning" },
+    offline: { label: "已断开", detail: "数据连接已断开，等待恢复。", tone: "warning" },
+    dead: { label: "已阵亡", detail: "阵亡期间收起地图态势，重生后重新采样。", tone: "info" },
+    replay: { label: "回放已暂停", detail: "回放期间不显示可能失真的地图态势。", tone: "info" },
+  }
+  const summary = states[naval.status || "unavailable"] || states.unavailable
+  const ready = naval.status === "ready"
+  const value = (n: number | null | undefined, unit: string, decimals = 0) =>
+    ready && typeof n === "number" && Number.isFinite(n) && n >= 0 ? numberText(n, unit, decimals) : "暂无数据"
+  const kinds: Record<string, string> = { aircraft: "空中图标", ground_model: "水面 / 地面图标" }
+  const rows = [
+    { key: "enemy", label: "可见敌方单位", value: value(naval.enemy_count, " 个") },
+    { key: "ally", label: "可见友方单位", value: value(naval.ally_count, " 个") },
+    { key: "air", label: "其中敌方空中图标", value: value(naval.air_contact_count, " 个") },
+    { key: "kind", label: "最近敌方图标", value: ready ? kinds[naval.nearest_type || ""] || "暂无数据" : "暂无数据" },
+    { key: "distance", label: "地图平面距离", value: value(naval.nearest_distance_m, " m") },
+    { key: "bearing", label: "绝对方位（正北 0°）", value: value(naval.nearest_bearing_deg, "°", 1) },
+  ]
+  return (
+    <section className="wt-vehicle-status" role="region" aria-label={title}>
+      <div className="wt-vehicle-heading">
+        <h3>{title}</h3>
+        <StatusBadge tone={summary.tone} label={summary.label} />
+      </div>
+      <p className="wt-vehicle-detail">{summary.detail}</p>
+      <p className="wt-vehicle-note">
+        {typeof naval.sample_age_seconds === "number" && Number.isFinite(naval.sample_age_seconds) && naval.sample_age_seconds >= 0
+          ? `最近地图采样：${naval.sample_age_seconds.toFixed(1)} 秒前` : "地图采样时间未知"}
+      </p>
+      <dl className="wt-vehicle-grid">
+        {rows.map(row => <div key={row.key} className="wt-vehicle-stat"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}
+      </dl>
+      <p className="wt-vehicle-note">数量仅指地图已显示单位；图标不能确认舰种，距离不含高度。</p>
+      <p className="wt-vehicle-note">{props.confirmedNaval
+        ? "兵种字段确认海战；本卡只读，不触发播报。"
+        : "尚未确认载具域，仅显示通用地图态势，不触发专项播报。"}</p>
+    </section>
+  )
+}
+
+function NavalInstrumentFieldCard(props: { inventory: NavalInstrumentFields }) {
+  const sources: Record<string, string> = {
+    response_only: "基础响应可用；字段盘点还需核对独立采样状态，字段存在不等于舰艇语义已验证。",
+    offline: "连接已断开，等待恢复后再盘点。",
+    waiting: "等待进入战局后盘点字段。",
+    replay: "回放期间暂停字段盘点。",
+    dead: "阵亡期间不沿用字段可用性，等待新响应。",
+    unconfirmed_naval: "缺少有效海战兵种证据，暂不盘点舰艇字段。",
+    unknown_life: "战局或生命标识未知，暂不盘点字段。",
+    invalid_source: "原始来源结构或兵种证据不一致，等待可靠响应。",
+    unknown_age: "响应时间未知或无效，暂不盘点字段。",
+    stale: "基础遥测响应超过 5 秒，暂不展示旧字段状态。",
+  }
+  const labels: Record<string, { name: string; path: string }> = {
+    speed: { name: "速度候选字段", path: "indicators.speed" },
+    heading: { name: "罗盘候选字段", path: "indicators.heading_deg" },
+    rpm: { name: "转速候选字段", path: "indicators.rpm" },
+    throttle: { name: "控制量候选字段", path: "indicators.throttle" },
+  }
+  const states: Record<string, string> = { observed_numeric: "响应含数值，语义待验", normalized_only: "仅规范化数值，来源待核",
+    raw_only: "仅原始键，尚未规范化", missing: "未提供数值", invalid: "格式无效", conflicting: "原始与规范化不一致", unavailable: "来源未就绪" }
+  const age = props.inventory.response_age_seconds
+  const samples: Record<string, string> = {
+    ready: "独立成功采样已绑定当前战局与生命；这不证明舰艇物理语义。",
+    legacy_response: "旧数据层未提供独立采样证据；仅盘点当前响应，生命绑定未知。",
+    probe_failed: "仪表或战局探针请求失败，旧采样不可用。",
+    context_changed: "采集中战局、生命或载具域变化，等待下一次成功采样。",
+    invalid_source: "采样来源未通过严格校验，暂不盘点字段。",
+    unbound_sample: "采样不属于当前战局、生命或兵种，旧字段已隐藏。",
+    unknown_sample_age: "独立采样时间无效，旧字段已隐藏。",
+    stale_sample: "独立成功采样超过 5 秒，旧字段已隐藏。",
+    invalid_sample: "独立采样元数据无效，旧字段已隐藏。",
+    unknown_age: "采样时钟无效，等待可靠采样。",
+    unknown_life: "采样生命未知，等待可靠采样。",
+    dead: "阵亡期间暂停采样盘点。", replay: "回放期间暂停采样盘点。",
+    waiting: "等待进入战局后成功采样。", unavailable: "尚无可用的独立采样。",
+  }
+  const sampleAge = props.inventory.sample_age_seconds
+  const sampleCount = props.inventory.sample_count
+  return <section className="wt-vehicle-status" role="region" aria-label="舰艇仪表字段边界">
+    <div className="wt-vehicle-heading"><h3>舰艇仪表字段边界</h3><StatusBadge tone="info" label="仪表值未启用" /></div>
+    <p className="wt-vehicle-detail" data-naval-instrument-source={props.inventory.source_status || "unknown"}>
+      {sources[props.inventory.source_status || ""] || "等待字段盘点来源。"}
+    </p>
+    <p className="wt-vehicle-note">{typeof age === "number" && Number.isFinite(age) && age >= 0
+      ? `基础遥测响应年龄 ${age.toFixed(1)} 秒` : "基础遥测响应时间未知"}</p>
+    <p className="wt-vehicle-detail" data-naval-instrument-sampling={props.inventory.sampling_status || "unavailable"}>
+      {samples[props.inventory.sampling_status || "unavailable"] || samples.unavailable}
+    </p>
+    {props.inventory.sample_life_bound === true && typeof sampleAge === "number" && Number.isFinite(sampleAge)
+      && typeof sampleCount === "number" && Number.isSafeInteger(sampleCount) && sampleCount > 0
+      ? <p className="wt-vehicle-note">成功采样序号 {sampleCount} · 采样年龄 {sampleAge.toFixed(1)} 秒</p> : null}
+    <dl className="wt-vehicle-grid">{(props.inventory.fields || []).map(row => {
+      const label = labels[row.id]
+      if (!label) return null
+      return <div className="wt-vehicle-stat" key={row.id} data-naval-instrument-field={row.id}>
+        <dt>{label.name}</dt><dd><StatusBadge tone={row.status === "invalid" || row.status === "conflicting" ? "warning" : "info"}
+          label={states[row.status] || "状态未知"} /><p className="wt-vehicle-note">{label.path}</p></dd>
+      </div>
+    })}</dl>
+    <p className="wt-vehicle-note">四项仅盘点响应字段；舰艇单位、量纲、符号与范围仍待样本确认，不显示仪表读数。</p>
+    <p className="wt-vehicle-note">基础响应、地图与载具采样不能替代仪表独立成功采样。生命绑定只跟随已确认生命周期，不新增舰艇重生推断；舰员、舰炮弹药、舰体/进水和温度仍待专用合同。</p>
+    <p className="wt-vehicle-note">查看本卡不推进检测或触发播报；两类海战事件真实输出保持关闭。</p>
+  </section>
+}
+
+function NavalStaticReferenceCard(props: { reference: NavalStaticReference }) {
+  const ref = props.reference
+  const reasons: Record<string, string> = {
+    catalog_unavailable: "静态资料不可用，不沿用或猜测舰艇参数。",
+    sample_unavailable: "尚无当前生命的有效仪表采样；仅展示资料范围，不关联旧载具。",
+    unconfirmed_vehicle: "缺少一致的精确型号来源，不进行模糊匹配。",
+    not_indexed: "当前型号未收录；资料缺失不代表游戏不支持。",
+    matched: "当前采样的型号与静态资料精确匹配；本机游戏版本、改装与配置语义仍未验证。",
+  }
+  const relations: Record<string, string> = {
+    configuration_not_reading: "速度配置不等于当前航速，单位与对应关系待验",
+    no_direct_static_mapping: "静态资料没有当前航向的直接映射",
+    structure_not_reading: "推进器结构不等于当前转速，不能把单值分配给多机",
+    model_not_control: "加速模型不等于当前控制量或车钟",
+  }
+  const count = (value?: number | null) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? String(value) : "未收录"
+  const vehicle = ref.vehicle
+  const configuration = vehicle?.configuration
+  const configurationLabels: Record<string, string> = { none_declared: "未声明改装项", declarations_resolved: "声明引用已解析", partial: "声明解析存在缺口" }
+  return <section className="wt-vehicle-status" role="region" aria-label="舰艇静态资料与实时边界">
+    <div className="wt-vehicle-heading"><h3>舰艇静态资料与实时边界</h3><StatusBadge tone="info" label="静态配置 · 非实时" /></div>
+    <p className="wt-vehicle-detail" data-naval-static-status={ref.status}>{reasons[ref.status] || reasons.catalog_unavailable}</p>
+    {ref.source ? <p className="wt-vehicle-note">Datamine {ref.source.version} · 提交 {ref.source.ref.slice(0, 10)} ·
+      收录 {ref.indexed_files} 个舰艇目录配置（含 AI/场景单位，不等同可玩舰艇数）。</p> : null}
+    {vehicle ? <dl className="wt-vehicle-grid">
+      <div className="wt-vehicle-stat"><dt>精确型号 / 静态类型</dt><dd data-naval-static-vehicle>{vehicle.id}<p className="wt-vehicle-note">{vehicle.type_code || "类型未收录"}</p></dd></div>
+      <div className="wt-vehicle-stat"><dt>配置发动机条目 / 推进器</dt><dd>{count(vehicle.engine_entry_count)} / {count(vehicle.propulsion_count)}</dd></div>
+      <div className="wt-vehicle-stat"><dt>配置舰员分区</dt><dd>{count(vehicle.crew_station_count)}</dd></div>
+      <div className="wt-vehicle-stat"><dt>配置分区舰员合计（非实时）</dt><dd>{count(vehicle.crew_distribution_total)}</dd></div>
+    </dl> : null}
+    {vehicle ? <div data-naval-configuration-status={configuration?.status || "legacy"}>
+      <p className="wt-vehicle-detail">{configuration ? configurationLabels[configuration.status] || "声明状态未知" : "旧资料库暂无改装解析"} · 当前生效参数未知</p>
+      {configuration ? <p className="wt-vehicle-note">基础字段：{configuration.base_status === "direct_fields" ? "文件直接声明" : "含未解析继承指令"}；
+        改装声明 {count(configuration.declared_count)} 项，公共定义 {count(configuration.common_definition_count)} 项，本地非空声明 {count(configuration.local_override_count)} 项，
+        模板引用 {count(configuration.template_reference_count)} 处，显式空块 {count(configuration.explicit_empty_block_count)} 处。</p> : null}
+      {configuration?.status === "partial" ? <p className="wt-vehicle-note">缺失公共定义 {count(configuration.missing_common_definition_count)}，缺失前序/依赖 {count(configuration.missing_dependency_count)}，
+        循环节点 {count(configuration.cycle_node_count)}，缺失模板 {count(configuration.missing_template_count)}；完整声明证据见离线开发报告。</p> : null}
+      <p className="wt-vehicle-note">公共与本地效果块分别保留，未模拟空块合并或效果叠加；已安装改装、模式、外部武器模板及引擎生效规则未验证，不能据此计算当前或满改参数。</p>
+    </div> : null}
+    <dl>{ref.field_mapping.map(row => <div key={row.id} data-naval-static-mapping={row.id}>
+      <dt><strong>{row.normalized_key}</strong></dt>
+      <dd className="wt-vehicle-note">{relations[row.relation] || "尚无已验证的直接映射"}。</dd>
+    </div>)}</dl>
+    <p className="wt-vehicle-note">静态配置不能补出当前舰员、航速、转速、操纵量、损伤或进水；不显示配置速度/质量的未确认单位，不生成阈值、阵亡或重生判断。真实输出保持关闭。</p>
+  </section>
+}
+
+function NavalResultComparison(props: { result?: NavalDetectionResult | null }) {
+  const summary = (kind: string, record?: NavalResultRecord | null): { label: string; detail: string; tone: PanelTone } => {
+    if (!record) return { label: kind === "candidate" ? "尚无可关联候选" : kind === "decision" ? "尚无仲裁结果" : "尚无记录结果",
+      detail: kind === "candidate" ? "仅关联本次有效确认，不沿用旧生命、旧确认或失效来源的结果。" : "等待此候选到达这一阶段。", tone: "default" }
+    if (kind === "candidate") return { label: "候选已生成", detail: typeof record.map_sample_count === "number"
+      ? `确认采样序号 ${record.map_sample_count}；这不表示已进入记录或播报。` : "这不表示已进入记录或播报。", tone: "info" }
+    if (record.stage === "dispatcher_dry_run") return { label: "仅 dry-run 记录", detail: "此候选已走到记录阶段，没有提交语音。", tone: "info" }
+    if (record.stage === "dispatcher_failed") return { label: "记录阶段失败", detail: "该候选的记录阶段未完成，真实输出仍关闭。", tone: "warning" }
+    if (record.stage === "dispatcher_pushed") return { label: "异常投递记录", detail: "记录与海战禁播策略不一致，需要检查运行版本。", tone: "danger" }
+    const reasons: Record<string, { label: string; detail: string; tone: PanelTone }> = {
+      selected: { label: "已通过仲裁", detail: "已选中此候选；后续是否完成以记录结果为准。", tone: "info" },
+      naval_dry_run_only: { label: "真实输出已阻断", detail: "海战态势仅作观察，全局 dry-run 关闭也不会播报。", tone: "info" },
+      naval_contact_cleared: { label: "候选已失效", detail: "接触、来源时效或生命已变化，旧候选已撤销。", tone: "default" },
+      rate_limited: { label: "限流等待中", detail: "候选仍在单槽窗口等待，尚未到达记录阶段。", tone: "warning" },
+      cooldown_active: { label: "冷却中", detail: "同类事件仍在冷却，本次没有进入记录。", tone: "warning" },
+      lost_in_window: { label: "被其他候选替代", detail: "单槽窗口保留了其他候选，本次没有进入记录。", tone: "default" },
+      preempted_by_critical: { label: "被危急提醒替代", detail: "更高优先级事件获得处理，本次没有进入记录。", tone: "default" },
+      scenario_gated: { label: "当前场景拦截", detail: "当前场景不允许此类普通态势候选进入记录。", tone: "default" },
+      expired_before_flush: { label: "候选已过期", detail: "等待期间超过事件有效期，本次没有进入记录。", tone: "default" },
+      broadcast_category_disabled: { label: "类别偏好已关闭", detail: "设置中关闭了这类普通态势候选。", tone: "default" },
+      broadcast_category_disabled_on_flush: { label: "类别偏好已关闭", detail: "等待期间关闭了这类普通态势候选。", tone: "default" },
+      paused: { label: "手动暂停拦截", detail: "安全暂停阻止了这次候选继续处理。", tone: "warning" },
+      tripped: { label: "自动暂停拦截", detail: "安全暂停阻止了这次候选继续处理。", tone: "warning" },
+    }
+    return reasons[record.reason] || { label: "已有阶段记录", detail: "原因尚未收录，不能据此判断已完成 dry-run 记录。", tone: "default" }
+  }
+  const steps = [{ key: "candidate", title: "候选", record: props.result?.candidate },
+    { key: "decision", title: "仲裁", record: props.result?.decision }, { key: "output", title: "记录", record: props.result?.output }]
+  return <div className="wt-naval-results" aria-label="本次确认的结果对照">
+    <ol>{steps.map(step => {
+      const value = summary(step.key, step.record)
+      return <li key={step.key} data-naval-result={step.key}>
+        <strong>{step.title}</strong><StatusBadge tone={value.tone} label={value.label} />
+        <p className="wt-vehicle-note">{value.detail}</p>
+        {step.record?.ts ? <p className="wt-vehicle-note">记录时间 {formatTime(step.record.ts)}</p> : null}
+      </li>
+    })}</ol>
+  </div>
+}
+
+function NavalDetectionCard(props: { detection: NavalDetectionState }) {
+  const detection = props.detection
+  const sources: Record<string, string> = {
+    ready: "来源可用：兵种已确认海战，地图采样有效。",
+    offline: "连接已断开，等待数据层恢复。",
+    replay: "回放期间暂停海战检测。",
+    waiting: "尚未进入战局，等待进场。",
+    dead: "已阵亡，等待重生后的新采样。",
+    unconfirmed_naval: "尚未取得有效的海战兵种证据，地图图标不能确认载具域。",
+    missing_battle: "战局标识未知，暂不连接前后采样。",
+    unknown_age: "采样时间未知或无效，等待新数据。",
+    stale: "地图或基础遥测已超过 5 秒有效期，旧进度暂不展示。",
+    unknown_sample: "成功采样计数或生命标识未知，不能累计确认。",
+    life_mismatch: "地图来自上一次生命，等待重生后的新采样。",
+    no_player: "地图尚未定位自身，不能确认有效态势。",
+    invalid_position: "自身地图坐标无效，等待新采样。",
+    invalid_counts: "敌方图标数量未知或不一致，不能当作零或触发依据。",
+  }
+  const progress: Record<string, { label: string; detail: string; tone: PanelTone }> = {
+    pending: { label: "等待检测", detail: "当前采样尚未处理，等待下一次检测轮询。", tone: "info" },
+    blocked: { label: "来源未就绪", detail: "来源恢复后重新确认，见上方来源说明。", tone: "warning" },
+    disabled: { label: "检测已暂停", detail: "插件已停用，启用后才会继续检测。", tone: "info" },
+    absent: { label: "未发现图标", detail: "当前采样没有此类图标，等待出现。", tone: "info" },
+    confirming: { label: "出现确认中", detail: "等待下一次独立成功地图采样；缓存刷新不累计。", tone: "info" },
+    active: { label: "出现已确认", detail: "本次出现已生成候选；持续存在不重复触发，记录结果见活动页。", tone: "success" },
+    clearing: { label: "消失确认中", detail: "再确认一次消失后重新待命；此时不生成出现候选。", tone: "info" },
+  }
+  const ready = detection.source_status === "ready"
+  const age = detection.sample_age_seconds
+  return (
+    <section className="wt-vehicle-status" role="region" aria-label="海战 dry-run 检测诊断">
+      <div className="wt-vehicle-heading">
+        <h3>海战 dry-run 检测诊断</h3>
+        <StatusBadge tone="info" label="真实输出关闭" />
+      </div>
+      <p className="wt-vehicle-detail" data-naval-source={detection.source_status || "unknown"}>
+        {sources[detection.source_status || ""] || "等待来源诊断数据。"}
+      </p>
+      <p className="wt-vehicle-note">
+        {typeof age === "number" && Number.isFinite(age) && age >= 0 ? `地图采样年龄 ${age.toFixed(1)} 秒` : "地图采样时间未知"}
+        {ready && typeof detection.map_sample_count === "number" ? ` · 成功采样序号 ${detection.map_sample_count}` : ""}
+      </p>
+      <dl className="wt-vehicle-grid">
+        {(detection.detectors || []).map(row => {
+          const summary = progress[row.status] || progress.blocked
+          return <div className="wt-vehicle-stat" key={row.event_id} data-naval-detector={row.event_id}>
+            <dt>{EVENT_LABELS[row.event_id] || "海战图标检测"}</dt>
+            <dd>
+              <StatusBadge tone={summary.tone} label={summary.label} />
+              <p className="wt-vehicle-detail">{row.status === "clearing" ? "消失确认" : "出现确认"} {row.hits}/{row.required}</p>
+              <p className="wt-vehicle-note">{summary.detail}</p>
+              <NavalResultComparison result={row.result} />
+            </dd>
+          </div>
+        })}
+      </dl>
+      <p className="wt-vehicle-note">两项海战事件仅作 dry-run 记录，关闭全局 dry-run 也不会真实输出。查看本卡不累计采样，不触发播报。</p>
+    </section>
+  )
+}
+
 export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardState>) {
   const state = props.state || {}
   const safety = state.safety || {}
   const identity = state.identity || {}
   const dataLayer = state.data_layer || {}
   const telemetry = state.telemetry || {}
+  const flightDiagnostics = state.flight_diagnostics
   const takeoffProtection = state.takeoff_protection || {}
   const outputPolicy = state.output_policy || {}
   const awareness = state.awareness || {}
@@ -1021,10 +1652,12 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const actions = Array.isArray(props.actions) ? props.actions : []
   const setDryRunAction = actionById(actions, "set_dry_run")
   const setDialogueIntrusionModeAction = actionById(actions, "set_dialogue_intrusion_mode")
+  const onDemandAction = actionById(actions, "set_on_demand_explanation")
   const setBroadcastFrequencyAction = actionById(actions, "set_broadcast_frequency")
   const setBroadcastCategoryAction = actionById(actions, "set_broadcast_category")
   const resetBroadcastPreferencesAction = actionById(actions, "reset_broadcast_preferences")
   const setIdentityAction = actionById(actions, "set_identity")
+  const setFactionColorsAction = actionById(actions, "set_faction_colors")
   const completeOnboardingAction = actionById(actions, "complete_onboarding")
   const pauseAction = actionById(actions, "pause")
   const resumeAction = actionById(actions, "resume")
@@ -1038,12 +1671,26 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const [onboardingAutoOpened, setOnboardingAutoOpened] = useState(false)
   const [onboardingStep, setOnboardingStep] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [onDemandOverride, setOnDemandOverride] = useState<OnDemandState | null>(null)
+  const [onDemandBusy, setOnDemandBusy] = useState(false)
+  const onDemand = onDemandOverride || state.on_demand || {}
+  const onDemandLabels: Record<string, string> = {
+    disabled: "已关闭", registering: "正在请求注册", registration_requested: "已请求注册，等待工具调用确认",
+    active: "已收到工具调用", unsupported: "当前宿主 SDK 不支持", role_unavailable: "无法确认当前角色",
+    registration_failed: "注册失败，继续使用面板", cleanup_required: "已阻止读取，工具清理待重试",
+    rebind_required: "角色已变化，需要重新绑定",
+  }
+  useEffect(() => { setOnDemandOverride(null) }, [state.on_demand])
   const [identityOpen, setIdentityOpen] = useState(false)
   const [identityName, setIdentityName] = useState(currentPlayerName(identity))
   const [identityError, setIdentityError] = useState("")
   const [dryRunError, setDryRunError] = useState("")
   const [dialoguePolicyError, setDialoguePolicyError] = useState("")
   const [broadcastPreferenceError, setBroadcastPreferenceError] = useState("")
+  const factionColors = state.faction_colors || {}
+  const [allyColor, setAllyColor] = useState(factionColors.ally_color || "#174DFF")
+  const [enemyColor, setEnemyColor] = useState(factionColors.enemy_color || "#FA0C00")
+  const [factionColorError, setFactionColorError] = useState("")
   const summary = derivePanelSummary(state)
   const playerName = currentPlayerName(identity)
   // limit=5 的结果就是 limit=20 的前缀，算一次即可（该函数没有 memo，每次渲染都会全量跑）。
@@ -1119,6 +1766,22 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
     }
   }
 
+  async function setOnDemand(enabled: boolean) {
+    if (!onDemandAction || onDemandBusy) return
+    setOnDemandBusy(true)
+    try {
+      const result = await props.api.call("set_on_demand_explanation", { enabled }) as any
+      if (result?.on_demand) setOnDemandOverride(result.on_demand)
+      if (result?.ok === true) toast.success(enabled ? "已请求为当前角色启用本次会话的按需解释" : "本次会话的按需解释已关闭")
+      else toast.error("按需解释未就绪，请查看状态或重试清理")
+      await props.api.refresh()
+    } catch {
+      toast.error("按需解释设置失败，继续使用现有面板")
+    } finally {
+      setOnDemandBusy(false)
+    }
+  }
+
   async function setDialogueIntrusionMode(mode: string) {
     if (!setDialogueIntrusionModeAction) {
       setDialoguePolicyError("插话规则设置暂时不可用")
@@ -1181,6 +1844,43 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
     } catch (error) {
       setBroadcastPreferenceError(error instanceof Error ? error.message : String(error))
       toast.error("恢复推荐设置失败")
+    }
+  }
+
+  // 打开设置时从后端同步一次；拖动取色器只改本地 state，点保存才提交。
+  function openSettings() {
+    setAllyColor(factionColors.ally_color || "#174DFF")
+    setEnemyColor(factionColors.enemy_color || "#FA0C00")
+    setFactionColorError("")
+    setSettingsOpen(true)
+  }
+
+  async function submitFactionColors(reset = false) {
+    if (!setFactionColorsAction) {
+      setFactionColorError("敌我颜色设置暂时不可用")
+      return
+    }
+    try {
+      setFactionColorError("")
+      const envelope = await props.api.call(
+        "set_faction_colors",
+        reset ? { reset: true } : { ally_color: allyColor, enemy_color: enemyColor },
+      )
+      const result = unwrapActionResult(envelope)
+      const saved = result.faction_colors && typeof result.faction_colors === "object" ? result.faction_colors : {}
+      if (saved.ally_color) setAllyColor(String(saved.ally_color))
+      if (saved.enemy_color) setEnemyColor(String(saved.enemy_color))
+      if (saved.applied === false) {
+        toast.warning("颜色已保存，等待数据层连接后生效")
+      } else if (saved.conflict) {
+        toast.warning("敌我颜色过于接近，将无法区分阵营，接近提醒会暂停")
+      } else {
+        toast.success(reset ? "已恢复默认敌我颜色" : "敌我颜色已保存")
+      }
+      await props.api.refresh()
+    } catch (error) {
+      setFactionColorError(error instanceof Error ? error.message : String(error))
+      toast.error("敌我颜色保存失败")
     }
   }
 
@@ -1378,6 +2078,8 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             </div>
           </div>
 
+          {state.trusted_facts ? <TrustedFactsCard facts={state.trusted_facts} openActivity={() => setActiveTab("activity")} /> : null}
+
           <div className="wt-identity">
             <div>
               <p className="wt-identity-name">{playerName || "尚未设置战雷游戏昵称"}</p>
@@ -1385,6 +2087,15 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             </div>
             <Button className="wt-link-action" onClick={openIdentityModal}>{playerName ? "修改" : "设置"}</Button>
           </div>
+          {state.domain === "ground" ? <GroundStatusCard
+            ground={state.ground_status || {}} dryRun={detectOnly}
+            explanation={state.ground_ammo_explanation}
+            realOutput={outputPolicy.ground_status_real_output_enabled === true}
+          /> : null}
+          {state.domain === "heli" ? <HelicopterStatusCard helicopter={state.helicopter_status || {}} /> : null}
+          {state.domain === "naval" ? <MapStatusCard naval={state.naval_status || {}} confirmedNaval={true} /> : null}
+          {state.map_status ? <MapStatusCard naval={state.map_status} confirmedNaval={false} /> : null}
+          {state.naval_detection ? <NavalDetectionCard detection={state.naval_detection} /> : null}
         </section>
 
         <section className="wt-column">
@@ -1521,6 +2232,19 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             />
           </div>
 
+          {state.domain === "ground" ? <GroundStatusCard
+            ground={state.ground_status || {}} dryRun={detectOnly}
+            explanation={state.ground_ammo_explanation}
+            realOutput={outputPolicy.ground_status_real_output_enabled === true}
+          /> : null}
+          {state.domain === "heli" ? <HelicopterStatusCard helicopter={state.helicopter_status || {}} /> : null}
+          {state.domain === "naval" ? <MapStatusCard naval={state.naval_status || {}} confirmedNaval={true} /> : null}
+          {state.map_status ? <MapStatusCard naval={state.map_status} confirmedNaval={false} /> : null}
+          {state.naval_detection ? <NavalDetectionCard detection={state.naval_detection} /> : null}
+
+          {state.naval_instrument_fields ? <NavalInstrumentFieldCard inventory={state.naval_instrument_fields} /> : null}
+          {state.naval_static_reference ? <NavalStaticReferenceCard reference={state.naval_static_reference} /> : null}
+
           {state.domain === "air" || state.domain === "heli" ? (
             <div className="wt-advanced-grid">
               <AdvancedDetailGroup
@@ -1533,6 +2257,17 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
                   { key: "mach", label: "马赫数", value: numberText(telemetry.mach, "", 2) },
                   { key: "climb", label: "垂直速度", value: numberText(telemetry.climb_ms, "m/s", 1) },
                   { key: "fuel", label: "燃油比例", value: percentText(telemetry.fuel_fraction) },
+                  ...(state.domain === "air" ? [
+                    { key: "oil_state", label: "原生油温状态", value: mappedText(flightDiagnostics?.oil.status, FLIGHT_SOURCE_LABELS) },
+                    { key: "oil_max", label: "已观测通道最高油温", value: numberText(flightDiagnostics?.oil.max_c, "°C", 1) },
+                    { key: "oil_channels", label: "有效 / 不可用通道", value: `${text(flightDiagnostics?.oil.observed_channels)} / ${text(flightDiagnostics?.oil.unavailable_channels)}` },
+                    { key: "oil_source", label: "油温来源与边界", value: "/state 明确 C 单位；仅已观测通道，生命绑定未确认" },
+                    { key: "fuel_estimate_status", label: "耗油估算状态", value: mappedText(flightDiagnostics?.fuel_estimate.status, FLIGHT_SOURCE_LABELS) },
+                    { key: "fuel_burn", label: "估算耗油率", value: numberText(flightDiagnostics?.fuel_estimate.burn_kgs, "kg/s", 3) },
+                    { key: "fuel_remaining", label: "估算剩余时间", value: numberText(flightDiagnostics?.fuel_estimate.remaining_sec, "s", 0) },
+                    { key: "fuel_change_age", label: "距燃油变化 / 基线", value: numberText(flightDiagnostics?.fuel_estimate.age_sec, "s", 1) },
+                    { key: "fuel_max_age", label: "估算有效期", value: numberText(flightDiagnostics?.fuel_estimate.max_age_sec, "s", 1) },
+                  ] : []),
                   { key: "flags", label: "当前标记", value: flagsText(telemetry.flags) },
                   { key: "age", label: "数据延迟", value: numberText(telemetry.age_seconds, "s", 1) },
                 ]}
@@ -1745,7 +2480,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
         <button type="button" aria-pressed={activeTab === "overview"} className={`wt-tab ${activeTab === "overview" ? "is-active" : ""}`} onClick={() => { setActiveTab("overview") }}>概览</button>
         <button type="button" aria-pressed={activeTab === "activity"} className={`wt-tab ${activeTab === "activity" ? "is-active" : ""}`} onClick={() => { setActiveTab("activity") }}>活动</button>
         <button type="button" aria-pressed={activeTab === "diagnostics"} className={`wt-tab ${activeTab === "diagnostics" ? "is-active" : ""}`} onClick={() => { setActiveTab("diagnostics") }}>诊断</button>
-        <button type="button" className="wt-settings-trigger" aria-label="设置" title="设置" onClick={() => { setSettingsOpen(true) }}>⚙︎</button>
+        <button type="button" className="wt-settings-trigger" aria-label="设置" title="设置" onClick={openSettings}>⚙︎</button>
       </div>
       <main className="wt-content">
         {activeTab === "overview" ? overview : activeTab === "activity" ? activity : diagnostics}
@@ -1768,6 +2503,22 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
         footer={<Button onClick={() => { setSettingsOpen(false) }}>完成</Button>}
       >
         <div className="wt-settings">
+          <div className="wt-settings-row" role="region" aria-label="会话按需解释">
+            <div className="wt-settings-copy">
+              <h3>按需解释（本次会话）</h3>
+              <p>{onDemandLabels[onDemand.status || "disabled"] || "暂不可用"}{onDemand.role ? ` · 绑定角色：${onDemand.role}` : ""}</p>
+              <p>只查当前状态、可用能力和输出策略；不解释具体历史事件，不改变战斗播报。每次重启关闭，换角色需重新绑定。</p>
+              <p>启用后工具定义和结果会增加对话 token；普通回答可能按宿主聊天设置发声。5 秒冷却、同时读取 1 次，不自动重试。</p>
+            </div>
+            <div className="wt-settings-control">
+              <Stack>
+                <Button disabled={!onDemandAction || onDemand.supported === false || onDemandBusy}
+                  onClick={() => setOnDemand(true)}>{onDemand.enabled || onDemand.status === "rebind_required" ? "重新绑定当前角色" : "本次会话启用并绑定当前角色"}</Button>
+                <Button disabled={!onDemandAction || onDemandBusy || (!onDemand.enabled && !onDemand.cleanup_pending)}
+                  onClick={() => setOnDemand(false)}>停用并清理按需解释</Button>
+              </Stack>
+            </div>
+          </div>
           <div className="wt-settings-row">
             <div className="wt-settings-copy">
               <h3>播报频率</h3>
@@ -1834,6 +2585,29 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             </div>
             <div className="wt-settings-control">
               <Button onClick={() => { setSettingsOpen(false); openIdentityModal() }}>{playerName ? "修改昵称" : "设置昵称"}</Button>
+            </div>
+          </div>
+          <div className="wt-settings-row">
+            <div className="wt-settings-copy">
+              <h3>小地图敌我颜色</h3>
+              <p>8111 只提供图标颜色，插件按颜色区分队友和敌人。在游戏设置里改过颜色时，请在这里改成相同的颜色。</p>
+            </div>
+            <div className="wt-settings-control is-wide">
+              <Stack>
+                <div className="wt-color-row">
+                  <Field label="队友">
+                    <Input type="color" value={allyColor} onChange={setAllyColor} />
+                  </Field>
+                  <Field label="敌人">
+                    <Input type="color" value={enemyColor} onChange={setEnemyColor} />
+                  </Field>
+                </div>
+                <ButtonGroup>
+                  <Button onClick={() => { void submitFactionColors(true) }}>恢复默认</Button>
+                  <Button tone="primary" onClick={() => { void submitFactionColors(false) }}>保存颜色</Button>
+                </ButtonGroup>
+                {factionColorError ? <Alert tone="danger">{factionColorError}</Alert> : null}
+              </Stack>
             </div>
           </div>
           <div className="wt-settings-row">

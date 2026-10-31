@@ -1,0 +1,373 @@
+# Project Status
+
+> 历史快照：归档于 2026-10-27；下文阶段、测试数量、路径与策略只代表当时记录，不作为当前验收结论。当前状态见 [当前开发状态](../当前开发状态.md)。
+
+## Handoff Snapshot
+
+- Maintenance snapshot updated on 2026-07-27.
+
+### 2026-07-27 correctness and consistency pass
+
+Behavior changes in this pass (all offline-verified; safe defaults unchanged):
+
+- **Same-battle respawn no longer replays kills.** `DetectorEngine.feed` used to `reset()` every
+  non-`you_died` detector on each dead tick. Data-layer feeds (`combat`, `hud_notices`, `awards`,
+  `proximity`, chat) are battle-persistent and only clear on a new battle or HUD drain, so
+  resetting their id cursors made surviving `is_my_kill` entries look new after respawn. Detectors
+  that consume persistent feeds now declare `dead_state_policy = "consume"`: they are still fed
+  while dead (cursors advance) but their output is discarded. Condition detectors keep `"reset"`.
+
+  **Measured scope (do not overstate this one).** A synthetic repro replays the whole battle, but
+  real captures do not: `combat.feed` is a `deque(maxlen=100)` fed by the *global* damage stream,
+  and in both captured matches the player's own kills were pushed out of that window **41 frames
+  (~9 s) after death**, while the death holds lasted 437 and 1530 frames. Replaying both captures
+  through the old and new engines yields 0 replayed kills either way. The defect is real but needs
+  a respawn within roughly the feed-churn window of the last owned kill — plausible in fast-respawn
+  ground battles or quiet lobbies, not in the busy air matches sampled here.
+- **War Thunder context restore no longer wedges.** The exit branch of `_sync_game_context`
+  required `was_active`, so a single failed restore push left the copilot instructions
+  permanently injected. It now keys only on the idempotent `_instructions_injected` flag.
+- **Poll thread cannot be overlapped or resurrected.** `startup` refuses to create a replacement
+  while the previous poll thread is still alive. Once it exits, the replacement receives a fresh
+  `threading.Event`, so clearing shared state cannot revive the retired loop.
+- **`set_dry_run` survives unrelated config changes** within the session via
+  `_session_dry_run_override`, replayed in `_apply_config`. The action result reports
+  `session_only=true`.
+
+  Not persisting it across restarts is a **product decision, not an oversight** — do not "fix" it
+  into `runtime_state`. Enabling battle broadcast (the overview footer's 开启战斗播报 control, which
+  is exactly this flag) is treated as an explicit per-startup arming step, so every launch begins
+  silent. The sibling settings — dialogue policy, broadcast pacing, category switches, nickname —
+  all do persist; this one deliberately does not. Changing it later would also require restating
+  what `release_defaults_gate` asserts, from "always defaults to off" to "defaults to off on first
+  run".
+- **Sustained criticals are announced.** `Arbiter` drops preempt candidates that land inside
+  `critical_preempt_cooldown`, and `ConditionDetector` does not re-emit while ACTIVE, so a
+  critical entering during another critical's cooldown was never spoken. Fixed-wing critical
+  conditions now re-emit on a heartbeat while the condition is genuinely still true, so the
+  candidate is fresh (`ts` refreshed) rather than a stale held event. Warnings never heartbeat,
+  and already-spoken repeats are collapsed by the dispatcher's repeat-collapse window.
+
+  **The interval was tuned from captured data, not guessed.** It must be at least the preempt
+  cooldown (a shorter retry lands inside the cooldown and is discarded, wasting the one chance)
+  and at most a typical critical's duration (a longer retry arrives after the condition cleared).
+  Measured critical run lengths across the captures: `low_alt_danger` 6.9 s max, `stall_risk`
+  6.3 s, `high_aoa` 3.4 s, `low_fuel` 3.0 s, `overheat` 0.2 s — **nothing sustained 8 s**, so the
+  first choice of 8 s made the mechanism inert. It is now derived from
+  `critical_preempt_cooldown_seconds` (default 5 s) in `_build_engine`, which keeps the two from
+  drifting apart. At 5 s the captures replay one extra critical push in 2303 frames, and it is the
+  right one: at t=297.0 `low_alt_danger` fires, and at t=302.9 `stall_risk` enters inside its
+  cooldown — a real stall near the ground that the copilot previously never mentioned.
+- **`COMBAT_STRESS` damage pressure is attributable.** It consumed `hud_events`, which the data
+  layer appends unfiltered — in a populated match the global kill feed is near-continuous, so a
+  player flying alone stayed in `COMBAT_STRESS` and lost `low_fuel` plus companion output. It now
+  reads `combat.feed` entries flagged `is_my_kill` / `is_my_death`.
+
+  **Confirmed against captured matches**, replaying the full 8112 streams under both rules:
+  `data_process_20260630_useful_clip` held damage pressure for 1591/2303 frames (69.1%) under the
+  old rule versus 213 (9.2%) under the new one; `data_process_20260630` (lowtier live) went from
+  2547/4969 (51.3%) to 213 (4.3%). Between half and two thirds of those matches were spent
+  suppressing minor-safety and companion output because *other* players were trading kills.
+- **Data-layer spawn retries other Python candidates.** A prefix whose process exits before
+  becoming healthy is remembered and skipped on the next `start_if_needed`, so a Windows Store
+  `python.exe` alias or a dependency-less bundled interpreter no longer pins the manager to
+  `failed` forever. Embedded mode remains the final fallback.
+- **Blocking startup work moved off the event loop.** `start_if_needed`, `stop`, and
+  `_restore_identity_to_data_layer` run through `asyncio.to_thread` in the async lifecycle hooks;
+  their health-wait loop and synchronous `urllib` calls no longer freeze the host.
+- **Text sanitizer hardened (tightened only).** Hidden Unicode (categories `Cc`/`Cf`/`Zl`/`Zp` —
+  zero-width, bidi override, line/paragraph separators) is now rejected alongside ASCII control
+  characters, and the prompt-injection pattern covers common Chinese phrasings.
+- **Repeat-collapse actually collapses.** `_repeat_signature` buckets continuous fields
+  (`distance_m` per 250m, `temp_c` per 10℃) so a drifting raw float no longer makes every
+  same-source cue look unique.
+
+- **Arbitration no longer spends its single slot on cues that cannot survive the wait.** The
+  global rate limit (12 s default) is larger than most events' freshness windows (3 s for
+  proximity cues, 4 s for low-altitude), so a buffered event routinely aged past its limit while
+  it waited, and the dispatcher discarded it with `event_expired` at flush — meanwhile the fresher,
+  lower-priority candidate it displaced had already been dropped as `lost_in_window`. Both were
+  lost. The window now skips candidates that cannot survive until the earliest possible flush and
+  records them as `expired_before_flush`, leaving the slot for something deliverable. Only the
+  non-preempt channel is affected; critical cues preempt and never enter this window.
+
+  `EVENT_MAX_AGE_OVERRIDES_SECONDS` moved to `core/contracts.py` behind `event_max_age_seconds()`
+  so the arbiter and dispatcher read one table instead of the dispatcher owning it privately.
+
+  **Measured on the captures**, replaying the full chain with and without the check:
+  `useful_clip` 10 → 11 real pushes with expired-drops falling 8 → 0; `lowtier_live` 12 → 13 with
+  8 → 0; `20260620` 16 → 17 with 6 → 2. The composition improves too — `low_alt_danger` rises from
+  2 to 3 deliveries and `spawn` from 1 to 2, i.e. safety cues that had been starved by doomed
+  events squatting the slot.
+
+- **`low_fuel` now honours its "once per battle" contract.** `EVENT_CATALOG` marks it
+  `cooldown_seconds = -1`, but the arbiter only checks cooldowns when `cd > 0`, so nothing
+  enforced it: the fuel flag flickers around its threshold, the condition FSM re-arms after
+  `confirm_exit`, and the cue repeats. **The captures show it firing three times in every sampled
+  match — in one case three times within 13 seconds** ("油不多了，留油返航" ×3). `ConditionDetector`
+  gained an `once_per_battle` flag that parks the FSM in a `_SPENT` phase after the condition
+  clears; only `engine.reset()` (a new `battle_id`) re-arms it. The warning→critical upgrade still
+  works because it happens inside ACTIVE rather than through a re-arm. Replaying the captures now
+  yields exactly one `low_fuel` per match with every other event count unchanged.
+- **The dispatcher's cross-object field names are no longer bare strings.** It reads
+  `_last_user_chat_at` / `_last_user_chat_mode` and writes `_last_battle_respond_at` on the plugin
+  by name; a rename or typo on either side returns the `getattr` default instead of raising, which
+  silently disables the user-is-talking quiet window. The names are now
+  `PLUGIN_ACTIVITY_STATE_FIELDS` constants with a contract test asserting the plugin really
+  defines them, turning a silent behavioural regression into a test failure.
+
+Data-layer fixes in the same pass:
+
+- **Suppressed alerts no longer keep a stale `level`.** The spawn-suppression and dead-hold
+  windows cleared `alerts` and `flags` but left the derived `level`, so `/api/processed` and
+  `/api/alerts` could return `{"level": "critical", "alerts": []}` — any consumer keying on
+  `level` saw the very false alarm the window exists to suppress. `level` is now reset to `info`.
+- **Night battles crossing midnight are no longer misdetected as replays.** `game_time_sec` is a
+  cockpit-clock second-of-day (0–86399), not a monotonic timer, so it wraps ~86399 → 0. The
+  "time went backwards" replay rule fired on that wrap and locked the whole match into `replay`,
+  silencing alerts, combat, awareness and awards until the player left. Backward jumps are now
+  only treated as a timeline scrub when under half a day.
+- **Cold-start HUD drain failure no longer imports the previous match.** When the service starts
+  mid-battle the client cursors are still 0, which is not a trustworthy pre-battle boundary;
+  saving `{0, 0}` as the recovery cursor made the retry re-read 8111's cross-battle buffer and
+  feed the previous match's kills/deaths into this one. Without a real boundary it now falls back
+  to an ordinary discard drain.
+- **Dead code that was actively dangerous is gone.** `WarThunderClient.to_meters` converted
+  normalized coordinates using `grid_size`, which `wt_geo` explicitly documents as *wrong* for
+  whole-map conversion ("实测仅约地图的 1/2.5，否则距离会被系统性低估") — yet it sat there under a
+  public name with zero callers, one import away from silently under-reporting every distance by
+  ~2.5x. Removed, with a pointer to `wt_geo.to_meters`. Also removed `drain_hud`, `drain_chat` and
+  `reset_incremental_cursors`: all zero-caller since `_poll_events` took over drain orchestration,
+  and re-introducing them would swallow the request-success信息 that the recovery path depends on.
+- **Threshold resolution no longer reaches into private symbols.** `wt_proximity` imported
+  `_merge_profile` from `wt_processor` and `wt_server` passed
+  `getattr(self.processor, "_family_rules", [])` back in — a rename would break three modules at
+  once, and the defaulted `getattr` would degrade family matching to "silently disabled" rather
+  than erroring. `TelemetryProcessor.resolve_profile()` is now the public entry point, injected
+  into `resolve_proximity_thresholds`, with a test asserting the private references stay gone.
+
+- **Timed-out telemetry workers cannot overlap a restart.** Periodic waits are interruptible via
+  a generation-local `threading.Event`. If a worker is still blocked in I/O after the bounded
+  join, the service retains its thread reference and refuses to restart until that worker exits.
+
+Awareness detectors now share one implementation. `detectors/discrete/_common.py` holds the value
+coercers (`as_float` / `as_int` / `safe_short_text`) and the rear-hemisphere predicate that
+`situation.py` and `proximity.py` each carried verbatim — the latter under two different names
+(`_is_rear` / `_is_behind`). The tailing-confirmation thresholds moved there too, and the reason
+the two paths differ is now written down rather than implied: the situation path is frame-driven
+so it uses a short window and a wide radius (5 s / 1500 m), while the proximity path consumes
+sparse edge events so it uses a long window and a narrow radius (8 s / 900 m). Do not "align"
+them. A guard test fails if the duplicates reappear. Replaying the captures produces identical
+counts before and after (`enemy_on_six` 175/196, `tailing_risk` 29/143), confirming the change is
+structural only — which matters because this is exactly the area where a stale guard had let
+`enemy_on_six` drift 149 → 175 unnoticed.
+
+Consistency and de-duplication (no behavior change): takeoff-grace flags computed once and shared
+by the suppression path and dashboard snapshot; dispatcher observer metadata derived from
+`delivery.metadata` instead of a hand-copied second list; `runtime_timeline` stage/output key
+lists collapsed to shared constants; nine `cfg` accessor stubs reduced to `_cfg_float`/`_cfg_bool`;
+`_spawn_domain`/`_event_domain` merged into `_payload_domain`; dead `_INTENT` entries for events
+with dynamic branches removed; the `pushed(`/`dry_run(` control-flow contract is now the named
+`COMMITTED_RESULT_PREFIXES`; `_save_runtime_state` serialized under a module-level lock.
+
+### Sample evidence: what the archived captures already prove
+
+`local_samples/archives/` holds full captured 8112 streams. Extracting them and replaying through
+the real chain settles several things that were previously listed as live-only:
+
+- **V2 awareness is sample-covered, 4 of 5.** `tools/v2_readiness.py local_samples/…` reports
+  `air_threat_nearby` 94 observed, `enemy_on_six` 196/1419, `tailing_risk` 143/545 and
+  `ground_target_nearby` 14/400 as `covered_by_current_sample`. Only `enemy_nearby` remains
+  `needs_live_sample` — no generic (non-air) enemy proximity events appear in any archived capture.
+  This is sample evidence, not live evidence: `v2_live_verified_real_output_enabled` stays false
+  and the three gated events still cannot really push.
+- **A stale guard was exposed.** `test_local_20260620_sample_replay_if_present` silently `return`s
+  when the sample is absent, so it had not run for anyone. With the sample extracted it failed on
+  values that predate this pass (verified against pristine `HEAD`): `enemy_on_six` had drifted
+  149 → 175 and `tailing_risk` 44 → 29, while every structural assertion still held. The rear-threat
+  logic changed at some point and this guard never noticed. Values updated and pinned to the
+  `samples-20260715_0001` archive.
+
+Extract with any unzip into `local_samples/`; the directory is gitignored and the extraction is
+~670 MB, so remove it again when finished.
+
+Tooling: `tools/_common.py` now holds the package bootstrap, the `--json`/text/exit-code CLI
+template and an order-preserving `dedupe`, replacing verbatim copies across the gate tools; seven
+gates were converted and their stdout verified byte-identical before and after. `rc_audit.py`
+derives its required snippets from a single `CURRENT_BASELINE` constant instead of three
+hard-coded strings, and every doc that quoted an older count was updated in the same pass.
+`_plugin_for_action_tests` now defaults `_runtime_state_path` to a temp directory: the runtime
+fallback writes to the plugin root, and a test that forgot to override it had previously leaked a
+`.runtime_state.json` containing a real player name into the repository root.
+
+### Host interop: canonical passive context, no deferred candidate
+
+`ai_behavior="read"` is the canonical passive contract. A confirmed kill that lands inside the
+text-chat quiet window is now downgraded to background context for a natural user turn; it does
+not trigger a proactive reply, and the character is not required to mention it. The plugin emits
+`delivery_intent="passive_context"` only as a generic forward-compatible hint and no longer emits
+the retired `deferred_candidate`, `candidate_ttl_seconds`, or next-reply consumption hints.
+
+Event freshness is still translated to `delivery_ttl_seconds`, and battle cues explicitly declare
+`interrupt_policy="drop"` because an expired tactical call-out must not be compensated later.
+Hosts that consume these generic hints may preserve expiry across internal queues; hosts that do
+not must safely ignore them. A successful `push_message` call means only that the host accepted the
+cue, not that generation or playback completed.
+
+Reply length does **not** need host work and no such change should be proposed. `short_tts_line`
+and `max_reply_chars = 28` are prompt constraints executed by the character the plugin targets,
+not a delivery contract awaiting host enforcement: `target_lanlan` routes the cue to a character
+(`proactive_bridge` carries it as `lanlan_name`) whose persona produces the short spoken line.
+Making `callback_render.py` truncate from metadata would move a character concern into the
+delivery pipeline. The identically-named metadata keys are observability markers only.
+
+Note the two distinct identities: `player_name` is the operator's War Thunder nickname, entered by
+hand and used only by the data layer for `is_my_kill` / `is_my_death` — it never reaches the
+dispatcher. `target_lanlan` is which character replies, resolved automatically from the active
+character with no plugin-side default.
+
+That leaves exactly one delivery semantic unimplemented on both checkouts: `quiet_window.bypass`,
+letting a critical cue cut through the user-is-typing quiet window. It is a timing concern, so a
+character cannot solve it — but whether it needs host work should be decided from live evidence
+about whether critical cues actually arrive too late, not pre-emptively.
+
+Repository hygiene: the 360px panel tweak that existed only in the host deployment copy was
+returned to source, `.gitattributes` pins LF (roughly 95% of the apparent cross-copy drift was
+CRLF noise), and all three plugin copies — standalone, `N.E.K.O` runtime, and the
+`N.E.K.O-warthuder` integration branch — are back in sync.
+
+- Handoff summary: `docs/handoff-20260727.md` (this pass); prior context in `docs/handoff-20260715.md`.
+- Source repository: `CN-Zephyr/project-N-E-K-O-Warthunder-8111-data-plugin`, working branch `agent/isolate-cross-domain-runtime-state`.
+- Last offline-verified RC package: `D:\Users\zheng\Desktop\code\N-E-K-O-Warthunder\dist\neko_warthunder-0.1.0-20260726-offline-rc.neko-plugin`; it includes the delivery-rollback, process-ownership, and raw-chat persistence fixes through the 527-test baseline.
+- Package size: `274157` bytes; archive SHA256 `531D3A3F7CC113F8ACB1A23A1E7A9249FCD1586F5B6DC7AB3EB4985CDAEC5211`; payload hash `d0d3d585d5c7b41d8489caaa864e679075d03d5cfb76bab9ba44699540b858ce` verified by `neko_plugin_cli verify`.
+- Package contents: runtime data layer is included (`data_layer/data_process/wt_server.py` and `vehicle_profiles.json`); `local_samples`, `local_test_logs`, `captures`, `records`, `maps`, `tests`, `docs`, and `tools` are excluded by `[tool.neko.build]`.
+- Latest verified test status: `tests/run_logic_tests.py` reports `622/622 passed` and pytest reports `622 passed`; the explicit canonical host boundary gate passes. The aggregate release-readiness command still auto-discovers an older sibling `N.E.K.O` checkout unless its host path is corrected.
+- Release posture: offline RC package built and installation-smoke verified. Live evidence is intentionally deferred, not passed, so this is not a final public release.
+- Safe defaults: `dry_run=true`, `data_layer_auto_start=true`, `dialogue_intrusion_mode="critical_only"`, `plugin_owned_battle_output_enabled=false`, `plugin_owned_urgent_output_enabled=false`, `v2_live_verified_real_output_enabled=false`.
+- Promotion-only behavior has been withdrawn from the formal source: battle-end output uses the normal arbitration/backpressure path, no release default is opened for recording convenience, and local recordings are evidence rather than a reason to weaken output gates.
+- Data-layer contract v1.9 now emits a stable per-match `battle_id`, `battle_started_at`, `life_index`, `confirmed_respawns`, and `dead_source`. Same-match respawn keeps the battle ID and increments the life index; a new battle ID resets plugin detector/scenario/arbiter state so stale cross-match state cannot leak.
+- Air-awareness fixes preserve horizontal clock direction without inventing vertical guidance. Repeated tailing evidence is correlated by track when available, with backward-compatible handling for older recordings that lack track IDs.
+- Battle prompts constrain verified facts, domain vocabulary, length and takeover safety while leaving emotion and wording to the active character persona; the plugin does not prescribe a fixed catgirl response style.
+- Latest domain split: fixed-wing flight-safety events are guarded to `domain == "air"`; ground status speech now keeps only `ground_laser_warning`. Crew, role, and first-stage-ammo facts remain data-only and do not produce candidates. Prompt output is mode-pinned through payload, prompt text, and `push_message.metadata.domain_prompt_contract`.
+- Broadcast preferences support quiet/standard/active pacing, five ordinary category switches, and a one-click reset to standard/all-enabled. The reset deliberately leaves nickname, dialogue policy, `dry_run`, and output start/stop state unchanged.
+- Diagnostics expose a copyable `neko_warthunder.safe_diagnostics.v1` summary built from a fixed safe-field allowlist. It omits identity, chat/HUD, targets, vehicles, URL/PID, exception text and prompt/payload text, and does not change the overview layout.
+- Standalone and host runtime behavior are synchronized for context injection, repeat collapsing, preemption metadata, takeoff protection, recorder cleanup and manual-action help. The host boundary gate now compares the process manager, identity client, 8112 server and recorder in addition to the existing runtime sentinels.
+- Remaining non-live focus: review and commit the source/docs maintenance, then update the integration branch. If live validation resumes later, use the deferred R2 checklist before enabling any currently gated output.
+
+## Current State
+
+- M1 scaffold and M2 understanding/decision logic are implemented.
+- Battle Awareness main chain is implemented.
+- Hosted UI Integration is complete.
+- The Hosted UI overview/activity/diagnostics redesign and two-step first-run onboarding are complete. The activity view filters recent safe summaries by submitted, recorded, and suppressed outcomes; the panel keeps one dialogue-policy control in the overview footer and no longer duplicates it in settings.
+- Safe activity history is complete. Runtime observability now exposes a bounded 20-item `recent_activity` ring even when the debug timeline is closed; records contain only event/stage/result metadata and never raw player, chat, HUD, prompt, or payload text.
+- Broadcast preferences are complete. Settings now expose quiet/standard/active pacing for noncritical events and category switches for general safety, combat results, fixed radio, awareness, and lifecycle output; critical safety and death events remain mandatory safety-floor output.
+- T4 integration tests are complete.
+- `T-Safety: output text sanitizer` is complete.
+- `T-FreeText-Gate: free-text release gate` is complete. `tools/free_text_gate.py` is now part of offline preflight and proves synthetic hudmsg / combat.feed / awards / player-name payloads do not leak raw text into prompts or `push_message.parts[].text`; those paths remain dry-run-only until live safety validation passes.
+- `T-FreeText-Observe: free-text blocked runtime observe` is complete. The runtime records first-seen `awards`, `combat.feed`, `hud_notices`, `hudmsg`, and `hud_events` sources as `detector_suppressed/free_text_blocked` metadata, and now emits a safe `free_text_activity` candidate for dry-run decision tracing only. Real `dry_run=false` output remains suppressed with `free_text_dry_run_only`; no raw text enters prompt or `push_message.parts[].text`.
+- `T-Replay-Gate: replay degrade release gate` is complete. `tools/replay_gate.py` is now part of offline preflight and proves synthetic `replay=true` frames with critical flags, owned combat.feed, HUD notices, and awards do not emit Detector candidates, prompts, or `push_message` output.
+- `T-Ownership-Replay-Gate: third-party sample ownership replay gate` is complete. `tools/ownership_replay_gate.py` proves legacy third-party samples require explicit manual identity + opt-in ownership inference, emit owned kill/death only from inferred `is_my_*` flags, and keep injected interference combat feed unowned.
+- `T-Deferred-HUD-Gate: deferred HUD notice release gate` is complete. `tools/deferred_hud_gate.py` proves `powertrain_failure` remains observable but non-speech: no Detector candidate, no Dispatcher prompt, no `push_message`, and no raw HUD text leak.
+- `T-Mode-Domain-Boundary-Gate: mode/domain boundary gate` is complete. `tools/domain_boundary_gate.py` proves fixed-wing condition cues stay `domain == "air"` only and the sole ground status speech cue, `ground_laser_warning`, stays `domain == "ground"` only.
+- `T-Release-Defaults-Gate: release-safe defaults gate` is complete. `tools/release_defaults_gate.py` is now part of offline preflight and proves the default release posture remains dry-run-first, debug timeline off, unverified V2 real output closed, and real-output queue guards enabled.
+- `V2 Proximity / Objective Awareness` is implemented for the non-live scope. The plugin now consumes data-layer edge facts from `proximity.events` plus continuous air geometry from `situation.nearest_air_threat` / `situation.enemies`; `enemy_nearby` remains proximity-edge based, while `air_threat_nearby`, `enemy_on_six`, and conservative sustained-rear `tailing_risk` can come from either proximity or situation evidence. `ground_target_nearby` consumes `situation.ground_targets`. All outputs remain safe/generic, are gated below critical safety events, expose only safe Hosted UI awareness summaries, and validate through `tools/proximity_gate.py`.
+- Mode/domain boundaries are split by vehicle domain. Fixed-wing condition events (`stall_risk`, `high_aoa`, `over_g`, `low_alt_danger`, `overspeed`, `low_fuel`) require `domain == "air"` and reset silently in ground/naval/heli/unknown domains. Ground status speech keeps only `ground_laser_warning`; crew, role, and ammo flags remain observable data without Detector events. The output layer keeps the same domain contract for prompt and metadata review.
+- `T-V2-Readiness: V2 readiness summary` is complete. `tools/v2_readiness.py` now folds the deterministic proximity/objective gate and optional local sample evidence into one safe report, separating V2 code/offline-gate completion from live-only evidence such as rear/six threat and 3000m objective samples.
+- `T-V2-Release-Matrix: V2 release capability matrix` is complete. `tools/v2_release_matrix.py` now renders each V2 capability as code/offline/live-evidence/real-output-policy rows, so `enemy_nearby`, `air_threat_nearby`, `enemy_on_six`, `tailing_risk`, and `ground_target_nearby` can be reviewed without confusing code completion with live verification.
+- `T-V2-Output-Policy: V2 real-output policy gate` is complete. `tools/v2_output_policy_gate.py` keeps live-evidence-gated V2 events (`enemy_on_six`, `tailing_risk`, `ground_target_nearby`) dry-run observable but suppresses real `push_message` by default until `v2_live_verified_real_output_enabled=true` is explicitly enabled.
+- `T-V2-Completion-Gate: V2 completion gate` is complete. `tools/v2_completion_gate.py` now aggregates V2 readiness, release matrix, and output policy into one pass/fail handoff gate: code/offline scope may be complete while live-only evidence remains explicitly pending.
+- `T-Final-Smoke-Packet: final smoke packet` is complete. `tools/final_smoke_packet.py` now renders the last live-smoke handoff packet with go/no-go, required commands, v1/v2 handoff status, V2 live-evidence gaps, a per-capability V2 matrix with observed/triggered counts and real-output policy, P1 runtime focus checks for output freshness / stale-warning replacement / user-chat quiet window / short-TTS contract / `mode_domain_boundary`, remaining live actions, and the dry-run/raw-text safety boundary. `tools/final_smoke_evidence_gate.py` validates the post-smoke evidence JSON so the last proof is auditable without storing raw chat/HUD/combat/award text; `--rehearsal-output-dir` writes a `rehearsal_only=true` workflow rehearsal under `local_test_logs/final_smoke_rehearsal`, `--from-live-monitor` scans safe `live_monitor --json` JSON/JSONL output to prefill freshness/short-TTS metadata, `--record-safe-transcript --reply-chars <count>` creates raw-text-free reply metrics from numeric/operator observations, `--safe-transcript-template` / `--safe-transcript` remain the manual metrics path, `evidence_from_monitor_and_transcript` is the one-command packet path for producing a final evidence JSON from both sources plus explicit mode-domain confirmation, and `--update --confirm-*` remains the explicit operator-confirmation fallback for stale-warning replacement, user-chat quiet window, single-line spoken output, and mode-domain boundary evidence; `release_readiness.py` / `preflight.py` can include it with `--final-smoke-evidence`.
+- `T-RC-Handoff-Report: maintainer handoff report` is complete. `tools/rc_handoff_report.py` now renders a human-readable v1/v2 RC summary that combines release scope, V2 completion, final-smoke go/no-go, the dry-run/raw-text safety boundary, and remaining live-evidence actions without depending on War Thunder or host services.
+- `T-Release-Readiness: v1 RC offline gate aggregator` is complete. `tools/release_readiness.py` runs deterministic no-host checks and reports whether the branch is ready for the final live smoke. It now keeps local sample report generation explicit via `--include-local-sample`, so the default `--run` remains a fast release gate even when large ignored samples exist locally. Its `release_scope` separates offline gate status, free-text real-output blockers, sample-unproven items, and next live actions; its `handoff` / `handoff_status` combines v1 release state with V2 code/offline/live-evidence status for maintainer handoff.
+- `T-Package-Artifact-Gate: distribution package content gate` is complete. `tools/package_artifact_gate.py` validates the built `.neko-plugin` identity, required runtime files, all 8 locale files, archive path safety, and development-file exclusions. It found a bundled `.ruff_cache` in the first offline RC; explicit build exclusions now prevent cache, test, documentation, and tool artifacts from entering the runtime payload.
+- `T-RC-Builder: atomic offline RC builder` is complete. `tools/build_release_candidate.py` runs the host's official release check, the package artifact gate, official payload verification, and an isolated temporary installation smoke before atomically publishing the output. Existing artifacts are not replaced without `--force`, and the operator's real plugin directories are never used by the installation smoke.
+- `T-Host-Contract-Gate: host short-reply compatibility gate` is complete as a local host compatibility check. `tools/host_contract_gate.py` is part of preflight and release readiness; when a local N.E.K.O checkout exists it statically verifies host consumption of `short_tts_line`, per-turn short-TTS completion/char accounting, `neko_warthunder:battle_event` user-chat quieting, pending callback / hot-swap mirror coalescing by `coalesce_key`, hot-swap metadata preservation, callback delivery call sites, and the combined user-chat-interference regression where `you_died` replaces an older warning cue. This remains a compatibility/experiment gate only: the plugin should not require a War-Thunder-specific host core patch. Host core work is frozen for this plugin until a generic callback contract interface exists.
+- `T-Host-Callback-Contract-Reservation: generic host callback contract reservation` is complete. Real battle-event pushes now reserve `metadata.host_callback_contract_version=neko.callback.v1` and a structured `metadata.host_callback_contract` block with generic `delivery`, `reply`, `quiet_window`, `freshness`, and optional `target` semantics. The legacy flat metadata remains for current tooling, but future host support should consume the generic contract instead of special-casing `neko_warthunder`.
+- `T-Observe: runtime decision timeline` is implemented in lightweight form: always-on last summaries plus an opt-in in-memory debug ring buffer.
+- `T-Live: live monitor summary tool` is complete for safe, read-only runtime summaries during real-machine tests.
+- Runtime War Thunder context is now telemetry-state driven. Startup no longer injects the War Thunder copilot instructions immediately; the plugin enters that `read` context only after `/api/telemetry` moves out of `offline`, then sends the restore-to-normal-chat `read` context when telemetry returns to `offline`. The dashboard/status payload exposes `game_context_active` so live tests can distinguish plugin enabled from War Thunder context active.
+- `T-Output: output backpressure guard` is complete for real `push_message` calls. It suppresses same-or-lower-priority real pushes during `output_backpressure_seconds`, while `you_killed`, `you_died`, and critical safety events can still pass so kill praise is not eaten by a recent flight-safety cue. Critical/action cues now default to bounded `respond` prompts so the host-generated short reply reaches TTS; deterministic `blind+plugin` output remains an explicit compatibility opt-in. Flexible events such as spawn, kill/death, overheat, low fuel, generic proximity, objective cues, and battle end also use bounded `respond` prompts so the cat can add a little emotion, teasing, or companionship without fixed templates. The hard boundary remains factual: no invented threat/lock/kill/damage/takeover, and proximity/objective prompts say only observed direction, distance, and target type; missing fields must not be filled in. They also use `coalesce_key=neko_warthunder:battle_event` so a host queue can replace stale unreleased battle cues with the newest event. Events older than `output_event_max_age_seconds` are dropped before real push with `event_expired`; repeated same safety/map cues inside the short collapse window are dropped with `repeated_event_collapsed`; strongly time-sensitive tactical cues such as proximity, rear-threat, low-altitude, and overspeed use shorter per-event freshness windows under that global cap. Real pushes now also carry output freshness metadata (`event_age_seconds`, `event_expires_at`), a resolved `target_lanlan` when available, short TTS reply contract metadata (`battle_reply_contract=short_tts_line`, `live_reply_contract=short_tts_line`, `max_reply_chars=28`), plugin-owned output metadata, and the generic `host_callback_contract` reservation, so live monitoring can distinguish plugin-side stale drops from host queue / fallback-session delay and host-side long-reply regressions.
+- `T-Kill-Coalesce: you_killed multi-kill coalescing` is complete in lightweight form. Owned kill events are merged into one `kill_count` event; the coalescing window rolls from the latest kill so continuous combat does not get interrupted by repeated praise, with a 3x-window max-hold fallback so long streaks still flush. Kills are deferred instead of dropped while `CRITICAL_RISK` is active, and handled by stress source under `COMBAT_STRESS`: air/heli or damage pressure waits for the stress to clear, while ground/naval maneuver-only pressure can flush after the merge window. Death / critical preempt can still clear or convert pending kills into trade feedback.
+- L8 data-layer subprocess orchestration is implemented and locally verified. The plugin can auto-start vendored `wt_server.py` when `:8112` is missing, marks an already-running `:8112` as external, and only stops processes it started itself.
+- L9 takeoff tuning is implemented with radio-altitude-first semantics. `radio_altitude_m` is the preferred AGL source for low-altitude/takeoff decisions; `altitude_m` is treated as MSL/field-elevation context when AGL is available.
+- Takeoff/rollout protection keeps the original `takeoff_low_alt_grace_seconds=45` window and adds `takeoff_radio_altitude_enter_m=10` / `takeoff_radio_altitude_exit_m=40` hysteresis. It suppresses `low_alt_danger` during takeoff grace and also suppresses runway-roll `overspeed` while radio-altitude protection is active. Stall, overheat, low_fuel, and death events are not suppressed by this guard.
+- Hosted UI panel has completed its RC information-architecture pass: overview, diagnostics, settings, nickname setup and first-run guidance are separated by task; connection, battle, safety and output decisions remain readable in Chinese.
+- Logic self-check currently passes: `622/622`.
+- Datamine profile maintenance tooling is in place. `tools/datamine_profile_candidates.py` extracts read-only stall/AoA/VNE/MNE/`Temperature.Load*`, mass, structural overload, Instructor G-limit, fuel-consumption, and engine-inertia candidates from gszabi99/War-Thunder-Datamine. `tools/update_vehicle_profiles_from_datamine.py` bulk-updates exact fixed-wing profiles from local flightmodels, `tools/update_vehicle_profile_economy_from_datamine.py` backfills small official vehicle profile economy metadata from `char.vromfs.bin_u/config/wpcost.blkx`, `tools/vehicle_family_coverage.py` reports vehicle family coverage and prefix-risk gaps, `tools/vehicle_profile_id_audit.py` enforces the Wiki `/unit/<gameId>` candidate / 8112 `vehicle_type` authority policy, `tools/profile_candidate_diff.py` compares candidate reports against `vehicle_profiles.json`, and generated reports stay under ignored `local_test_logs/`. The database has moved beyond the earlier three hot-aircraft batches: `vehicle_profiles.json` now has 1469 exact entries, 283 family rules, 13 class templates, and is about 1.76MB. FM coverage remains 1345 entries with oil-temperature candidates, 480 entries with turbine-temperature candidates, 1425 entries with structural overload/G evidence, and 1200 entries with fuel/inertia evidence while keeping `_default` temperature-free. Official small metadata coverage is now 1377/1469 exact entries for `rank`, `economic_rank_arcade`, `economic_rank_realistic`, `economic_rank_simulation`, `country`, `unit_class`, and `unit_move_type`; this deliberately does not import cost tables, reward multipliers, weapons, modifications, or large economy blobs, and `economicRank*` is stored as economy metadata rather than claimed as UI battle rating. Family coverage reporting currently shows 1469 exact profiles, 283 family rules, 13 class templates, 86 family-risk rows, and priority gaps such as missing exact bomber families or family rows with incomplete economy metadata. Identity audit currently has 8 vetted live `vehicle_type` ids, 4 reviewed compact alias groups, 0 unreviewed alias groups, and 0 errors. The family prefixes for Hampden, G.50, CR.42, MB.150, Mystere, Gripen, and Draken have been aligned with actual vehicle ids while preserving short-id fallback where tests require it. The updater backfills existing FM-stem / compact-id alias entries and uses unit `model` / `fmFile` identity for performance-class inference, so already-present ids such as `f6f-5`, `a-10c`, `a-10a_early`, and `su_24m` receive missing Datamine evidence or finer class assignment without creating new alias profiles or overwriting calibrated thresholds. `_tested` entries preserve live-calibrated thresholds by default but may receive missing read-only evidence fields, and rotorcraft/UAV ids are skipped so fixed-wing thresholds do not leak into helicopter handling.
+- Real-machine smoke passed on 2026-06-21 and 2026-06-23 for Hosted UI context/actions, safety pause/resume, spawn, overspeed warning/critical, low_fuel warning/critical, low-altitude warning/critical, stall warning/critical, overheat warning/critical, identity manual seam, owned kill/death ownership, you_killed / you_died Arbiter decisions, dry-run dispatcher output, and `dry_run=false` push output.
+- 2026-06-28 air dry-run testing found owned `you_killed` candidates could be scenario-gated under `CRITICAL_RISK` while overspeed/low-alt/stall risks were active. Arbiter now defers those kills as `kill_deferred_critical_risk` and flushes them after the critical scenario clears; next live restart should confirm the runtime behavior.
+- 2026-06-23: plugin status reporting was deduped and throttled to avoid host-side `report_status` / ZMQ backpressure spam while still reporting immediately on real state changes.
+- 2026-06-24 live `dry_run=false` testing showed the plugin can push events quickly while the host reply may arrive late and mix older event context. Plugin-side mitigations now include real-output backpressure, real-push TTL expiry, output freshness metadata, explicit `target_lanlan` propagation, short TTS reply metadata (`short_tts_line`, 28 chars), and a generic `host_callback_contract` reservation for future host support. Current host-core special patches are not treated as plugin requirements; the next live test should verify plugin-side metadata is present and stale pushes are dropped, while full stale-queue replacement / user-chat quiet-window behavior waits for a generic host callback interface.
+- Default runtime mode is `dry_run = true`; the plugin runs the decision chain but does not push real catgirl speech until dry run is disabled.
+- The runtime data boundary is HTTP `:8112` (`/api/telemetry`) only. L8 lifecycle code may start/stop the vendored data-layer process, but plugin runtime code must not import `data_layer/` as a Python package. Vendored data-layer source and profile JSON may be updated only as explicit data-layer contract/profile maintenance work.
+- Vendored data layer contract `v1.6` is merged. It includes `overspeed_warn` / `overspeed_critical`, enhanced `combat.feed`, `is_my_kill` / `is_my_death`, `/api/identity`, `replay: true` degrade mode, `hud_notices`, and `awards`.
+
+## Ready to Hand Off
+
+- Core contracts, scenario machine, detectors, arbiter, safety guard, dispatcher, runtime observability, tests, replay tool, and Hosted UI panel are present.
+- The offline replay tool's synthetic scenario now covers v1.6 `combat.feed[].is_my_kill` / `is_my_death` kill and death events.
+- `tools/sample_replay.py` now includes a safe `session_summary`, validation-check verdicts, P1/P2 `live_test_plan`, safe event display labels, `--json` output, free-text source details, V2 proximity/situation/ground-target coverage, per-capability `capability_evidence`, and an offline replay contract that marks `replay=true` samples as suppressed only when candidate/chosen/output counts stay zero. `tools/offline_report.py` renders the same safe verdicts as Markdown with a Team brief, Next test focus, V2 capability evidence, Operator quick checklist, and Next live-test plan, or as compact JSON with `v2_capability_evidence` for tooling. `tools/rc_gap_summary.py` renders a compact machine-readable v1/v2 gap summary that separates local-sample-unproven items from real release blockers. `tools/v2_readiness.py` renders a focused V2 readiness report: offline gate/event/safe-output status plus optional local sample evidence and next actions. `tools/v2_release_matrix.py` renders a capability-by-capability V2 matrix with code status, offline gate status, live evidence status, observed/triggered counts, real output policy, and missing requirements. `tools/v2_output_policy_gate.py` proves live-evidence-gated V2 events stay dry_run-first and do not real-push until explicitly enabled. `tools/v2_completion_gate.py` aggregates V2 readiness, matrix, and output policy into one completion gate that passes code/offline scope while keeping live-only evidence explicit. `tools/final_smoke_packet.py` renders a focused final-smoke handoff packet: go/no-go, commands, handoff status, V2 live evidence, a V2 capability matrix with observed/triggered counts and real-output policy, runtime focus checks, remaining live actions, and safety boundary. `tools/final_smoke_evidence_gate.py` validates the post-smoke evidence JSON, can draft evidence from safe `live_monitor --json` JSON/JSONL output with `--from-live-monitor` / `--output`, can generate and merge raw-text-free reply metrics with `--safe-transcript-template` / `--safe-transcript`, can merge explicit operator confirmations with `--update --confirm-*`, and can be pulled into release/preflight with `--final-smoke-evidence`. `tools/rc_handoff_report.py` renders the maintainer-facing RC report for “V1 offline ready, V2 code/offline complete, live evidence pending” without raw text or service startup. The sample, offline-report, rc-gap-summary, rc-handoff-report, v2-readiness, final-smoke-packet, and live-test-plan exits all include runtime output follow-ups for T-Output backpressure and T-Kill-Coalesce; `next_steps` also names those two live actions while the summary status remains based on sample/data gaps. `tools/live_test_plan.py` expands the plan into an Operator quick checklist plus concrete live-test operation steps with operation / monitor / pass / fail / data-layer-gap criteria, including `fly_closer_to_ground_target_sample` when target data exists but never enters the 3000m trigger threshold. `tools/live_monitor.py` prints a top-line `Summary` plus safe health/context/telemetry/log summaries, explicit free-text dry_run-only status with per-source blocked detail, replay degrade status, output freshness/short-TTS metadata, and actionable observe/output reasons such as `selected`, `dry_run_enabled`, `free_text_blocked`, `kill_coalesced`, `output_backpressure`, and `event_expired` for live validation without raw player/HUD/combat/award text; `--output` creates parent directories and saves the safe monitor report. `tools/free_text_gate.py` provides a synthetic no-host release gate for free-text unstubbing. `tools/replay_gate.py` provides a synthetic no-host release gate for replay degrade safety. `tools/ownership_replay_gate.py` provides a synthetic no-host gate for manual identity and legacy third-party ownership replay. `tools/deferred_hud_gate.py` provides a synthetic no-host release gate for deferred HUD technical notices such as `powertrain_failure`. `tools/domain_boundary_gate.py` provides a synthetic no-host mode/domain boundary gate for air-only fixed-wing cues and ground-only status cues. `tools/proximity_gate.py` provides a synthetic no-host V2 proximity/objective awareness gate. `tools/host_contract_gate.py` provides an optional local-host compatibility/experiment gate for short-TTS and user-chat quiet-window consumption; plugin release should not depend on War-Thunder-specific host core patches. `tools/rc_audit.py` provides a no-host RC documentation consistency gate. `tools/release_readiness.py` aggregates deterministic offline checks and exposes `release_scope` with `ship_status`, `real_output_blockers`, `sample_unproven_items`, `next_actions`, and `handoff`. `tools/preflight.py` dry-run output includes a Quick read for operators, and `--run --report-output <path>` can run the free-text, replay, ownership replay, deferred HUD, mode/domain boundary, proximity, host-contract, optional local-host compatibility gates, V2 readiness summary, V2 release matrix, V2 output policy gate, V2 completion gate, RC handoff report, final smoke packet, runtime smoke, save the offline readiness report, print the operation plan, and clearly say whether to proceed with dry-run live validation or stop before real-machine testing. These paths avoid raw player/HUD/combat/award/proximity/objective text.
+- Hosted UI surface, dashboard context, actions, and minimal panel have passed smoke validation.
+- Design docs are complete for the current v1 scope: D-B1 through D-B5, implementation plan, data-layer TODOs, recovery test plan, and real-machine validation checklist.
+- Data-layer blockers are no longer "waiting for fields"; plugin-side v1.6 DTO seams are wired, and the current work is real-machine / sample validation.
+
+## Not Done Yet
+
+- Real-machine `dry_run` seams are validated for numeric flight-safety basics and owned kill/death. `dry_run=false` push output is validated for `test_say`, `you_killed`, and `you_died`; additional hudmsg / awards free-text paths still need dry-run safety validation before real output.
+- The later 2026-06-23 air dry-run monitor independently confirmed the `:8111` native telemetry -> `:8112` data layer -> plugin log chain for `spawn`, `stall_risk`, `low_alt_danger`, `overspeed`, owned `you_killed`, and crash-style owned `you_died`. In that boot the Hosted UI HTTP ports were not listening, so the result is counted as runtime chain evidence rather than a fresh Hosted UI smoke.
+- Plugin-side M3 adaptation to data-layer `v1.6` DTO is implemented for the current v1 scope. Owned kill/death, identity, overspeed, overheat, low altitude, stall, and low_fuel have real-machine evidence; replay samples and awards/free-text paths remain open. Popular fixed-wing performance profiles have been expanded from Datamine candidates, while oil/engine overheat precision still requires live sample calibration before becoming speech thresholds.
+- `you_killed` and `you_died` now consume `combat.feed[].is_my_kill` and `combat.feed[].is_my_death`; the old `vehicle_valid` death path is not used as the main death source.
+- Combat output wording is now domain-aware for generic kill/death prompts and mode-aware for general battle prompts: air kills use air-target wording, helicopter kills use crew-context wording without fixed-wing action guesses, ground kills use ground-target destruction wording, naval kills use ship wording, crash/death prompts use `cause` + `domain`, and prompt facts do not repeat raw victim player names. Ground prompt contracts explicitly use车组/上车/装填/掩体/看路语境 and must not drift into升空/后座/云霄等空战语境.
+- `overspeed` is no longer a data-layer gap; 2026-06-23 real-machine dry-run observed `overspeed_warn` and `overspeed_critical` flowing through Detector -> Arbiter -> Dispatcher dry_run. DTO mapping should still be kept under M3 regression coverage.
+- Overheat HUD-notice seam is implemented for `hud_notices.feed[].code` values `engine_overheat` and `oil_overheat`, mapped to the existing `overheat` event with safe code-only payload. 2026-06-23 real-machine dry-run observed the `overheat` event path. Datamine thermal fields are treated as evidence only, not as HUD overheat warn/critical thresholds; `powertrain_failure` is intentionally not promoted to a speech event yet, but it is now recorded as `detector_suppressed/deferred_hud_notice` in T-Observe / live monitor.
+- `replay: true` telemetry is silenced at `DetectorEngine`: detectors reset, no battle events are emitted, and T-Observe records `detector_suppressed/replay` as the latest decision. `tools/live_monitor.py` now reports `replay_degrade.status`, `decision_stage` / `decision_reason`, and whether output was blocked. Real replay samples still need validation.
+- `/api/identity` now has a plugin-side player-name seam through Hosted UI context/action and the minimal panel. The dashboard keeps the player-name control manual-only: type the id, save it, or clear it. Manual identity is persisted back to the plugin config and restored to the data layer on startup, so the operator does not need to re-enter the same player id every session. Safe `combat.active_players` summaries remain available as backend context, but the UI no longer offers candidate one-click selection. 2026-06-23 real-machine testing verified the manual identity seam against `combat.self.source=manual`, observed owned `combat.feed[].is_my_kill` / `combat.feed[].is_my_death` paths in air/ground contexts, and confirmed post-fix `you_killed` plus `you_died` reach Arbiter and Dispatcher.
+- T-Observe exposes `observe.last_event`, `observe.last_decision`, `observe.last_output_status`, and debug-only `recent_timeline` through Hosted UI context. 2026-06-23 real-machine dry-run confirmed the always-on summaries explain allowed, preempted, cooldown-dropped, and dry-run dispatcher outcomes.
+- T-Output adds a final dispatcher-side guard before real `push_message`: same-or-lower-priority events inside `output_backpressure_seconds` are recorded as `dispatcher_suppressed / output_backpressure`; `you_killed`, `you_died`, and critical safety events can still be pushed. Critical/action cues default to bounded `respond` so the short reply reaches TTS; `blind+plugin` deterministic output is available only through an explicit compatibility opt-in. `spawn`, kill/death, overheat, low fuel, generic proximity, objective cues, and battle end remain bounded `respond` events for personality within strict no-threat/no-lock/no-kill limits. Pushed events share `coalesce_key=neko_warthunder:battle_event`, include `event_age_seconds`, `event_expires_at`, `target_lanlan`, `battle_reply_contract=short_tts_line`, `live_reply_contract=short_tts_line`, `max_reply_chars=28`, `plugin_owned_output`, and reserve `host_callback_contract.version=neko.callback.v1` metadata when available. Events older than `output_event_max_age_seconds` are recorded as `dispatcher_suppressed / event_expired` and are not pushed; repeated same safety/map cues inside the short collapse window are recorded as `dispatcher_suppressed / repeated_event_collapsed`; tactical cues with short-lived value use tighter per-event max-age windows so stale threat/low-alt/overspeed prompts die faster. `tools/live_monitor.py` now surfaces output backpressure, repeated-collapse drops, expired stale-event drops, and output freshness metadata directly in the short output summary.
+- Multi-kill coalescing is implemented in Arbiter for `you_killed`: short-window kills become one generic `kill_count` prompt, and owned kills seen during `CRITICAL_RISK` are deferred until the critical risk clears, reducing repeated kill chatter without exposing raw player names or interrupting safety warnings.
+- T-Safety is now in place at the NekoDispatcher / prompt-builder boundary. It blocks common hudmsg / combat.feed / awards free-text field families before prompt construction. Generic kill/death speech has passed real-machine `dry_run=false` smoke; hudmsg / awards / other free-text speech still needs real-machine dry-run validation before rollout.
+- Numeric flight-safety events such as stall, low altitude, overheat, overspeed, and low_fuel are not blocked by T-Safety. 2026-06-23 air dry-run observed low_fuel warning and critical output; later low_fuel repeats could be scenario-gated under combat stress as expected.
+- The 2026-06-23 live monitor exposed a data-layer map/profile polling regression where `wt_proximity` still called the old `_merge_profile()` signature. The code path is fixed with regression coverage; the next live data-layer restart should confirm the log no longer repeats.
+- Data-layer subprocess orchestration is implemented for the minimal ownership contract. 2026-06-26 local self-validation confirmed managed processes are stopped on plugin shutdown, external `:8112` services are not killed, and Hosted UI/status expose `data_layer.mode`, `pid`, `started_by_plugin`, `health`, and `last_error`.
+- `contract/telemetry_sample.json` now contains a sanitized v1.6-shaped telemetry sample derived from real capture structure. It intentionally excludes raw free text; live testing should place raw captures under ignored `local_samples/` and only update `contract/telemetry_sample.json` with sanitized data.
+- recovery remains deferred; do not open `wants_recovery` until real-machine samples justify it.
+- Plugin manifest metadata has matching keys in all 8 locale files. The current Hosted UI panel body is still Chinese-first; full panel-copy localization is a later product decision, not part of this RC stabilization pass.
+
+## Verification
+
+Run the full offline gate from the standalone plugin repository root:
+
+```powershell
+uv run python tools\preflight.py --run
+uv run python tools\release_readiness.py --run
+uv run python tools\release_readiness.py --run --include-local-sample  # optional slow sample evidence
+uv run python tools\build_release_candidate.py  # official build + all artifact/install gates
+```
+
+For single-check reruns or troubleshooting:
+
+```powershell
+uv run python tests/run_logic_tests.py
+uv run pytest -c tests\pytest.ini tests -q
+```
+
+Notes:
+
+- `tools/release_readiness.py --run` is the no-host gate aggregator. It runs deterministic checks, including RC docs audit, vehicle profile id audit, release defaults gate, output freshness gate, host contract gate, ownership replay gate, mode/domain boundary gate, V2 readiness summary, V2 release matrix, V2 output policy gate, V2 completion gate, and RC handoff report; when a local host checkout exists, it also runs local host compatibility checks and plugin check. It returns `ready_for_final_live_smoke` only when the branch is ready for the final focused live smoke. Use `--include-local-sample` only when you intentionally want the slower local sample replay/report checks included.
+- `tools/preflight.py --run` also runs the free-text, replay, deferred HUD, mode/domain boundary, and proximity release gates, optional local host compatibility checks plus plugin check when the host exists, synthetic replay, local sample replay, the offline readiness report, RC gap summary, and the live test plan when the relevant local paths exist. Use `--report-output <path>` to save the Markdown report; parent directories are created automatically. The printed preflight plan points local sample replay users to `session_summary`, the Markdown / JSON report, the machine-readable gap summary, and the live operation plan as review entries.
+- `tests/run_logic_tests.py` is the no-host logic self-check and should report `622/622 passed`; it now expands the simple parameterized isolation cases used by pytest.
+- The standalone pytest entry uses `tests/pytest.ini` so pytest does not import the host SDK-dependent plugin entrypoint while collecting tests.
+- If an older handoff note still shows the pre-T4 test count, treat it as stale unless it explicitly refers to an older test entry point.
+- The real-machine checklist is in `docs/真机验证-checklist.md`; it now includes the 2026-06-21 dry-run smoke result, the next unified live-test order, and links to the 2026-06-20 offline sample replay report in `docs/样本回放-20260620.md`.
+- After each live test, record the sanitized result summary with `docs/真机测试结果-template.md`; do not commit raw player names, HUD text, combat feed text, or awards text.
+- Before the next unified live test, run the offline gate in `docs/统一测试前-离线检查.md`.
+
+## Next Recommended Work
+
+1. Keep the standalone source and host-integrated copy aligned, run the `622/622` logic check, full pytest, `tools/preflight.py --run`, and `tools/release_readiness.py --run`, then build and validate the artifact with `tools/build_release_candidate.py`.
+2. In the next unified live pass, verify V2 proximity/objective awareness on real data: confirm `proximity.events` and `situation.enemies` are visible, `air_threat_nearby` can be produced from either air proximity or continuous situation geometry, rear / six-o'clock samples can produce `enemy_on_six`, repeated close rear samples can produce `tailing_risk`, and approaching an objective can produce `ground_target_nearby`. The 2026-06-20 local sample replay now merges side-stream `records/*/proximity.jsonl*` and continuous `situation.enemies` evidence: it contains `proximity_events=5317`, `proximity_air_events=5300`, `proximity_rear_events=49`, `situation_rear_air_threat_live_items=1906`, and triggers `enemy_on_six=149` / `tailing_risk=44`; the remaining V2 sample gap is a live objective sample inside the 3000m `ground_target_nearby` threshold plus fresh runtime-output experience.
+3. Continue M3 seams that still need real-machine validation or samples: replay real-sample validation with the `live_monitor` `Summary` / replay degrade status, awards/free-text dry_run validation with `free_text_safety.source_details` / `FreeText detail`, oil/engine overheat sample calibration, and the remaining failure-field strategy.
+4. Run the remaining real-machine/data-layer/dry_run seams from `docs/真机验证-checklist.md`, using T-Observe to inspect `last_decision` / `last_output_status` while focusing on V2 proximity/objective awareness, replay, awards/free-text paths, oil/engine failure details after live sample calibration, and whether T-Output reduces stale real replies. For delayed or overly long real output, check `event_age_seconds`, `event_expires_at`, `coalesce_key`, `target_lanlan`, `battle_reply_contract`, `live_reply_contract`, and `max_reply_chars` before blaming Detector / Arbiter latency.
+5. During live validation, capture a fresh real `/api/telemetry` response under ignored `local_samples/` for comparison with the sanitized `contract/telemetry_sample.json`, then summarize the result with `docs/真机测试结果-template.md`.
+6. Keep kill/death generic speech enabled only through T-Safety-safe prompts; consider hudmsg/combat.feed/awards speech only after their own dry-run safety checks pass.

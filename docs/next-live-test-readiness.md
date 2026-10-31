@@ -1,109 +1,16 @@
-# neko_warthunder offline readiness report
+# 下一轮真机准备状态
 
-- sample root: `local_samples\data_process_20260620`
-- files: `14`
-- frames: `10443`
-- status: `needs_more_samples`
+更新：2026-10-29。用户决定本轮跳过剩余真机验收，当前按 [总计划](实现计划-codex.md) 转向 **四域副驾驶体验补全**，最近完成增量为 P1b 会话按需解释入口。本页保留恢复验收时的参考步骤，不是当前执行计划；未验收项不阻塞后续开发。主源码最近完整 pytest 为 **1408 passed**，495 个浏览器状态场景和源码/安装副本隔离 SDK smoke 已通过。详见 [统一状态](当前开发状态.md)。
 
-## Team brief
+## 如后续恢复验收
 
-- ready: -
-- blocked: `numeric_safety:needs_more_samples`, `ownership:needs_more_samples`, `free_text_safety:dry_run_only`, `replay_degrade:needs_more_samples`, `profile_calibration:needs_more_samples`
-- next: `capture_replay_true_sample`, `trigger_overspeed_critical`, `use_v16_combat_feed_ownership_fields`
+1. 工具修复与 [T01–T03 完整聚合复核](待办事项.md#发布前工具复核) 已完成，当时 verdict 为 `ready_for_final_live_smoke`；本轮日志见统一状态。
+2. 按 [真机验收矩阵](真机验证-checklist.md#剩余验收矩阵) 补陆战完整序列、安全反例、V2/起飞保护、真实 TTS 和原生 Electron 证据，保持 dry-run-first。
+3. 此前 RC 已在实际宿主安装并通过 dry-run/重启/浏览器面板 smoke，见 [实际宿主验收记录](RC宿主验收-20261027.md)；该包不含后续直升机/海战源码增量。恢复交付时应先明确待验源码/包版本，再按授权范围继续真实游戏、TTS/Electron 与小范围真实输出终验。
 
-## Observed outputs
+## 证据边界
 
-- `low_alt_danger/enter/critical`
-- `low_alt_danger/enter/warning`
-- `low_fuel/enter/warning`
-- `overheat/enter/critical`
-- `overheat/enter/warning`
-- `overspeed/enter/warning`
-- `spawn/enter/warning`
-- `stall_risk/enter/critical`
-- `stall_risk/enter/warning`
-
-## Next test focus
-
-- `capture_replay_true_sample`
-- `free_text_dry_run_only`
-- `runtime_output_backpressure`
-- `kill_coalescing`
-- `overspeed_critical`
-- `profile_oil_overheat`
-- `profile_powertrain_failure`
-- `profile_hud_notice_severity`
-
-## Validation checks
-
-| check | status | detail |
-| --- | --- | --- |
-| free_text_safety | dry_run_only | `awards=1932/blocked`, `combat_feed=2314/blocked`, `hud_notices=636/blocked` |
-| numeric_safety | needs_more_samples | `overspeed_critical` |
-| ownership | needs_more_samples | `ownership_fields` |
-| profile_calibration | needs_more_samples | `oil_overheat`, `powertrain_failure`, `hud_notice_severity` |
-| replay_degrade | needs_more_samples | `replay_true` |
-
-## Coverage gaps
-
-- `no_replay_true_frames`
-- `no_overspeed_critical_flags`
-- `combat_feed_missing_ownership_fields`
-- `no_oil_overheat_notice_codes`
-- `no_powertrain_failure_notice_codes`
-- `hud_notice_severity_unknown`
-
-## Next validation steps
-
-- `capture_replay_true_sample`
-- `trigger_overspeed_critical`
-- `use_v16_combat_feed_ownership_fields`
-- `capture_oil_overheat_notice`
-- `wait_for_powertrain_profile_or_sample`
-- `verify_hud_notice_severity_mapping`
-- `verify_output_backpressure`
-- `verify_kill_coalescing`
-- `verify_user_chat_interference_quiet_window`
-
-## Operator quick checklist
-
-| 顺序 | 用户操作 | 我方监控重点 | 通过标准 |
-| --- | --- | --- | --- |
-| 0 | 先跑离线门禁，或确认当天代码未变。 | tests/run_logic_tests.py、pytest、host boundary gate、plugin check、sample/live plan。 | 离线基线通过，操作清单包含 P1/P2 待测项；宿主边界检查证明不需要提交战雷专用核心补丁。 |
-| 1 | 启动宿主、Hosted UI、数据层，打开面板。 | 48911/health、48916/health、8112/health、Hosted UI context/actions。 | 三项 health 正常，context 非空，actions 可调用。 |
-| 2 | 进战局前设置玩家名。 | /api/identity、combat.self.source、combat.player_name。 | combat.self.source=manual，后续 ownership 围绕该昵称生效。 |
-| 3 | 保持 `dry_run=true`，打一轮常规空战或陆战。 | observe.last_event、observe.last_decision、observe.last_output_status、processed.flags。 | 事件能解释为 allowed / preempt / cooldown / scenario_gated / dry_run 输出之一。 |
-| 4 | 触发或等待 owned kill / death。 | combat.feed[].is_my_kill / is_my_death、you_killed / you_died。 | 生成 generic kill/death，不含 raw 玩家名；death / critical 仍可抢占。 |
-| 5 | 观察 awards / hud_notices / combat.feed 自由文本源。 | free_text_safety.status、source_details、prompt / dry_run 输出。 | free_text=dry_run_only，raw HUD / combat.feed / awards 原文不进入 prompt。 |
-| 6 | 若出现 replay，继续观察不要手动触发输出。 | replay=true、detector_suppressed/replay、output_blocked。 | replay 帧静默，live_monitor 显示 replay suppressed，不真实开口。 |
-| 7 | 条件允许时关闭 `dry_run`，复测数值安全或 generic kill/death。 | push_message、last_output_status、output_backpressure、event_expired、repeated_event_collapsed、event_age_seconds、event_expires_at、target_lanlan、battle_reply_contract、live_reply_contract、max_reply_chars、kill_coalesced、plugin_owned_output。 | 真实开口不刷屏，旧回复晚到减少，过期旧事件不真实 push，同类安全提示短窗折叠，击杀夸夸不被普通过载背压吃掉，目标会话不走 fallback session，短播报合同不丢失。 |
-| 7a | 真实开口或样本回放期间手动给猫发日常消息。 | 聊天窗口、用户输入后约 10 秒内的战雷 callback、battle_event metadata。 | 危急动作类默认走 bounded `respond` 短播报并进入 TTS；显式兼容开关才使用 `blind+plugin`，且不能混入这轮日常回复；`spawn`、击杀/阵亡、过热、低油、普通接近、目标点和结算同样走 bounded `respond`；critical 危险仍可按插话策略插队。 |
-| 8 | 若出现动力故障 HUD 技术通知，不急着判断成播报事件。 | powertrain_failure、deferred_hud_notice、detector_suppressed、raw HUD 是否被阻断。 | 只显示 deferred 可观测记录，不真实开口，不泄漏 raw HUD 文本。 |
-
-## Next live-test plan
-
-| priority | area | status | action |
-| --- | --- | --- | --- |
-| P1 | 回放降级 | needs_more_samples | capture_replay_true_sample |
-| P1 | 自由文本安全 | dry_run_only | run_free_text_dry_run_safety_check |
-| P1 | 击杀/死亡归属 | needs_more_samples | use_v16_combat_feed_ownership_fields |
-| P2 | 数值安全事件 | needs_more_samples | trigger_overspeed_critical |
-| P2 | 油温/动力故障校准 | needs_more_samples | capture_oil_overheat_notice |
-| P2 | 油温/动力故障校准 | needs_more_samples | wait_for_powertrain_profile_or_sample |
-| P2 | 油温/动力故障校准 | needs_more_samples | verify_hud_notice_severity_mapping |
-| P2 | T-Output 真实开口背压 | needs_live_review | verify_output_backpressure |
-| P2 | T-Kill-Coalesce 多杀合并 | needs_live_review | verify_kill_coalescing |
-| P2 | 用户聊天干扰静默窗 | needs_live_review | verify_user_chat_interference_quiet_window |
-
-## Remaining live-test scope
-
-- `numeric_safety:needs_more_samples`
-- `ownership:needs_more_samples`
-- `free_text_safety:dry_run_only`
-- `replay_degrade:needs_more_samples`
-- `profile_calibration:needs_more_samples`
-
-## Safety notes
-
-- Raw player names, HUD text, combat feed text, and awards text are not included.
-- free_text_safety=dry_run_only means the sample contains free-text sources, but real speech remains blocked.
+- 以前的 `needs_more_samples` 报告描述某份 2026-06-20 捕获素材，不是当前工程完成度；原报告存于 [历史样本准备报告](history/next-live-test-readiness-before-20261027.md)。
+- 历史样本缺 ownership/overspeed 等字段，不能解释为当前数据层没有实现这些字段。七月已有后方/尾随/近目标点覆盖记录；恢复 V01 时先复核归档和当前正式 evidence，仅补缺失域/场景，见 [样本口径](副驾驶能力差距矩阵-20261029.md#样本与现场证据口径)。六月/七月正向也不自动关闭当前验收项。
+- `ready_for_final_live_smoke` 是离线聚合工具成功时的 verdict，不是实际声音、现场体验或正式发布通过证据。
+- 当前开发宿主为相邻 `N.E.K.O`，插件是普通同步副本；避免加载旧 worktree 或重复插件 ID。

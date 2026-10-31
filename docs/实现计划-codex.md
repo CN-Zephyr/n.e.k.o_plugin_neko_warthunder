@@ -1,77 +1,124 @@
-# 实现计划（Codex 交接）：neko_warthunder v1
+# 副驾驶总开发计划
 
-> 面向接手者的当前计划。本文以当前独立插件仓库为准，不再沿用“等待数据层补字段”的旧前提。
+v0.1.2 版本范围：四域只读能力、遥测可靠性、聊天避让及低压力陪伴提示词已纳入源码；默认输出边界保持。版本验证与已知限制见[版本记录](release-v0.1.2.md)，正式发布状态以 GitHub Release 与插件市场为准。
 
-## 实现状态（2026-07-15）
+此前提示词优化轮（2026-11-01）：常驻场景、每事件要求、风格元数据与直出短句统一为不责怪、不嘲讽、不催战绩，紧急提醒保留必要动作。最新完整 **1571 passed**（新增41，定向142），Ruff、模式边界和发布默认值检查通过；模型语气/TTS尚未试听，真实输出边界不变。该轮同步与生效状态见[优化记录](低压力陪伴提示词-20261101.md)，未 commit、push、发布或重建 RC。
 
-### 2026-07-15 RC/UI 同步
+此前 2026-10-30 完成聊天活动读取兼容修复，当轮完整 1530 passed；公开 SDK 与隔离跨进程验证、文件同步及未验收范围保留在[历史修复记录](聊天活动读取修复-20261030.md)。
 
-- 当前工作分支为 `agent/isolate-cross-domain-runtime-state`，基线提交 `34f94cc` 已包含新版概览/诊断面板和两步首次使用教程；当前工作区继续补齐了独立活动页与安全活动摘要。先前宿主集成 PR `Project-N-E-K-O/N.E.K.O#2371` 已合并，当前专属 `warthuder` 分支用于后续插件同步维护。
-- 面板维护已收口：安全暂停/自动保护与输出成功/失败判断统一，死样式和受控下拉框冗余属性已清理，设置弹窗中的重复“播报插话规则”已删除，概览底栏保留唯一常驻入口。
-- 正式 pytest 基线为 `622 passed`。`tests/run_logic_tests.py` 已支持当前简单 `pytest.mark.parametrize` 隔离用例，一键逻辑自检与 pytest 统一为 `622/622`。
-- **T-Safe-Activity 已完成**：运行时新增默认可见、最多 20 条的安全活动摘要；面板新增活动页和结果筛选。该通道不包含 raw text，也不打开 debug timeline。
-- **R1 RC 稳定化已完成**：preflight/release-readiness 全部通过，独立源码与宿主面板副本一致。当前进入 R2 dry-run 真机证据补齐；未验证 V2/free-text 真实输出继续关闭。
-- 最新交接入口：`docs/handoff-20260727.md`（上一份 `docs/handoff-20260715.md` 仍然有效，新文件只记增量）。
+2026-10-29 历史现场边界修复：出生等待真实载具，显式 state 油温只读诊断和燃油估算时效已实现、review并备份同步实际宿主；当轮完整 **1499 passed**，聚焦226，Hosted UI累计546场景，源码/实际安装副本SDK启动重启通过。当时猫猫和游戏均保持关闭，独立8112数据处理已重载运行；2个持久配置/状态文件hash未变。既有过热温度归因仍待修复，未验收TTS/Electron，未新建RC/commit/push/发布。见 [修复记录](现场采集边界修复-20261029.md)。
 
-### 2026-07-10 真机同步
 
-- 当时 `HEAD` 为 `4004873`，本地 `main` 领先 `origin/main` 1 个提交；该段保留为 2026-07-10 历史快照，当前状态以上方 2026-07-15 同步为准。运行目录 `N.E.K.O/` 不属于插件源码，不得加入提交。
-- 打包版宿主 `D:\NEKO` 已验证能从 `C:\Users\zheng\AppData\Local\N.E.K.O\plugins` 发现并启动 `neko_warthunder`；现有 `:8112` 被正确识别为 external 数据层。
-- 正式陆战娱乐模式本机验证为 `map_info.valid=true`、`in_battle=true`、`domain=ground`；退出战局后恢复 `not_in_battle/menu`。用户侧曾出现的“数据层健康但菜单态”未在本机复现，仍需受影响环境样本。
-- 自己发送的固定无线电已两次真机 dry-run 成功，`进攻 D 点` 标准化为 `player_radio_command / attack_point / D`；手动 identity 匹配生效，raw sender/msg 不进入安全 payload。队友同口令不触发仍待真机反例。
-- 陆战 P0 已修复：岗位状态改为多值合同，LWS 仅状态 `1` 告警，一级弹药增加正数基线和同车重生 reset/出生保护；状态 `3` 仍只透传。
-- 可靠陆战事实：`crew_current/crew_total` 与真实乘员损失一致，但按当前产品策略只用于 DTO/面板，不生成猫娘播报。
-- 当前顺序已更新为：RC 稳定化/全离线门禁 -> 队友无线电与 replay/free-text/V2/LWS dry-run 证据 -> 重新导包/安装 -> 最终小范围真实输出终验。
+此前试用包安装记录（不含本次修复）：当时源码 RC已验包并安装到实际活跃的用户安装目录，官方同版本重装/重启和实际面板通过，见 [安装记录](RC试用安装-20261029.md)。配置/状态保留；安装时为 dry-run、按需解释关闭，安装当时宿主主进程/其他插件保持。A2归因问题未修复，未正式发布。
 
-- M1 scaffold 已实现。
-- M2 Battle Awareness 理解/决策主链路已实现。
-- T1A Hosted UI Integration 已完成。
-- T1B Minimal Panel 已完成。
-- T4 集成测试已完成。
-- Hosted UI surface/context/action smoke 已通过。
-- T-Safety output text sanitizer 已完成。
-- T-FreeText-Gate free-text release gate 已完成：`tools/free_text_gate.py` 使用合成恶意玩家名、HUD、combat feed、award payload 验证 prompt 与 `push_message.parts[].text` 不含 raw 文本，并已纳入 `tools/preflight.py`。
-- T-FreeText-Observe 已完成：运行态首次看到 `awards` / `combat.feed` / `hud_notices` / `hudmsg` / `hud_events` 时记录 `detector_suppressed/free_text_blocked` 安全摘要；同时新增 `free_text_activity` dry-run-only 候选，用于验证 Detector / Arbiter / Dispatcher 决策链。`dry_run=false` 仍以 `free_text_dry_run_only` 阻断真实输出，不保留 raw 文本到 observe，也不让 raw 文本进入 prompt。
-- T-Replay-Gate replay degrade release gate 已完成：`tools/replay_gate.py` 使用合成 `replay=true` 帧验证 Detector 不产出 candidate、Dispatcher 不构造 prompt、也不调用 `push_message`，并已纳入 `tools/preflight.py`。
-- T-Deferred-HUD-Gate deferred HUD notice gate 已完成：`tools/deferred_hud_gate.py` 验证 `powertrain_failure` 当前只记录为可观测的 deferred 技术通知，不生成 Detector candidate / Dispatcher prompt / `push_message`，且 raw HUD 文本不泄露。
-- 模式/领域边界已完成当前插件侧拆分：固定翼连续条件事件只允许 `domain == "air"` 触发；陆战状态播报只保留 `ground_laser_warning`。乘员、岗位和一级弹药 flags 不注册 Detector，仅用于 DTO/面板。输出层继续通过 Detector payload、Dispatcher prompt 和 `push_message.metadata.domain_prompt_contract` 保留模式合同。
-- V2 proximity / objective awareness 非真机依赖部分已完成：`proximity.events` / `situation` 已进入 BattleState，DiscreteDetector 按 id 去重生成 `enemy_nearby` / `air_threat_nearby` / `enemy_on_six`，短窗连续近距离后方事件会保守升级为 `tailing_risk`，并从 `situation.ground_targets` 生成低优先级 `ground_target_nearby`。Arbiter 按低优先级门控，Dispatcher 只输出 safe generic 文案，Hosted UI context / 面板显示安全态势摘要。
-- T-Proximity-Gate proximity / objective awareness gate 已完成：`tools/proximity_gate.py` 使用合成 proximity / situation DTO 验证 Detector / Arbiter / Dispatcher / `push_message.parts[].text` 的安全输出和门控关系，并已纳入 `tools/preflight.py` / `tools/release_readiness.py`。
-- T-V2-Readiness V2 收口汇总已完成：`tools/v2_readiness.py` 将 proximity/objective 离线门禁和可选本地样本证据合并成一个安全报告，明确区分 `v2_offline_gate_complete` 与 `v2_live_evidence_complete`，避免把真机样本缺口误写成代码未完成。
-- T-V2-Release-Matrix V2 能力矩阵已完成：`tools/v2_release_matrix.py` 将 `enemy_nearby`、`air_threat_nearby`、`enemy_on_six`、`tailing_risk`、`ground_target_nearby` 拆成 code/offline/live-evidence/real-output-policy 行，明确哪些能力已经代码/离线完成、哪些只差真机证据且保持 dry_run-first。
-- T-V2-Output-Policy V2 真实输出策略门禁已完成：`tools/v2_output_policy_gate.py` 验证 `enemy_on_six`、`tailing_risk`、`ground_target_nearby` 在 `v2_live_verified_real_output_enabled=false` 时只允许 dry_run 可观察，真实 `push_message` 默认被 `v2_live_evidence_pending` 压住；显式开启后才允许真实推送。
-- T-V2-Completion-Gate V2 完成度门禁已完成：`tools/v2_completion_gate.py` 汇总 readiness、能力矩阵和真实输出策略，给出 `v2_code_offline_complete_live_evidence_pending` 这类不夸大真机证据的收口结论。
-- T-Final-Smoke-Packet 最终真机 smoke 交接包已完成：`tools/final_smoke_packet.py` 输出 `go_no_go`、`handoff_status`、必跑命令、V2 live evidence 缺口、runtime focus checks、remaining live actions 和 dry_run / raw text 安全边界；`tools/final_smoke_evidence_gate.py` 用于验收 smoke 后的 P1 evidence JSON，可用 `--from-live-monitor` 从安全 monitor JSON/JSONL 预填草稿，也可用 `--safe-transcript-template` / `--safe-transcript` 合并无原文的猫猫回复 metrics，并可通过 `--final-smoke-evidence` 接入 release/preflight 统一复验。
-- T-Release-Readiness v1 RC 离线汇总入口已完成：`tools/release_readiness.py` 不启动前后端、不依赖 War Thunder，默认只聚合可自动化快门禁；本地大样本报告需显式加 `--include-local-sample`。`release_scope` 会拆分 `ship_status`、`real_output_blockers`、`sample_unproven_items` 与 `next_actions`；通过后再进入最后一轮真机 smoke。
-- T-RC-Handoff-Report 维护者交接报告已完成：`tools/rc_handoff_report.py` 聚合 V1 release scope、V2 completion、final smoke go/no-go、安全边界和 remaining live actions，给出“V1 离线可交接 / V2 code+offline 完成 / live evidence pending”的人类可读报告。
-- T-Package-Artifact-Gate 分发包内容门禁已完成：`tools/package_artifact_gate.py` 验证包身份、运行必需文件、路径安全和开发文件排除；本轮据此发现并清除了误入包内的 `.ruff_cache`。
-- T-RC-Builder 原子 RC 构建入口已完成：`tools/build_release_candidate.py` 串联宿主官方 release check、分发包内容门禁、官方 payload verify 和隔离临时安装 smoke，全部通过后才发布最终文件；默认不覆盖已有包，也不写入真实插件目录。
-- T-Observe runtime decision timeline 已完成轻量实现：普通模式只保留最近摘要，debug 模式使用内存 ring buffer。
-- 最后一次完整 pytest 基线为 `622 passed`；逻辑自检为 `622/622 passed`。播报偏好、频率设置和安全活动中心已完成离线实现，数据层 P0、UI 隔离、package artifact gate 和统一 RC 构建演练已有通过记录；聚焦真机 dry-run 按当前决定延期。
-- 播报偏好阶段已完成：设置页提供安静/标准/活跃三档非危急节奏，以及一般安全、战果、固定无线电、态势感知、开场收尾五类开关；可一键恢复标准频率和全部普通类别，且不会改动昵称、插话规则、`dry_run` 或播报启停状态；critical 安全和阵亡提醒不允许被偏好关闭。
-- 安全诊断摘要已完成：诊断页可复制版本化白名单摘要，只包含连接、模式、安全控制、播报偏好和最近决策/输出代码；不包含身份、聊天/HUD、目标、载具、URL/PID、异常原文或 prompt/payload 原文，概览主界面不变。
-- 离线 readiness 与真机监控工具链已补齐：`tools/sample_replay.py` 负责样本覆盖率与 `session_summary`，并能用 candidate/chosen/output 计数证明 `replay=true` 样本被静默，同时统计 V2 proximity/situation/ground-target 覆盖率、后方近距样本、`tailing_risk` 触发和 3000m 内任务目标点候选；`tools/offline_report.py` 负责安全 Markdown / JSON 汇报，并输出 Next test focus；`tools/live_test_plan.py` 负责把 P1/P2 待测项展开为下一轮真机 Operator quick checklist 和“操作 / 监控 / 通过 / 失败 / 数据层缺口”清单，包含 `fly_closer_to_ground_target_sample`；`sample_replay` / `offline_report` / `live_test_plan` 三个出口都会带上 T-Output 背压、T-Kill-Coalesce 多杀合并和 V2 proximity 后方样本复测项，`next_steps` 也会列出这些现场动作但状态仍按样本/数据缺口判定；`tools/live_monitor.py` 负责真机测试时安全汇总 health、context、telemetry ownership 计数、free-text dry_run-only 状态与逐源 blocked 摘要、replay 降级状态、T-Observe 摘要、`selected` / `dry_run_enabled` / `free_text_blocked` / `kill_coalesced` / `output_backpressure` / `event_expired` 等可行动原因与日志异常计数；`tools/preflight.py` 已把 runtime smoke 纳入门禁，dry-run 会先打印 Quick read，`--run` 通过/失败时会直接提示继续 dry_run 真机验证或停止排障。
-- 数据层 `v1.6` 已合并，包含：
-  - `overspeed_warn` / `overspeed_critical`
-  - enhanced `combat.feed`
-  - `is_my_kill` / `is_my_death`
-  - `/api/identity`
-  - `replay: true` 回放降级
-  - `hud_notices`
-  - `awards`
-- 真机/数据层/真实开口接缝仍未完整验证；2026-06-23 已完成数值安全与 owned kill/death smoke，覆盖超速 warning/critical、低油 warning/critical、低空 warning/critical、失速 warning/critical、过热 warning/critical、手动 identity、air/ground owned combat.feed 归属、`you_killed` / `you_died` dry_run，以及 `dry_run=false` 真实 push 输出。
-- recovery 仍暂缓，不打开 `wants_recovery`。
+A2 来源评审的显式 `/state` 油温只读切片已在本次实现，保持独立来源、最多8通道及原输出边界；既有过热候选温度归因仍未修复，列下一优先项。见 [本次修复](现场采集边界修复-20261029.md)；原日期化评审保留当时结论。
+
+此前 P2a 轮完成记录：2026-10-29：**P2a 陆战一级待发弹状态解释已实现、review、验证并备份同步宿主**，见 [实现记录](P2a-陆战待发弹状态解释-20261029.md)。原陆战卡补七状态只读说明，不新增告警、模型调用或输出权限；完整回归 **1456 passed**（新增 48、聚焦 194），Hosted UI **516 场景**，源码/安装副本隔离 SDK 启动及重启通过。此前P2a同步轮未重载；本次试用包已重启战雷插件，跳过现场验收仍未验收、不阻塞研发。
+
+更新：2026-10-29。本计划按完整开发文档与理想副驾驶体验重整；当前实现和最近实际验证以 [统一状态](当前开发状态.md) 为准，逐项差距见 [能力差距矩阵](副驾驶能力差距矩阵-20261029.md)。总计划重整后已完成 [P1a 四域可信事实摘要](P1-四域可信事实摘要-20261029.md) 与 [P1b 会话按需解释入口](P1b-按需解释入口实现-20261029.md)。本轮不改变真实输出边界、不构建或发布。
+
+## 产品目标与完成标准
+
+目标是在空战、直升机、陆战和海战中，成为能看准已有事实、及时简短提醒、理解忙闲并自然陪伴的副驾驶。玩家应能看懂当前可用能力、控制打扰程度，连续玩几局或切换模式时无需反复配置与排障。
+
+理想完成状态包括：
+
+- 可信观察：域、连接、战局、生命与来源新鲜度清楚；未知不当零，故障恢复不假报出生，静态资料不冒充当前仪表。
+- 四域有用：各域只围绕确证事实提供适合该域的状态解释、危险提醒和战果反馈；不编造敌情、锁定、弹药、损伤或战术。
+- 发言合适：紧急短促、普通克制，聊天时避让，旧事件不晚播、重复不刷屏；实际回复与声音另有证据。
+- 陪伴自然：复用宿主当前角色与对话，保存用户明确设置的播报偏好；不以新增独立人格、长期记忆库或自动总结作为默认方案。
+- 使用省心：安装、启停、重连、恢复、更新和回滚可理解；提供静音/暂停与安全诊断，资源和 token 成本有上限。
+
+上述目标是产品方向，不是现有功能已全部完成的声明。插件始终只读游戏数据，不代替玩家操控载具。
+
+## 当前阶段
+
+**工程主链路与 P1a/P1b 已完成实现、review、离线验证及宿主同步。** 海战九期是此前完成增量；P1b 按用户选定的推荐方案实现默认关闭、会话显式启用/当前角色绑定的只读入口，见 [P1b 实现记录](P1b-按需解释入口实现-20261029.md)。不新增后台模型或主动播报；P2a「陆战一级待发弹状态解释」已按原卡只读方案实现/review/同步，见 [实现记录](P2a-陆战待发弹状态解释-20261029.md)；比较与成本见 [P2 评审](P2-首项实用能力选型评审-20261029.md)。不能用“到 L9”或“海战九期”推导整体产品接近完成，也不编造完成百分比。
+
+最近完整功能回归为 **1571 passed**；本轮低压力陪伴提示词已实现并 review，保留原输出权限与事实边界，未调用模型/TTS；同步与生效状态见[优化记录](低压力陪伴提示词-20261101.md)。
+
+用户决定跳过的 R2、R3 和专项现场项继续标记“本轮跳过、未验收”，**不作为继续开发的阻塞项**。未知语义仍不能作为事实，跳过验收不等于允许启用受限输出或宣称发布通过；依赖这些语义的具体子项可保留研究状态，其他有合同依据的开发继续推进。
+
+## 编号与原计划的关系
+
+| 原编号 | 含义 | 当前解释 |
+|---|---|---|
+| L0–L2 | 脚手架/合同、遥测、BattleState | 主链路已实现；域/采样/生命边界持续增补，不是整体产品前三步尚未开始 |
+| L3–L6 | Scenario、Detector、Arbiter、Dispatcher/上下文 | 已实现；新增能力复用现有责任边界，不重写成 AI 战术引擎 |
+| L7 | 安全控制与 Hosted UI | 已实现；有概览/活动/诊断/设置、教程及偏好，仍需产品体验补全 |
+| L8 | 数据层 managed/external 编排 | 已实现；当前安装 smoke 与历史生命周期证据分开记录 |
+| L9 | 现场调参、实际输出与体验收口 | 有历史部分正向，当前剩余验收已跳过；不作为全功能完成标志 |
+| R1 / R2 / R3 | 离线稳定化 / 现场证据 / RC 与安装交付 | 交付视角；R3 离线和宿主 dry-run 子项通过，当前现场项跳过，旧包不代表新源码 |
+| 直升机一至二期、海战一至九期 | 各域专项增量 | 记录已完成实现，不作为总计划第几步 |
+| 本文 P0–P4 | 此次重整后的开发优先级 | 不是旧阶段改名；不要求先补完已跳过的现场验收才能进入 P1 |
+
+## 已完成能力与剩余缺口
+
+| 能力方向 | 已实现的工程能力 | 剩余开发/产品缺口 | 证据或交付缺口 |
+|---|---|---|---|
+| 可信观察 | HTTP :8112 → BattleState；域隔离、采样年龄、battle/life、旧请求/故障恢复保护、ownership | P1a/P1b 摘要和只读接入已完成；具体历史因果未纳入首版，舰艇物理语义仍未知 | 当前跨域长局、真实 replay/断线重生的现场覆盖未终验 |
+| 四域有效帮助 | 固定翼安全与战果；陆战 LWS/乘员/待发弹；直升机仪表/VRS dry-run；海战地图/检测/静态参考 | 按域列清可解释事实与缺数据的帮助；岗位告警、直升机转速告警、舰艇实时仪表/舰体状态等未实现，不自动加入下一轮 | 既有功能的开关策略与样本/现场证据逐项保留，不能把有字段当可播报 |
+| 时机和表达 | Scenario 门控、抢占、限流、冷却、多杀合并、过期丢弃/重复折叠、聊天避让、目标会话与短句 prompt 合同 | 从具体误报/打扰问题做小范围完善；按需读取与主动事件已明确分界；通用历史事件因果另评审 | accepted/pushed 不等于已生成/播放；实际短句、时延、硬音频打断未全面证明 |
+| 自然陪伴 | 四域角色提示、当前人设决定措辞、场景上下文注入/恢复、固定无线电互动、偏好保存 | 已有可选三视图按需入口；模型自然选工具的实际体验另记，轻陪伴/战后总结仅作为后续候选，先评审事实范围、频率和 token | 现有风格/聊天静默需现场体验；不重复建设宿主人格/记忆系统 |
+| 低维护交付 | 两步教程、四页签、20 条安全活动、诊断复制、暂停/静音、managed/external、构建/校验/安装工具 | 当前增量的新包、明确版本/能力说明与恢复指导；性能优化先测量再决定 | 当前源码未重打包；原生 Electron、external 当前轮和连续多局体验未终验，发布未授权 |
+
+逐域字段、源码定位、输出门控和缺口类型见能力差距矩阵，避免把“尚未验收”“默认关闭”“未实现”混为一个待办。
+
+## 开发优先级
+
+| 优先级 | 工作包 | 交付目标 | 前置与边界 |
+|---|---|---|---|
+| P0 已完成 | 总计划与证据口径收敛 | 总计划/矩阵/状态/待办互链；修正设计合同、测试基线和样本范围冲突 | 文档修改，不改变实现与开关；历史报告保留当时数据 |
+| P1 已完成 | 四域可信事实摘要与按需解释接缝 | P1a/P1b 已实现/review/同步；摘要与默认关闭的会话只读入口 | 既有采样/域/生命边界；不新增后台模型/自动推送/轮询/持久化，启用后定义/结果按原宿主对话计费 |
+| P2 当前 | 按事实与收益补四域实用能力 | P2a 待发弹七状态、现场出生就绪、显式 state 油温只读及燃油估算时效已实现/review/同步；下一优先修既有过热温度归因，H1 VRS 随后，海战静态资料为参考分支 | 新增阈值、岗位告警、舰艇读数/自动重生等先独立评审，不以验收跳过推断未知语义 |
+| P3 后续 | 发言体验与轻陪伴完善 | 利用现有仲裁/短句/角色/偏好机制，针对具体问题改善提醒、按需回答、聊天边界；再考虑战后简报 | 先确定问题和成本，避免新增无事实的 chatter、全量上下文或长期记忆；实际音频能力不靠 metadata 冒充 |
+| P4 交付分支 | 当前源码可恢复交付与体验收口 | 此前试用 RC已构建/验包/实际安装并重启；未重跑整套聚合，后续修复再重建；现场与正式发布分别记录 | 可与研发分开排期；跳过的现场项不阻塞 P1–P3，不自动补记通过、启用输出或发布 |
+
+这里的先后是开发优先级，不是必须逐级完成全部真机验收的串行门禁。舰艇声明来源对照保留为 P2 参考资料候选，不再因“接在海战九期之后”自动占据下一阶段最高优先级。
+
+## 下一轮开发范围
+
+P1a/P1b 与 P2a 保守方案 A 均完成注明的工程范围。P2a 的七状态、零/未知/冲突、只读和原输出策略已验证，见 [实现记录](P2a-陆战待发弹状态解释-20261029.md)；此前该纯投影最大 32 bytes、1000 次暖态 p95 0.0054 ms，仅指当时投影。本次又完成出生就绪、显式 state 油温只读及燃油估算时效，见[修复记录](现场采集边界修复-20261029.md)。下一优先独立修正既有过热候选温度归因，再补检测/仲裁/投递/TTS对照；完整四温度视图和H1 VRS说明保留后续。原生耗油单位、独立生命合同和实际续航精度仍待补证，静态来源对照为参考分支；岗位/旋翼/舰艇新告警和生效参数另评审。跳过验收不恢复为研发阻塞，真实输出边界不变。
+
+**P1a：统一四域只读事实摘要，已完成。**
+
+现已在概览复用既有投影展示有界事实、时效/未知与限制，并提供活动页跳转；无检测推进、后台模型或真实输出新增。以下保留实现范围和后续维护约束。
+
+1. 盘点并复用现有 dashboard 投影、事件目录和 `domain_prompt_contract`，形成同一份有界白名单：域/连接/来源就绪状态、既有可展示的事实、现有安全事件结果、当前开关与明确未知项。不要另建一套 detector 或复制采样状态机。
+2. 概览优先呈现“当前能帮什么、当前事实是否可用”；与活动页现有“为何未播”结果互链。复用现有卡片，避免只增加高级诊断计数。舰艇只提供现有地图观察和静态声明边界，不显示未验证仪表值。
+3. 读取必须无副作用：不 feed/reset 检测、不推进确认、不修改生命/候选/队列；未知/过期/回放/新生命撤销旧事实。静态参数和实时事实分别标注。
+4. 针对新增接缝验证跨域残留、断线恢复、新生命、暂停、门控原因和隐私白名单，复用已有场景；运行相应回归/UI 检查，功能改动完成后按实际范围复核完整 pytest。用户授权同步时，review 通过后备份同步宿主并保留配置/状态。
+
+**P1b：按需解释入口，已实现/review/同步。**
+
+原设计见 [评审](P1b-按需解释接入评审-20261029.md)，用户已选定 D1–D5；实现和证据见 [P1b 实现记录](P1b-按需解释入口实现-20261029.md)。默认不注册，设置中显式启用绑定宿主权威当前角色；停用/重启关闭，切换需显式重绑。三视图复用 P1a；5 秒冷却、并发 1、2 秒 SDK 超时、128 字节参数/1200 字节结果，超额整字段降级。
+
+用户问当前状态/可用能力/输出策略时可走宿主已有工具对话；具体“那条为什么没播”仍只能说明当前策略并引导活动页，不推断历史因果。普通回答沿用宿主聊天/TTS 设置，战斗 dry-run/暂停不等于普通问答静音。默认关闭时无新增 schema/调用，启用后的定义/结果及历史重发有 token 成本；插件不保证模型意图、自然选工具、最终短答或声音已验。
+
+P1 的离线完成条件是新增投影/展示符合域、时效、生命和隐私合同，旧事件/开关行为不变，并完成所需 review 与验证。已跳过的现场项不作为开发完成条件。若发现需要新增 HTTP 合同、依赖或主链路策略，应拆为后续评审项，不暗中扩大 P1a。
+
+## 验收与证据分流
+
+- 开发轨：以明确源码范围、review、相关回归和实际执行的离线验证为依据；同步、打包分别记录，不能只凭 HEAD 标识未提交源码。
+- 历史证据轨：六月有空/陆部分安全、owned kill/death 和实际发声正向；七月记录 V2 五项中的四项已有样本覆盖，包括近目标点。详见 [样本证据口径](副驾驶能力差距矩阵-20261029.md#样本与现场证据口径)。这不是当前版本全面验收。
+- 已跳过现场轨：R2/R3 与 H/N 专项未完成项保留在 [验收矩阵](真机验证-checklist.md#剩余验收矩阵)，本轮不安排，不阻塞继续开发；如以后恢复，先核对已有归档/来源/版本，再补真正缺失的样本。
+- 输出/发布轨：ground 乘员/弹药及受限 V2 默认关闭，VRS/两类海战事件硬阻断，free-text dry-run-only；每次启动默认 dry-run。是否开放、重新构建 RC、commit/push/发布均不由本计划自动授权。
 
 ## 当前边界
 
-- 插件与数据层唯一数据边界是 HTTP `:8112`，主入口是 `/api/telemetry`；L8 只负责可选启动/关闭自己拉起的 vendored 数据层进程。
-- 插件主链路与数据层的运行数据边界仍是 HTTP :8112；宿主内置启动仅通过 `data_layer.data_process` 包入口加载服务。vendored 源码与 profile JSON 仍按显式数据层维护任务更新。
-- 输出只走 `adapters/neko_dispatcher.py`。
-- dry_run 默认开启；真机确认前不要关闭。
-- Detector / Scenario / Arbiter 只处理事件语义，不承担自由文本过滤职责。
-- 不可信自由文本只能在 `NekoDispatcher` / prompt builder 前完成 sanitize 后进入 prompt；raw 玩家名、hudmsg、combat.feed、awards 原文只进 audit/debug。
+- 唯一运行数据接口仍为本地 HTTP :8112；插件不直接读取 8111、不 import 数据层业务，不新增战雷专用宿主核心逻辑。已有 vendored 合同维护不等于可以任意扩展数据层。
+- 玩家游戏昵称仅用于 ownership，不进入 prompt；当前角色路由 `target_lanlan` 与玩家名分离。raw chat/HUD/combat/遥测 payload 不进入新增摘要、日志或文档。
+- `dry_run` 刻意仅会话生效，每次重启恢复安静默认；昵称与播报频率/类别/聊天策略等已有持久化，不把它们列为待从零实现。
+- `ai_behavior="read"` 是被动背景，`respond` 是有界事件回复；旧 `deferred_candidate` 不再作为支持路径。短句规则由角色遵循插件 prompt，不要求宿主添加战雷专用裁剪；`push_message` 接受不等于已播。
+- recovery、完整高置信 `being_tailed`、岗位播报、直升机转速告警、舰艇实时数值/损伤/进水/自动重生与生效参数计算仍为暂缓或待评审能力，不因理想状态自动承诺实现。
+- 不覆盖受保护旧 worktree、用户配置/运行状态或宿主原有修改。P1a/P1b 均已备份同步运行文件，配置/状态保留，原用户会话不重载、不请求发声。
+
+## P2 首项评审与实施区分
+
+此前选型/BYOH 轮仅研究和更新文档，1408/495 是当时 P1b 基线；本轮 P2a 已实现/review/同步，完整 1456、聚焦 194、浏览器 516 及源码/安装 SDK 通过，详见 [实现记录](P2a-陆战待发弹状态解释-20261029.md)。没有新模型调用/告警/输出权限、数据层或宿主核心改动；完整 preflight/release-readiness 与 RC 本轮未重跑。
 
 ## 成本变更讨论门禁
+
 
 凡是插件内改动会引入或明显增加以下任一成本，都必须先讨论再实现，不直接落代码：
 
@@ -92,99 +139,9 @@
 - 回滚方式：如何关闭、删除或降级，是否会留下状态/缓存/配置兼容问题。
 - 需要谁拍板：维护者/组长需要明确同意的选项和阈值。
 
-## 分层状态
+## 接手时不要回退
 
-- L0 plugin scaffold / contracts：完成；`contract/telemetry_sample.json` 已补脱敏 v1.6 形状样本，真机验证时仍可另抓当前环境帧到 `.gitignore` 忽略的 `local_samples/` 做对照。
-- L1 telemetry client：完成基础解析；已纳入 `hud_notices.feed` 与 `replay`，仍需要验证 data-layer `v1.6` 其他新字段。
-- L2 BattleState：完成基础装配；已纳入 v1.6 DTO seam 和 V2 `proximity` / `situation` 字段。
-- L3 Scenario：完成；`replay: true` 已在 DetectorEngine 静默并 reset，且 T-Observe 会记录 `detector_suppressed/replay`，T-Live 会显示 `replay=suppressed(detector_suppressed/replay)` 与输出阻断状态；仍需真实 replay 样本验证。
-- L4 Detector：已实现主链路；`overspeed` 已在真机 dry_run 中验证 `overspeed_warn` / `overspeed_critical`；`low_fuel` 已在真机 dry_run 中验证 warning / critical；`low_alt_danger`、`stall_risk`、`overheat` 均已观察到 warning / critical 基础链路；`you_killed` / `you_died` 已消费 `combat.feed[].is_my_kill` / `combat.feed[].is_my_death`，按已播报 owned feed id 去重并允许同 id 后补 ownership 补触发，离线 replay 合成场景也已覆盖该形状；V2 `ProximityDetector` 已消费 data-layer `proximity.events` 并按 id 去重。
-- L4-Domain：完成当前空/陆分界。固定翼条件 detector 通过 domain predicate 只读空战帧；陆战状态 detector 只读取 `laser_warning` 并输出 `ground_laser_warning`，非 `ground` 域静默 reset。乘员、岗位和弹药 flags 不产生候选。Detector 产出的其他事件继续携带 `domain`，供 Dispatcher 和 evidence 使用。
-- L5 Arbiter：完成；`SPAWNING` 仍压制飞行安全误报，但已允许 owned combat kill 事件通过，避免真实击杀在出生 grace 内被误压。后续 M3 适配时要保持 cooldown、优先级、Scenario 门控语义不变。
-- L6 Dispatcher / instructions：完成基础输出；T-Safety 已在 prompt builder 前接入，prompt / `push_message.parts[].text` 不允许包含 unsafe raw。Dispatcher 会按 `domain` 写入 `当前模式` 合同：空战=后座/僚机，直升机=机组搭档，陆战=车组搭档，海战=舰桥观察员；同一合同也进入 `push_message.metadata.domain_prompt_contract`，用于 live monitor / final smoke evidence 复核模型是否串模式。
-- T-FreeText-Gate：完成；`tools/free_text_gate.py` 是 hudmsg / combat.feed / awards 去桩前的离线发布门禁，preflight 默认执行。
-- T-Replay-Gate：完成；`tools/replay_gate.py` 是 `replay=true` 降级安全的离线发布门禁，preflight 默认执行。
-- T-Proximity-Gate：完成；`tools/proximity_gate.py` 是 V2 proximity / objective awareness 的离线发布门禁，preflight / release readiness 默认执行。
-- T-V2-Output-Policy：完成；`tools/v2_output_policy_gate.py` 是 V2 真机证据未齐前的真实输出保护门禁，preflight / release readiness 默认执行。
-- T-V2-Completion-Gate：完成；`tools/v2_completion_gate.py` 是 V2 code/offline 完成度的单一 pass/fail 收口门禁，preflight / release readiness 默认执行。
-- T-RC-Handoff-Report：完成；`tools/rc_handoff_report.py` 是维护者/合作者交接报告入口，preflight / release readiness 默认执行，不替代 final live smoke。
-- L7 safety guard + Hosted UI：完成；Hosted UI 已按概览/活动/诊断/设置四类任务收口，新手教程负责昵称与关键按钮说明。安全状态和输出结果使用统一 helper，重复插话规则入口与死样式已删除，常见标签/状态值使用中文显示。
-- V2 proximity / objective awareness：完成非真机依赖部分；普通接近 `enemy_nearby` 和任务目标点 `ground_target_nearby` 为低优先级，COMBAT_STRESS 下被压住；`air_threat_nearby`、`enemy_on_six` 与保守持续后方威胁 `tailing_risk` 可在 IN_FLIGHT / COMBAT_STRESS 下进入提示队列；CRITICAL_RISK / SPAWNING / DEAD 等场景仍按 Arbiter 门控丢弃。Dispatcher 不复读 raw proximity 文本或目标 label，只使用方位、钟点、距离、网格等安全 metadata。
-- T-Observe runtime decision timeline：完成轻量实现；Hosted UI context 暴露 `observe.last_event` / `last_decision` / `last_output_status`，debug timeline 默认关闭。
-- T-Output output backpressure guard：完成轻量实现；真实 `push_message` 前会在 `output_backpressure_seconds` 窗口内压住同优先级或更低优先级事件，减少主机回复队列堆积；`you_killed`、`you_died` 和 critical 安全事件仍可通过，避免击杀夸夸被普通过载背压吃掉。Arbiter 窗口 flush 不再刷新连续告警的事件时间戳，避免旧低空/超速提示被伪装成新事件。危急动作类默认走 bounded `respond` 并进入宿主 TTS；仅显式开启兼容开关时才以插件短句 `blind+plugin` 直出。开局、击杀/阵亡、过热、低油、普通接近、目标点和结算走 bounded `respond`。真实战场输出统一带 `coalesce_key=neko_warthunder:battle_event`；`output_event_max_age_seconds` 会在真实 push 前丢弃过期旧事件，同类安全提示短窗重复会记录为 `repeated_event_collapsed`，减少死亡后补播旧低空/超速提示和连续“松杆/过载”刷屏。真实输出还会附带 `event_age_seconds` / `event_expires_at`、可解析到的 `target_lanlan`、短播报 metadata（`battle_reply_contract=short_tts_line` / `live_reply_contract=short_tts_line` / `max_reply_chars=28`）、`plugin_owned_output`、`dialogue_policy_owner=plugin` / `plugin_dialogue_policy` / `plugin_quiet_window_policy` 和通用 delivery-only `host_callback_contract.version=neko.callback.v1` 预留块，用于下一轮真机判断晚播到底来自插件过期保护、重复折叠、宿主队列、fallback session，还是插件自身输出策略。宿主核心区先冻结，不为战雷插件写专用发言特判。
-- T-Kill-Coalesce 多杀合并：完成轻量实现；`you_killed` 会在 `kill_coalesce_window_seconds` 窗口内合并为一条 `kill_count` 事件；`CRITICAL_RISK` 下 owned kill 会延迟保留为 `kill_deferred_critical_risk`，危急解除后再 flush；死亡 / critical 抢占仍会清空待播击杀。
-- L8 数据层并入：vendored 数据层已合并；插件侧最小子进程编排已完成，支持 `data_layer_auto_start`、managed/external 判定、shutdown 只关闭自己拉起的进程，并通过 Hosted UI/status 暴露 `data_layer` 状态；2026-06-26 已本地自验证 managed/external 生命周期边界。
-- L9 真机调参：进行中；已完成起飞/复活保护。离地/低空判断优先使用 `radio_altitude_m`，`altitude_m` 只作为 MSL/海拔事实；但固定翼不假定必有 AGL，`takeoff_low_alt_grace_seconds=45` 仍作为低空保护主兜底。`takeoff_radio_altitude_enter_m=10` / `takeoff_radio_altitude_exit_m=40` 用于 AGL 可用时的贴地迟滞；AGL 缺失时，滑跑超速只在保护期内且起落架放下/运动中时压制，不影响收轮后真实超速，也不影响失速、死亡、过热或低油事件。已补真实 push TTL 过期丢弃与通用 `host_callback_contract` 预留，减少插件侧旧事件推送，并为后续宿主通用队列 coalescing 留好接口。T-Live 只读监控工具可用于下一轮真机统一测试归档。
-
-## T-Safety：output text sanitizer
-
-状态：已完成。
-
-目标：防止猫娘复读不良玩家 ID、hudmsg、combat.feed、awards 原文，避免辱骂、涉政、擦边、仇恨、广告、联系方式、奇怪符号或 prompt injection 文本进入猫娘输出。
-
-放置位置：`NekoDispatcher` / prompt builder 前。
-
-关键策略：
-
-- raw 只进 audit/debug。
-- safe 才能进 prompt。
-- 默认 generic 文案，不朗读陌生玩家名。
-- 不确定时宁可不读原文。
-- 不做复杂 NLP，不做大模型审核。
-
-当前阻塞关系：
-
-- T-Safety 本身不再阻塞；它已经作为输出安全前置层落地。
-- kill/death/hudmsg/combat.feed/awards 正式播报仍需真机 dry_run 验证和对应去桩。
-- 不阻塞 stall/low_alt/overheat/low_fuel/overspeed 等数值安全事件。
-
-已覆盖测试：
-
-- sanitizer 单测。
-- dispatcher prompt 测试。
-- `push_message.parts[].text` 不包含 unsafe raw 的合同测试。
-- hudmsg / combat.feed / awards 常见自由文本字段族即使内容看似普通，也默认 blocked，不进入 safe prompt payload。
-- `tools/free_text_gate.py` 已作为额外离线门禁，覆盖 prompt、真实 `push_message.parts[].text` 和 sanitizer safe payload 三层；该门禁通过前不得开放 hudmsg / combat.feed / awards 真实播报。
-
-## M3：适配数据层 v1.6 DTO
-
-数据层 v1.6 已合并，M3 的当前定义是插件侧适配和验证：
-
-- `overspeed`：读取 `processed.flags` 中的 `overspeed_warn` / `overspeed_critical`；2026-06-23 已真机 dry_run 验证 warning/critical 事件链路。
-- `you_killed`：已监听 `combat.feed[]` 中 `is_my_kill == true` 的未播报 owned id；同 id 后补 ownership 时可补触发。短窗多杀已在 Arbiter 合并为单条 `kill_count` 输出；危急场景中不抢播、不丢弃，待 `CRITICAL_RISK` 解除后补播。
-- `you_died`：已监听 `combat.feed[]` 中 `is_my_death == true` 的未播报 owned id；同 id 后补 ownership 时可补触发。不再把 `vehicle_valid` 跳变当作唯一可靠死亡信号。
-- `player_name`：通过 `/api/identity` 或启动参数建立权威身份；插件侧 Hosted UI/context/action seam 已完成，面板只支持手动填写、保存和清除玩家名，并会持久化后在启动时恢复到数据层。2026-06-23 真机已验证 `combat.self.source=manual` 与 `is_my_kill` / `is_my_death` owned 路径。`you_killed` 候选曾被 `SPAWNING` 门控压住，已修复；post-fix dry_run 与 `dry_run=false` push 已通过陆战验证。
-- `you_killed` / `you_died` 输出事实：已按 `domain` / `cause` 分流空战、直升机、陆战、海战与坠毁措辞，避免陆战击杀出现“击落坦克”，并避免 prompt 复读 raw victim 玩家名。地面战果和地面状态 prompt 必须使用车组 / 装填 / 掩体 / 看路等陆战语境，不得串到升空 / 后座 / 云霄等固定翼语境。
-- `replay: true`：已在 DetectorEngine 静默并 reset，避免回放触发真实播报；T-Observe 会把原因记录为 `detector_suppressed/replay`，`tools/live_monitor.py` 会汇总为 `replay_degrade.status=suppressed` / `output_blocked=true`；仍需真实 replay 样本验证。
-- `overheat`：已接入 `hud_notices.feed[].code` 中的 `engine_overheat` / `oil_overheat`，以 code-only safe payload 生成现有 `overheat`；`powertrain_failure` 暂不直接播报，但会以 `detector_suppressed/deferred_hud_notice` 记录到 T-Observe / live monitor。
-- `hud_notices` / `awards`：属于自由文本风险路径，真实播报前必须先过 T-Safety。
-
-## 真机验证
-
-真机 checklist 从“等字段”改为“验证 v1.6 DTO 接缝”。见 `docs/真机验证-checklist.md`。2026-06-23 已完成数值安全 dry_run、owned kill/death dry_run、以及 kill/death `dry_run=false` push smoke；每轮测完后，用 `docs/真机测试结果-template.md` 记录聚合统计、安全摘要和结论；不要提交 raw 玩家名、raw HUD 文本、raw combat.feed 或 awards 原文。
-
-需要重点确认：
-
-- `/api/telemetry` 是否返回 `replay`。
-- `/api/telemetry.processed.flags` 是否出现 `overspeed_warn` / `overspeed_critical`（2026-06-23 已通过真机 dry_run）。
-- `/api/telemetry.combat.feed[]` 是否含稳定递增 id、`is_my_kill`、`is_my_death`。
-- `/api/identity` 是否能由 Hosted UI 面板设置/清除权威 player_name，并反映到 `combat.self` 与 kill/death 归属标记（2026-06-23 已有真机正向证据；`you_killed` 不再被 `SPAWNING` gate 压住）。
-- `hud_notices` 中的技术 code 是否能触发安全事件；raw notice 文本、`awards` 是否只进入 debug/audit 或被 T-Safety 阻断，不直接进入 prompt。
-- T-Observe 的 `observe.last_decision` / `observe.last_output_status` 是否能解释未播、晚播、dry_run 输出或 dispatcher 失败。
-
-## 推进顺序
-
-1. **R1 RC 稳定化（已完成）**：独立源码与宿主集成面板副本一致；`tests/run_logic_tests.py`、pytest、`tools/preflight.py --run` 和 `tools/release_readiness.py --run` 全部通过。
-2. **R2 无线电与安全反例**：真机验证队友发送同一固定口令不会产生 `player_radio_command`；继续保持 raw sender/msg 不进入 observe/prompt。补 replay 真实样本和 awards/free-text dry_run blocked 摘要。
-3. **R2 V2/L9 证据**：将已有后方/六点钟与持续尾随录制纳入正式 evidence gate，并补 3000m 内目标点样本；同时复测机场起飞/复活、AGL 可用/缺失、滑跑超速保护、失速/死亡不被误压。
-4. **R2 输出链路**：用 T-Observe/T-Live 确认 `event_expired`、critical 替换、用户聊天静默、`target_lanlan`、短单行回复合同和通用 callback metadata；信息确实不足时才扩 debug timeline。
-5. **R3 最终 RC smoke**：安装新包，先 dry-run 保存安全 evidence，再做已经批准的小范围 `dry_run=false` 终验。V2 后方/尾随/目标点与 free-text 未通过各自真机证据前继续保持真实输出关闭。
-
-## 已知坑 / 不要回退
-
-- `data_layer/data_process` 是可编译的 Python 包入口，便于无外置 Python 的桌面打包运行；业务主链路仍不得绕过 HTTP :8112 直接耦合其内部状态。
-- 不要把自由文本过滤塞进 Detector / Scenario / Arbiter。
-- 不要复活旧的 `vehicle_valid` 作为 `you_died` 主路径。
-- 不要把 recovery 作为 v1 当前任务；它只保留测试方案和 TODO。
-- 不要沿用旧的 pre-T-Safety / pre-free-text-gate / pre-identity / pre-T-Output / pre-T-Kill-Coalesce / pre-L8 / pre-L9-takeoff-grace / pre-output-coalescing / pre-event-expiry / pre-T-UI2 / pre-deferred-hud-notice / pre-radio-altitude / pre-V2-proximity / pre-rc-docs-audit / pre-tailing-risk / pre-free-text-observe / pre-v2-evidence-refinement / pre-release-scope / pre-release-json-cleanliness / pre-v2-readiness / pre-final-smoke-packet / pre-release-defaults-gate / pre-v2-completion-gate / pre-free-text-activity / pre-critical-risk-kill-defer / pre-output-freshness-metadata / pre-output-freshness-gate / pre-host-contract-gate / pre-ownership-replay-gate / pre-final-smoke-evidence-gate / pre-host-callback-contract-reservation / pre-datamine-profile-batches / pre-vehicle-profile-id-audit / pre-domain-runtime-isolation / pre-UI-redesign / pre-package-artifact-gate / pre-rc-builder / pre-broadcast-preferences / pre-safe-activity 测试数量；当前最后一次完整 pytest 为 `622 passed`。
-- 不要在父仓库 `N.E.K.O` 里提交这个独立插件仓库。
+- 当前功能测试数量由统一状态唯一基线维护；日期化记录保留当时数量。本次文档校验不冒充完整功能回归或整套 release-readiness。
+- 不把“默认不真实播报”改成“没有 Detector”，不把岗位只读写成岗位播报完成。
+- 不把六月某一归档缺样本写成全局从未采集；七月已有覆盖也不自动当作当前正式 evidence。
+- 不把源码同步、隔离 SDK、浏览器、包校验、实际战局、原生 Electron、TTS 与发布混为同一通过状态。

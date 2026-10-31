@@ -22,7 +22,11 @@ def test_domain_boundary_gate_passes_with_synthetic_states():
         "overspeed",
         "low_fuel",
     }
-    assert set(result["results"]["ground_emit_events"]) == {"ground_laser_warning"}
+    assert set(result["results"]["ground_emit_events"]) == {
+        "ground_laser_warning", "ground_crew_loss", "ground_ammo_empty", "ground_ammo_low",
+    }
+    assert result["results"]["helicopter_emit_events"] == ["heli_vrs_risk"]
+    assert set(result["results"]["naval_emit_events"]) == {"naval_map_contact", "naval_air_contact"}
 
 
 def test_domain_boundary_gate_cli_outputs_json():

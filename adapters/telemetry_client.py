@@ -48,6 +48,27 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
     hud_notices = payload.get("hud_notices") if isinstance(payload.get("hud_notices"), dict) else {}
     proximity = payload.get("proximity") if isinstance(payload.get("proximity"), dict) else {}
     situation = payload.get("situation") if isinstance(payload.get("situation"), dict) else {}
+    domain = payload.get("domain")
+    domain = domain if domain in ("air", "heli", "ground", "naval", "menu", "unknown") else "unknown"
+    source = payload.get("domain_source")
+    source = source if source in ("indicators_army", "not_in_battle", "unsupported_army",
+                                 "map_aircraft_ambiguous", "map_ground_ambiguous") else "unavailable"
+    naval_evidence = indicators.get("valid") is True and indicators.get("army") in ("ship", "fleet")
+    if domain == "naval":
+        domain, source = ("naval", "indicators_army") if naval_evidence else ("unknown", "unconfirmed_naval")
+    elif naval_evidence and domain in ("air", "heli", "ground"):
+        domain, source = "unknown", "conflicting_domain"
+    if domain == "unknown" and source == "indicators_army":
+        source = "conflicting_domain"
+    # Naval instrument semantics are not established. Discard foreign derived
+    # facts before conversions (including int/float), while retaining raw locally.
+    if domain in ("naval", "unknown"):
+        processed = {}
+        vehicle = {"valid": vehicle.get("valid", False)}
+        indicators = {key: indicators[key] for key in ("valid", "army", "vehicle_type") if key in indicators
+                      and (domain == "naval" or key != "vehicle_type")}
+    if domain == "unknown":
+        proximity = {}
     flags_raw = processed.get("flags") if isinstance(processed.get("flags"), dict) else {}
 
     fast_meta = meta.get("fast") if isinstance(meta.get("fast"), dict) else {}
@@ -68,8 +89,9 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
         vehicle_valid=bool(vehicle.get("valid", False)),
         indicators_valid=bool(indicators.get("valid", False)),
         has_player=bool(situation.get("has_player") or payload.get("player")),
-        domain=str(payload.get("domain") or "unknown"),
-        domain_label=(str(payload.get("domain_label")) if payload.get("domain_label") is not None else None),
+        domain=domain,
+        domain_label=("未知" if domain == "unknown" else payload.get("domain_label")),
+        domain_source=source,
         vehicle_type=(indicators.get("vehicle_type") or processed.get("vehicle_type")),
         profile_matched=(
             bool(processed.get("profile_matched")) if processed.get("profile_matched") is not None else None
@@ -88,6 +110,8 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
             if processed.get("radio_altitude_m") is not None
             else _num(indicators.get("radio_altitude"))
         ),
+        rotor_rpm=_num(processed.get("rotor_rpm")),
+        vario_ms=_num(processed.get("vario_ms")),
         climb_ms=_num(vehicle.get("climb_ms")),
         mach=_num(vehicle.get("mach")),
         g_now=_num(processed.get("g_now")) if processed.get("g_now") is not None else _num(vehicle.get("load_factor")),
@@ -106,6 +130,7 @@ def parse_telemetry(payload: dict[str, Any] | None) -> BattleState:
         gear_position=(int(gear) if (gear := _num(processed.get("gear_position"))) is not None else None),
         gunner_state=_num(processed.get("gunner_state")),
         driver_state=_num(processed.get("driver_state")),
+        laser_warning_state=_num(processed.get("laser_warning_state")),
         hud_events=list(payload.get("hud_events") or []) if isinstance(payload.get("hud_events"), list) else [],
         chat=list(payload.get("chat") or []) if isinstance(payload.get("chat"), list) else [],
         hud_notices=list(hud_notices.get("feed") or []) if isinstance(hud_notices.get("feed"), list) else [],

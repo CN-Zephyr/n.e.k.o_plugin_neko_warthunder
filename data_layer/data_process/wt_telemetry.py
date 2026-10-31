@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import time
 import urllib.error
@@ -262,9 +263,7 @@ class Telemetry:
         d["player"] = asdict(self.player) if self.player else None
         d["enemy_count"] = len(self.enemies)
         d["ally_count"] = len(self.allies)
-        dom = self.domain
-        d["domain"] = dom
-        d["domain_label"] = _DOMAIN_LABELS.get(dom, dom)
+        d.update(resolve_domain(self.indicators, self.in_battle, self.map_objects))
         return d
 
 
@@ -282,41 +281,53 @@ _DOMAIN_LABELS = {
 }
 
 
-def detect_domain(
+_ARMY_TO_CLASS = {"air": "air", "tank": "ground", "ship": "naval", "fleet": "naval"}
+
+
+def vehicle_class_from_indicators(indicators: "Indicators") -> str:
+    """Only an explicit, valid army can confirm a vehicle class."""
+    if getattr(indicators, "valid", False) is not True:
+        return "unknown"
+    army = getattr(indicators, "army", None)
+    vehicle_class = _ARMY_TO_CLASS.get(army, "unknown") if isinstance(army, str) else "unknown"
+    if vehicle_class == "air" and getattr(indicators, "is_helicopter", False) is True:
+        return "heli"
+    return vehicle_class
+
+
+def resolve_domain(
     indicators: "Indicators",
     in_battle: bool,
     map_objects: "list[MapObject] | None" = None,
-) -> str:
-    """判断当前载具域：menu / air / heli / ground / naval。
+) -> dict[str, str]:
+    """Resolve an explicit domain or a safe unknown, with a text-free source code.
 
-    判定依据（基于实测的可用数据）：
-      - 不在战局（in_battle=False）-> menu（主界面/机库）。
-        注意：主界面里 indicators/state/mission 都可能“像在战局”
-        （valid=true、status=running、展示选中的载具），唯有 map_info 必为 false，
-        因此战局与否必须由调用方据 map_info.valid 判定后通过 in_battle 传入，
-        本函数务必先处理 in_battle 再看 indicators，避免把机库选中的飞机误判为空战。
-      - 在战局且 indicators 有效：army=="air" 时再分直升机(heli)/固定翼(air)；
-        其它（tank 等）-> ground
-      - 在战局但 indicators 无效：海军模式特征（游戏不填充海军 indicators，
-        海军玩家在 map_obj 中与陆军同为 ground_model，无法靠图标区分）-> naval
-        兜底：若 map_obj 玩家图标 type 为 aircraft，则判 air
-
-    注意：游戏 API 不提供街机/真实/全真（AB/RB/SB）的对战类型，无法判断。
+    ground_model cannot distinguish tanks from ships; aircraft cannot confirm
+    fixed-wing versus helicopter. Neither map icons nor missing instruments
+    confirm a domain. Menu still takes precedence over hangar instruments.
+    ship/fleet are accepted contract codes, not a claim of live sample coverage.
     """
     if not in_battle:
-        return "menu"
-    army = getattr(indicators, "army", None)
-    if getattr(indicators, "valid", False) and army:
-        if army == "air":
-            return "heli" if getattr(indicators, "is_helicopter", False) else "air"
-        return "ground"
-    if map_objects:
-        for o in map_objects:
-            if getattr(o, "icon", "") == "Player":
-                if getattr(o, "type", "") == "aircraft":
-                    return "air"
-                break
-    return "naval"
+        domain, source = "menu", "not_in_battle"
+    else:
+        domain = vehicle_class_from_indicators(indicators)
+        source = "indicators_army" if domain != "unknown" else "unavailable"
+        if domain == "unknown":
+            if getattr(indicators, "valid", False) is True and getattr(indicators, "army", None):
+                source = "unsupported_army"
+            else:
+                player = next((o for o in (map_objects or []) if getattr(o, "icon", "") == "Player"), None)
+                source = {"aircraft": "map_aircraft_ambiguous", "ground_model": "map_ground_ambiguous"}.get(
+                    getattr(player, "type", None), "unavailable"
+                )
+    return {"domain": domain, "domain_label": _DOMAIN_LABELS[domain], "domain_source": source}
+
+
+def detect_domain(
+    indicators: "Indicators", in_battle: bool, map_objects: "list[MapObject] | None" = None,
+) -> str:
+    """Compatibility wrapper for callers that only need the resolved domain."""
+    return resolve_domain(indicators, in_battle, map_objects)["domain"]
 
 
 # ---------------------------------------------------------------------------
@@ -457,22 +468,82 @@ def _parse_engines(state: dict[str, Any]) -> list[EngineState]:
     return engines
 
 
-def _classify_faction(icon: str, rgb: tuple[int, int, int]) -> str:
+RGB = tuple[int, int, int]
+
+# 8111 /map_obj.json 实测默认配色（local_samples/data_process_20260620）：
+# 敌方 #FA0C00 / #F00C00，友方 #174DFF，自己 #FAC81E。
+DEFAULT_ALLY_RGB: RGB = (0x17, 0x4D, 0xFF)
+DEFAULT_ENEMY_RGB: RGB = (0xFA, 0x0C, 0x00)
+# 与设定色的 RGB 欧氏距离在此范围内才算匹配；游戏同一阵营会有少量色差（如 #F00C00）。
+FACTION_COLOR_MATCH_DISTANCE = 150.0
+# 敌我设定色之间距离低于此值时颜色已无法区分阵营。
+FACTION_COLOR_CONFLICT_DISTANCE = 100.0
+
+
+_HEX_COLOR_RE = re.compile(r"#?([0-9A-Fa-f]{6})")
+
+
+def parse_hex_color(value: Any) -> RGB | None:
+    """解析 "#RRGGBB" / "RRGGBB"；非法时返回 None。"""
+    match = _HEX_COLOR_RE.fullmatch(str(value or "").strip())
+    if not match:
+        return None
+    text = match.group(1)
+    return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
+
+
+def format_hex_color(rgb: RGB) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*rgb)
+
+
+def _color_distance(a: RGB, b: RGB) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+
+@dataclass(frozen=True)
+class FactionColors:
+    """小地图敌我颜色。战雷允许玩家在游戏设置里改队友/敌人颜色，阵营只能按颜色推断。"""
+
+    ally: RGB = DEFAULT_ALLY_RGB
+    enemy: RGB = DEFAULT_ENEMY_RGB
+
+    @property
+    def conflict(self) -> bool:
+        """敌我颜色过近时无法区分阵营，此时不再把任何单位判为敌/友。"""
+        return _color_distance(self.ally, self.enemy) < FACTION_COLOR_CONFLICT_DISTANCE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ally_color": format_hex_color(self.ally),
+            "enemy_color": format_hex_color(self.enemy),
+            "conflict": self.conflict,
+        }
+
+
+DEFAULT_FACTION_COLORS = FactionColors()
+
+
+def _classify_faction(
+    icon: str, rgb: RGB, colors: FactionColors = DEFAULT_FACTION_COLORS
+) -> str:
     """根据图标和颜色推断阵营：self / ally / enemy / other。"""
     if icon == "Player":
         return "self"
     r, g, b = rgb
-    # 战雷约定：自己=黄、敌方=红、友方=蓝（队伍色）。
-    if r > 180 and g < 130 and b < 130:
-        return "enemy"
-    if b > 170 and r < 130:
-        return "ally"
+    if not colors.conflict:
+        # 取离哪个设定色更近；两者都不够近则不归入敌/友。
+        d_ally = _color_distance(rgb, colors.ally)
+        d_enemy = _color_distance(rgb, colors.enemy)
+        if min(d_ally, d_enemy) <= FACTION_COLOR_MATCH_DISTANCE:
+            return "enemy" if d_enemy < d_ally else "ally"
     if r > 200 and g > 170 and b < 120:
         return "self"  # 黄色（自己/友军单位常见色）
     return "other"
 
 
-def _parse_map_objects(items: Any) -> list[MapObject]:
+def _parse_map_objects(
+    items: Any, colors: FactionColors = DEFAULT_FACTION_COLORS
+) -> list[MapObject]:
     """解析 /map_obj.json 数组；非列表或空时返回空列表。"""
     if not isinstance(items, list):
         return []
@@ -490,7 +561,7 @@ def _parse_map_objects(items: Any) -> list[MapObject]:
             MapObject(
                 type=it.get("type", "unknown"),
                 icon=icon,
-                faction=_classify_faction(icon, rgb),
+                faction=_classify_faction(icon, rgb, colors),
                 color_hex=it.get("color", ""),
                 color_rgb=rgb,
                 blink=_safe_int(it.get("blink")),
@@ -537,6 +608,8 @@ class WarThunderClient:
         self._last_chat = 0
         # 已保存过的地图版本号，用于避免重复保存同一张小地图
         self._last_map_gen: int | None = None
+        # 小地图敌我颜色；整体替换不可变对象，map 线程读取无需加锁
+        self.faction_colors: FactionColors = DEFAULT_FACTION_COLORS
 
     # -- 底层请求 ----------------------------------------------------------
 
@@ -779,7 +852,7 @@ class WarThunderClient:
     def get_map_objects_with_status(self) -> tuple[bool, list[MapObject]]:
         """拉取地图物体，并区分传输失败与真实空列表。"""
         connected, data = self._fetch("/map_obj.json")
-        return connected and isinstance(data, list), _parse_map_objects(data)
+        return connected and isinstance(data, list), _parse_map_objects(data, self.faction_colors)
 
     def get_map_objects(self) -> list[MapObject]:
         """拉取 /map_obj.json（地图物体）。"""

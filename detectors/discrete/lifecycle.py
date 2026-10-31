@@ -19,6 +19,7 @@ from ...core.contracts import (
 )
 from .._base import DiscreteDetector
 from .free_text import FreeTextActivityDetector
+from .naval_situation import NavalContactDetector
 from .notices import HudNoticeDetector
 from .proximity import ProximityDetector
 from .radio import RadioCommandDetector
@@ -32,16 +33,40 @@ def _alive(s: BattleState) -> bool:
 class SpawnDetector(DiscreteDetector):
     id = "spawn"
 
+    def __init__(self) -> None:
+        self._last_alive_life: tuple[str, int] | None = None
+        self._pending_respawn = False
+
+    def reset(self) -> None:
+        self._last_alive_life = None
+        self._pending_respawn = False
+
     def detect(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
+        if not cur.in_battle:
+            self._pending_respawn = False
+            return None
+        life_key = cur.life_key
+        changed_life = life_key is not None and (
+            (self._last_alive_life is not None and life_key != self._last_alive_life)
+            or (prev.life_key is not None and life_key != prev.life_key)
+        )
+        # Preserve a confirmed respawn through dummy -> unknown -> real loading.
+        self._pending_respawn |= bool(prev.dead or changed_life)
+        if not _alive(cur):
+            return None
+        same_life = life_key is not None and life_key == self._last_alive_life and not self._pending_respawn
+        self._last_alive_life = life_key
+        respawn = self._pending_respawn
+        self._pending_respawn = False
         # 要求 prev.connected：遥测瞬断（parse(None)→not alive）恢复后不误判为重生
-        if _alive(cur) and not _alive(prev) and prev.connected:
+        if not same_life and prev.connected and (not _alive(prev) or changed_life or respawn):
             return BattleEvent(
                 "spawn",
                 payload={
                     "vehicle_type": cur.vehicle_type,
                     "domain": cur.domain,
                     "domain_label": cur.domain_label,
-                    "respawn": bool(prev.dead),
+                    "respawn": respawn,
                 },
                 ts=cur.timestamp or 0.0,
                 level="warning",
@@ -240,4 +265,6 @@ def build_discrete_detectors(player_name: str = "") -> list[DiscreteDetector]:
         ProximityDetector(),
         AirSituationDetector(),
         GroundTargetDetector(),
+        NavalContactDetector("naval_map_contact"),
+        NavalContactDetector("naval_air_contact"),
     ]

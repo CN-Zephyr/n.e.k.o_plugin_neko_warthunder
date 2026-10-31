@@ -2,11 +2,13 @@
 
 > 用途：每轮真机 / 数据层统一测试后，把结果整理成可回填到 `PROJECT_STATUS.md`、`README.md`、`docs/真机验证-checklist.md` 的短报告。不要提交原始玩家名、HUD 文本、combat feed 原文或 awards 原文。
 
+> 当前清单：[剩余验收矩阵](真机验证-checklist.md#剩余验收矩阵)。每项记录通过/失败/未观察/沿用历史证据；离线通过不能代填真机通过。
+
 ## 基本信息
 
 - 日期：
 - 测试人：
-- 插件 commit：
+- 插件 HEAD 与未提交差异/文件校验摘要：
 - 数据层来源 / commit：
 - 游戏模式 / 机型：
 - `dry_run`：true / false
@@ -43,10 +45,10 @@
 ## 面板与 action
 
 - `set_identity`：
-  - 输入昵称：
-  - `/api/identity` 结果：
+  - 手动身份匹配是否通过（不填昵称原文）：
+  - `/api/identity` 安全摘要（仅设置是否生效、source 等，不贴原始 JSON/昵称）：
   - `/api/telemetry.combat.self.source`：
-  - `combat.player_name`：
+  - `combat.player_name` 与手动身份是否一致（仅是/否）：
 - `set_dry_run`：
 - `pause`：
 - `resume`：
@@ -66,6 +68,32 @@
 - `hud_notices.feed[].code=oil_overheat`：有 / 无
 - `powertrain_failure` 或等价故障 code：有 / 无
 - `awards`：有 / 无
+
+## 当前陆战与剩余项回填
+
+| 验收 ID | 通过/失败/未观察/历史参考 | 安全证据位置或数值/状态摘要 | 失败/缺口与后续动作 |
+|---|---|---|---|
+| G01 进出战局/遥测恢复 |  |  |  |
+| G02 乘员/阵亡/同车重生 |  |  |  |
+| G03 待发弹基线/low/empty/补弹/新生命 |  |  |  |
+| G04 LWS 待机/受照/解除/损坏/旧提醒撤销 |  |  |  |
+| G05 岗位枚举与只读边界 |  |  |  |
+| G06 无线电自己正向/队友反例 |  |  |  |
+| G07 敌我颜色与重连恢复 |  |  |  |
+| S01 replay/free-text |  |  |  |
+| V01 后方/尾随正式证据与近目标点 |  |  |  |
+| A01 起飞/复活与 AGL 两路径 |  |  |  |
+| O01 聊天/过期/替换/合并 |  |  |  |
+| O02 实际短单行与声音/会话 |  |  |  |
+| U01 浏览器/原生 Electron |  |  |  |
+| R01 当前新 RC 包/安装/重启/清理 |  |  |  |
+
+- 当前 `ground_status_real_output_enabled` / V2 开关与 `dry_run`（只填布尔值）：
+- LWS/乘员/弹药采样年龄与未知状态处理：
+- 宿主已接受投递与实际听到声音分别确认：
+- 实际回复字数/行数/时延（数字，不填回复原文）：
+- 本次启动的进程/端口已停止，原有 external 数据层保留：
+- 配置/运行状态保留；重启默认 dry-run：
 
 ## dry_run 事件观察
 

@@ -24,10 +24,16 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+if __package__:
+    from .wt_telemetry import vehicle_class_from_indicators
+else:
+    from wt_telemetry import vehicle_class_from_indicators
 
 DEFAULT_PROFILES_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "vehicle_profiles.json"
@@ -35,15 +41,6 @@ DEFAULT_PROFILES_FILE = os.path.join(
 
 # 告警等级（数值用于比较取最高）
 LEVEL_ORDER = {"info": 1, "warning": 2, "critical": 3}
-
-# indicators.army -> 载具大类。飞行类告警仅对 air 生效，避免对坦克/海军误报。
-_ARMY_TO_CLASS = {
-    "air": "air",
-    "tank": "ground",
-    "ship": "naval",
-    "fleet": "naval",
-}
-
 
 @dataclass
 class Alert:
@@ -71,6 +68,9 @@ class ProcessedData:
     fuel_kg: float | None = None
     fuel_burn_rate_kgs: float | None = None   # 估算的瞬时油耗 kg/s
     fuel_remaining_sec: float | None = None   # 估算的剩余飞行时间（秒）
+    fuel_estimate_status: str = "unavailable"  # waiting / ready / stale / unavailable
+    fuel_estimate_age_sec: float | None = None  # 距最后有效燃油变化/基线的秒数
+    fuel_estimate_max_age_sec: float | None = None
     afterburner_active: bool = False
     afterburner_elapsed_sec: float = 0.0
     afterburner_max_sec: float | None = None
@@ -89,6 +89,7 @@ class ProcessedData:
     gear_position: int | None = None  # 档位：>0前进档 / 0空挡 / <0倒车档
     gunner_state: float | None = None
     driver_state: float | None = None
+    laser_warning_state: float | None = None  # -1无设备 / 0待机 / 1告警 / 2损坏
     # 直升机派生
     rotor_rpm: float | None = None
     radio_altitude_m: float | None = None
@@ -258,6 +259,8 @@ class TelemetryProcessor:
         self._last_fuel: float | None = None      # 上次“燃油发生变化”时的油量
         self._last_fuel_ts: float | None = None    # 对应时间戳
         self._fuel_rate: float | None = None       # kg/s 的指数滑动平均
+        self._fuel_change_interval: float | None = None
+        self._fuel_observed_ts: float | None = None
         self._ab_active = False
         self._ab_elapsed = 0.0
         self._g_max: float | None = None
@@ -275,12 +278,10 @@ class TelemetryProcessor:
 
     def process(self, vehicle: Any, indicators: Any, timestamp: float) -> ProcessedData:
         """根据一帧数据产出 ProcessedData。vehicle/indicators 为对应 dataclass。"""
-        vtype = getattr(indicators, "vehicle_type", None)
-        army = getattr(indicators, "army", None)
-        is_heli = getattr(indicators, "is_helicopter", False)
-        vehicle_class = _ARMY_TO_CLASS.get(army or "", "unknown")
-        if is_heli:  # army 同为 air，但直升机单独归类，避免套用固定翼告警
-            vehicle_class = "heli"
+        valid = getattr(indicators, "valid", False) is True
+        vtype = getattr(indicators, "vehicle_type", None) if valid else None
+        army = getattr(indicators, "army", None) if valid else None
+        vehicle_class = vehicle_class_from_indicators(indicators)
 
         # 换载具或类别 -> 重置会话状态（避免残留字段让跨域油耗/加力计时串味）
         if vtype != self._cur_type or vehicle_class != self._cur_class:
@@ -288,7 +289,9 @@ class TelemetryProcessor:
             self._cur_type = vtype
             self._cur_class = vehicle_class
 
-        cfg, matched, source, family = self.resolve_profile(vtype, army)
+        cfg, matched, source, family = (self.resolve_profile(vtype, army)
+                                        if vehicle_class in {"air", "heli", "ground"}
+                                        else ({}, False, "default", None))
 
         dt = 0.0
         if self._last_ts is not None:
@@ -353,36 +356,56 @@ class TelemetryProcessor:
     def _process_fuel(self, vehicle: Any, cfg: dict[str, Any], timestamp: float, result: ProcessedData) -> None:
         fuel = getattr(vehicle, "fuel_kg", None)
         full = getattr(vehicle, "fuel_full_kg", None)
-        if fuel is None or not full:
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+               for v in (fuel, full, timestamp)) or fuel < 0 or full <= 0:
+            self._last_fuel = self._last_fuel_ts = self._fuel_rate = None
+            self._fuel_change_interval = self._fuel_observed_ts = None
             return
         frac = fuel / full if full > 0 else None
         result.fuel_fraction = round(frac, 4) if frac is not None else None
 
         # 估算油耗率：燃油是整数 kg，高频采样下大多帧不变，
         # 因此只在“燃油实际下降”时基于上次变化点计算速率（与采样频率解耦）。
-        if self._last_fuel is None:
+        if (self._last_fuel is None or self._fuel_observed_ts is None
+                or timestamp < self._fuel_observed_ts):
             self._last_fuel = fuel
             self._last_fuel_ts = timestamp
+            self._fuel_rate = self._fuel_change_interval = None
         elif fuel < self._last_fuel:
             burned = self._last_fuel - fuel
             base_ts = self._last_fuel_ts if self._last_fuel_ts is not None else timestamp
             dt = timestamp - base_ts
-            if dt > 0 and burned < full:
+            expired = dt > (self._fuel_estimate_max_age() if self._fuel_rate is not None else 120.0)
+            if dt > 0 and burned < full and not expired:
                 inst_rate = burned / dt
                 if self._fuel_rate is None:
                     self._fuel_rate = inst_rate
                 else:
                     self._fuel_rate = 0.8 * self._fuel_rate + 0.2 * inst_rate
+                self._fuel_change_interval = dt
+            else:
+                # First drop after a long hold is a new baseline, not an average
+                # across an unobserved pause. Wait for the next valid drop.
+                self._fuel_rate = self._fuel_change_interval = None
             self._last_fuel = fuel
             self._last_fuel_ts = timestamp
         elif fuel > self._last_fuel:  # 补给/加油 -> 重置速率估计
             self._fuel_rate = None
+            self._fuel_change_interval = None
             self._last_fuel = fuel
             self._last_fuel_ts = timestamp
 
+        self._fuel_observed_ts = timestamp
+        result.fuel_estimate_age_sec = round(max(0.0, timestamp - self._last_fuel_ts), 3)
+        result.fuel_estimate_status = "waiting"
         if self._fuel_rate and self._fuel_rate > 1e-4:
-            result.fuel_burn_rate_kgs = round(self._fuel_rate, 4)
-            result.fuel_remaining_sec = round(fuel / self._fuel_rate, 1)
+            result.fuel_estimate_max_age_sec = self._fuel_estimate_max_age()
+            if result.fuel_estimate_age_sec > result.fuel_estimate_max_age_sec:
+                result.fuel_estimate_status = "stale"
+            else:
+                result.fuel_estimate_status = "ready"
+                result.fuel_burn_rate_kgs = round(self._fuel_rate, 4)
+                result.fuel_remaining_sec = round(fuel / self._fuel_rate, 1)
 
         if frac is not None:
             rem = result.fuel_remaining_sec
@@ -398,6 +421,13 @@ class TelemetryProcessor:
                 if rem is not None:
                     msg += f"，约 {rem/60:.0f} 分 {rem%60:.0f} 秒"
                 self._add(result, "fuel_low", "warning", msg, round(frac, 4))
+
+    def _fuel_estimate_max_age(self) -> float:
+        # Engineering availability policy, not an aircraft threshold: tolerate
+        # integer-kg quantization and four recent change intervals, bounded at
+        # 45..120 seconds. HTTP polling alone cannot refresh a burn estimate.
+        interval = max(self._fuel_change_interval or 0.0, 1.0 / self._fuel_rate if self._fuel_rate else 0.0)
+        return round(max(45.0, min(120.0, 4.0 * interval)), 3)
 
     def _process_engine_temp(self, indicators: Any, cfg: dict[str, Any], result: ProcessedData) -> None:
         """发动机过热告警（活塞机/部分早期喷气）。
@@ -530,9 +560,10 @@ class TelemetryProcessor:
         result.crew_current = crew_cur
         result.crew_total = crew_tot
         result.ammo_first_stage = ammo
-        result.gun_stabilizer = (stab is not None and stab >= 0.5)
+        result.gun_stabilizer = (stab >= 0.5) if stab is not None else None
         result.gunner_state = gunner_state
         result.driver_state = driver_state
+        result.laser_warning_state = lws
 
         # 档位：gear - gear_neutral（>0前进 / 0空挡 / <0倒车）
         gear = getattr(indicators, "gear", None)

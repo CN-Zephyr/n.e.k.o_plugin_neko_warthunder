@@ -40,6 +40,7 @@
     /api/awards        战斗嘉奖（一血/双杀/三杀/连续无伤歼敌等；含 is_mine/notable）
     /api/chat          累积的最近聊天
     /api/map.jpg       最新小地图底图（图片）
+    /api/faction_colors 小地图敌我颜色（?ally=/&enemy= 设置 #RRGGBB；颜色过近时 conflict=true）
     /api/record        数据转存调试开关（?on=1 开 / ?on=0 关 / 无参查状态），见 wt_recorder.py
 
 运行：
@@ -53,6 +54,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import socket
 import sys
@@ -78,12 +80,15 @@ if __package__:
     from .wt_telemetry import DEFAULT_PORT as WT_PORT
     from .wt_telemetry import (
         ConnectionState,
+        FactionColors,
         Indicators,
         MapInfo,
         Telemetry,
         VehicleState,
         WarThunderClient,
         detect_domain,
+        parse_hex_color,
+        vehicle_class_from_indicators,
     )
 else:
     from wt_events import AwardTracker, KillTracker, NoticeTracker
@@ -94,12 +99,15 @@ else:
     from wt_telemetry import DEFAULT_PORT as WT_PORT
     from wt_telemetry import (
         ConnectionState,
+        FactionColors,
         Indicators,
         MapInfo,
         Telemetry,
         VehicleState,
         WarThunderClient,
         detect_domain,
+        parse_hex_color,
+        vehicle_class_from_indicators,
     )
 
 _CONTENT_TYPE_BY_EXT = {"jpg": "image/jpeg", "png": "image/png"}
@@ -173,8 +181,11 @@ class TelemetryService:
         profiles_path: str | None = None,
         player_name: str | None = None,
         recorder: SessionRecorder | None = None,
+        faction_colors: FactionColors | None = None,
     ) -> None:
         self.client = client
+        if faction_colors is not None:
+            self.client.faction_colors = faction_colors
         self.save_map = save_map
         self.map_dir = map_dir
         self.processor = TelemetryProcessor(profiles_path)
@@ -201,8 +212,15 @@ class TelemetryService:
         self._vehicle_sample_ts = 0.0
         self._vehicle_sample_count = 0
         self._indicators = Indicators(valid=False)
+        # Successful naval /indicators samples, independent of fast attempts,
+        # /state and map samples. Reuse the existing probe; no extra requests.
+        self._naval_indicators_count = 0
+        self._naval_indicators_sample: dict[str, Any] = {"status": "unavailable"}
         self._vehicle = VehicleState(valid=False)
         self._map_objects: list[Any] = []
+        self._map_sample_ts = 0.0
+        self._map_sample_count = 0
+        self._map_sample_life_index: int | None = None
         self._map_info = MapInfo(valid=False)
         self._mission_status: str | None = None
         self._mission_objectives: Any = None
@@ -349,12 +367,17 @@ class TelemetryService:
     # -- 各组采集（网络 IO 在锁外，仅缓存更新在锁内） ----------------------
 
     def _poll_fast(self) -> None:
+        with self._lock:
+            instrument_context = self._naval_instrument_context_locked()
+            previous_fast_ts = self._fast_ts
+            instrument_request_ts = time.time()
         # 探针同时取 indicators + map_info；战局判定以 map_info.valid 为准
         # （主界面/机库的 indicators/state/mission 都可能“像在战局”）
         probe_ok, state, ind, minfo = self.client.get_indicators_with_status()
         now = time.time()
         if not probe_ok:
             with self._lock:
+                self._naval_indicators_sample = {"status": "probe_failed"}
                 if self._probe_failure_since is None:
                     self._probe_failure_since = now
                     probe_failure_started = True
@@ -473,10 +496,53 @@ class TelemetryService:
                 # 按 level 判断紧急程度的下游会读到被抑制掉的假警等级。
                 processed = {**processed, "alerts": [], "flags": {}, "level": "info"}
             self._processed = processed
+            self._update_naval_indicators_locked(probe_ok, ind, now, instrument_context,
+                                                previous_fast_ts, instrument_request_ts)
         # 录制（调试开关）：按记录间隔转存一帧快照；未开启录制时近乎零开销
         self.recorder.offer_frame(self._build_record_frame)
 
+    def _naval_instrument_context_locked(self) -> tuple:
+        return (self._battle_generation, self._battle_id, self._life_index,
+                self._dead, self._replay, self._indicators.army)
+
+    def _update_naval_indicators_locked(self, probe_ok: bool, ind: Indicators,
+                                       now: float, context_before: tuple, previous_ts: float,
+                                       request_ts: float) -> None:
+        # Fail closed across enter/exit, respawn and an in-flight context change.
+        status = "unavailable"
+        if not probe_ok:
+            status = "probe_failed"
+        elif self._replay:
+            status = "replay"
+        elif self._dead:
+            status = "dead"
+        elif self._state is not ConnectionState.IN_BATTLE:
+            status = "waiting"
+        elif context_before != self._naval_instrument_context_locked():
+            status = "context_changed"
+        elif (ind.valid is not True or ind.army not in ("ship", "fleet")
+              or not isinstance(ind.raw, dict) or ind.raw.get("valid") is not True
+              or ind.raw.get("army") != ind.army):
+            status = "invalid_source"
+        elif not self._battle_id or not self._life_index:
+            status = "unknown_life"
+        elif (not math.isfinite(now) or not math.isfinite(request_ts)
+              or request_ts <= 0 or request_ts < previous_ts or now < request_ts):
+            status = "unknown_age"
+        else:
+            self._naval_indicators_count += 1
+            self._naval_indicators_sample = {
+                # Start time is a conservative age bound: slow map_info/state
+                # requests must not make earlier /indicators data look new.
+                "status": "ready", "sample_timestamp": request_ts,
+                "battle_id": self._battle_id, "life_index": self._life_index, "army": ind.army,
+            }
+            return
+        self._naval_indicators_sample = {"status": status}
+
     def _poll_map(self, generation: int) -> None:
+        with self._lock:
+            life_index = self._life_index
         map_ok, objs = self.client.get_map_objects_with_status()
         if not map_ok:
             # 传输失败不是“地图上没有敌人”；保留上一帧态势与轨迹基线。
@@ -496,7 +562,7 @@ class TelemetryService:
         now = time.time()
         # 阵亡待命态：地图“自身”坐标会漂到被观战者身上，敌距/接近全部失真，不再生成接近告警。
         with self._lock:
-            if generation != self._battle_generation:
+            if generation != self._battle_generation or life_index != self._life_index:
                 return
             if self._dead:
                 prox_events = []
@@ -506,6 +572,9 @@ class TelemetryService:
                 )
             self._map_objects = objs
             self._situation = situation
+            self._map_sample_ts = now
+            self._map_sample_count += 1
+            self._map_sample_life_index = life_index
             self._proximity_threshold = {"vs_air": thr_air, "vs_ground": thr_ground}
             for ev in prox_events:
                 self._proximity_events.append(ev)
@@ -706,11 +775,11 @@ class TelemetryService:
         deaths = 0
         if isinstance(combat, dict):
             deaths = (combat.get("my") or {}).get("deaths") or 0
-        army = str(getattr(ind, "army", "") or "").strip().lower()
-        crew = getattr(ind, "crew_current", None)
-        crew_total = getattr(ind, "crew_total", None)
+        vehicle_class = vehicle_class_from_indicators(ind)
+        crew = getattr(ind, "crew_current", None) if vehicle_class == "ground" else None
+        crew_total = getattr(ind, "crew_total", None) if vehicle_class == "ground" else None
         ground_crew_knockout = (
-            army in {"tank", "ground"}
+            vehicle_class == "ground"
             and crew is not None
             and crew_total is not None
             and crew_total >= 2
@@ -728,18 +797,18 @@ class TelemetryService:
         if not self._dead:
             return False
         inert_seen_before = self._dead_inert_seen
-        ias = processed.get("ias_kmh") if isinstance(processed, dict) else None
-        gspeed = getattr(ind, "speed", None)
+        ias = processed.get("ias_kmh") if vehicle_class == "air" and isinstance(processed, dict) else None
+        gspeed = getattr(ind, "speed", None) if vehicle_class in {"air", "heli", "ground"} else None
         inert = ((ias is None or ias < _DEAD_INERT_IAS_KMH)
                  and (gspeed is None or abs(gspeed) < _DEAD_INERT_SPEED_MS))
-        if inert:
+        if inert and (ias is not None or gspeed is not None):
             self._dead_inert_seen = True
         moving = ((ias is not None and ias > _DEAD_ALIVE_IAS_KMH)
                   or (gspeed is not None and abs(gspeed) > _DEAD_ALIVE_SPEED_MS))
         crew_full = (crew is not None and crew_total is not None
                      and crew_total >= 2 and crew >= crew_total)
         if (
-            army in {"tank", "ground"}
+            vehicle_class == "ground"
             and crew is not None
             and crew_total is not None
             and crew_total >= 2
@@ -747,7 +816,7 @@ class TelemetryService:
         ):
             self._dead_crew_depleted_seen = True
         crew_recovered = (
-            army in {"tank", "ground"}
+            vehicle_class == "ground"
             and self._dead_crew_depleted_seen
             and crew_full
         )
@@ -786,6 +855,11 @@ class TelemetryService:
         # 录制标记：一次会话可跨多局，靠此标记供离线工具按局切分
         self.recorder.mark({"_event": "battle_reset"})
         self._map_objects = []
+        self._map_sample_ts = 0.0
+        self._map_sample_count = 0
+        self._map_sample_life_index = None
+        self._naval_indicators_count = 0
+        self._naval_indicators_sample = {"status": "unavailable"}
         self._map_info = MapInfo(valid=False)
         self._mission_status = None
         self._mission_objectives = None
@@ -876,14 +950,15 @@ class TelemetryService:
             # （HUD 带全局名字戳，不会被污染，前端仍可展示最终 K/D / 谁击杀了你）。
             data["dead"] = self._dead
             data["dead_source"] = self._dead_source
-            data["processed"] = self._processed
+            data["processed"] = (self._processed if self._processed is not None
+                                 and self._processed.get("vehicle_class") == data["domain"] else None)
             data["situation"] = None if self._dead else self._situation
             data["combat"] = self._combat
             data["hud_notices"] = self._notices
             data["awards"] = self._awards
             data["proximity"] = {
                 "thresholds_m": self._proximity_threshold,
-                "events": [] if self._dead else list(self._proximity_events),
+                "events": [] if self._dead or data["domain"] == "unknown" else list(self._proximity_events),
             }
             data["meta"] = self._meta_locked()
         return data
@@ -913,6 +988,18 @@ class TelemetryService:
             requested = (name or "").strip() or None
             self._manual_player_name = requested
             self._name_req = requested
+
+    def set_faction_colors(self, ally: str | None = None, enemy: str | None = None) -> dict[str, Any]:
+        """设置小地图敌我颜色（"#RRGGBB"）；未给或非法的一项保持不变，下一次 map 轮询生效。"""
+        current = self.client.faction_colors
+        self.client.faction_colors = FactionColors(
+            ally=parse_hex_color(ally) or current.ally,
+            enemy=parse_hex_color(enemy) or current.enemy,
+        )
+        return self.get_faction_colors()
+
+    def get_faction_colors(self) -> dict[str, Any]:
+        return self.client.faction_colors.to_dict()
 
     def get_identity(self) -> dict[str, Any]:
         """返回身份状态；手动昵称跨局保留，不依赖本局战绩缓存。"""
@@ -947,6 +1034,18 @@ class TelemetryService:
             "interval": self.intervals["fast"],
             "count": self._vehicle_sample_count,
             "age_sec": round(now - self._vehicle_sample_ts, 3) if self._vehicle_sample_ts else None,
+        }
+        out["map_objects"] = {
+            "interval": self.intervals["map"],
+            "count": self._map_sample_count,
+            "age_sec": round(now - self._map_sample_ts, 3) if self._map_sample_ts else None,
+            "life_index": self._map_sample_life_index,
+        }
+        instrument = self._naval_indicators_sample
+        sample_ts = instrument.get("sample_timestamp")
+        out["naval_indicators"] = {
+            **instrument, "count": self._naval_indicators_count,
+            "age_sec": round(max(0.0, now - sample_ts), 3) if sample_ts is not None else None,
         }
         return out
 
@@ -1086,6 +1185,24 @@ class _Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if path == "/api/faction_colors":
+            # 查看/设置小地图敌我颜色。?ally=%23174DFF&enemy=%23FA0C00；颜色过近时 conflict=true。
+            q = parse_qs(urlparse(self.path).query)
+            ally = (q.get("ally") or [None])[0]
+            enemy = (q.get("enemy") or [None])[0]
+            if ally is None and enemy is None:
+                self._send_json(self.service.get_faction_colors())
+                return
+            if not self._action_allowed():
+                return
+            if (ally is not None and parse_hex_color(ally) is None) or (
+                enemy is not None and parse_hex_color(enemy) is None
+            ):
+                self._send_json({"error": "invalid_color", **self.service.get_faction_colors()}, 400)
+                return
+            self._send_json(self.service.set_faction_colors(ally, enemy))
+            return
+
         if path == "/api/notices":
             self._send_json(self.service.get_part("hud_notices"))
             return
@@ -1209,6 +1326,10 @@ def main() -> None:
                         help="玩家名(不含战队标签)的初始权威值；留空则自动识别，"
                              "也可运行时用 GET /api/identity?name=xxx 设置，修改请求需携带 "
                              "X-Neko-Warthunder-Action: 1")
+    parser.add_argument("--ally-color", default=None,
+                        help="小地图队友颜色 #RRGGBB（默认 #174DFF；游戏里改过队友颜色时需同步）")
+    parser.add_argument("--enemy-color", default=None,
+                        help="小地图敌方颜色 #RRGGBB（默认 #FA0C00；游戏里改过敌人颜色时需同步）")
     parser.add_argument("--record", action="store_true",
                         help="启动即开启数据转存（调试开关；也可运行时 GET /api/record?on=1 切换，"
                              "修改请求需携带 X-Neko-Warthunder-Action: 1）")
@@ -1239,6 +1360,7 @@ def main() -> None:
         player_name=args.player_name,
         recorder=recorder,
     )
+    service.set_faction_colors(args.ally_color, args.enemy_color)
     if args.record:
         st = recorder.start()
         print(f"  [录制] 已开启 -> {st['session_dir']}")
@@ -1258,6 +1380,7 @@ def main() -> None:
     print("        /api/processed  /api/alerts  （自定义告警）")
     print("        /api/situation （态势）  /api/kills （战绩，含自我识别/涉我标记）")
     print("        /api/identity （查看/设置玩家昵称：?name=xxx / ?clear=1）")
+    print("        /api/faction_colors （小地图敌我颜色：?ally=%23RRGGBB&enemy=%23RRGGBB）")
     print("        /api/notices （自机技术通知：油温/襟翼/过热）")
     print("        /api/awards （战斗嘉奖：一血/双杀/三杀/连续无伤歼敌；?notable=1 仅高光）")
     print("        /api/proximity （敌军接近告警，边沿触发）")

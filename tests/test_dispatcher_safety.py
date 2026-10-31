@@ -202,14 +202,14 @@ def test_push_message_parts_text_excludes_unsafe_raw_name():
     assert "{MASTER_NAME}" in call["parts"][0]["text"]
     assert "建议台词：" not in call["parts"][0]["text"]
     assert "不套固定话" in call["parts"][0]["text"]
-    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_recommended_reply"] == ""
 
 
 def test_prompt_includes_plugin_owned_short_reply_hint_by_default():
     prompt = NekoDispatcher(None).build_prompt(BattleEvent("low_alt_danger", level="critical"))
 
-    assert "建议台词：拉起来，要撞地了！" in prompt
+    assert "建议台词：离地过低，立即拉起！" in prompt
 
 
 def test_prompt_reply_hint_can_be_disabled_by_plugin_config():
@@ -235,17 +235,17 @@ def test_plugin_owned_blind_output_uses_final_short_line_without_llm_prompt_for_
     call = plugin.calls[0]
     assert call["visibility"] == ["chat"]
     assert call["ai_behavior"] == "blind"
-    assert call["parts"] == [{"type": "text", "text": "拉起来，要撞地了！"}]
+    assert call["parts"] == [{"type": "text", "text": "离地过低，立即拉起！"}]
     assert len(call["parts"][0]["text"]) <= 28
     assert "{MASTER_NAME}" not in call["parts"][0]["text"]
     assert UNSAFE_NAME not in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is True
-    assert call["metadata"]["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert call["metadata"]["plugin_recommended_reply"] == "离地过低，立即拉起！"
     status = timeline.snapshot()["last_output_status"]
     assert status["ai_behavior"] == "blind"
     assert status["visibility"] == ["chat"]
     assert status["plugin_owned_output"] is True
-    assert status["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert status["plugin_recommended_reply"] == "离地过低，立即拉起！"
 
 
 def test_kill_praise_does_not_use_plugin_owned_blind_template():
@@ -264,7 +264,7 @@ def test_kill_praise_does_not_use_plugin_owned_blind_template():
     assert call["metadata"]["plugin_owned_output"] is False
     assert call["metadata"]["plugin_recommended_reply"] == ""
     assert "建议台词：" not in call["parts"][0]["text"]
-    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in call["parts"][0]["text"]
 
 
 def test_critical_safety_event_uses_respond_by_default_so_tts_can_speak():
@@ -281,9 +281,9 @@ def test_critical_safety_event_uses_respond_by_default_so_tts_can_speak():
     assert call["visibility"] == []
     assert call["ai_behavior"] == "respond"
     assert "{MASTER_NAME}" in call["parts"][0]["text"]
-    assert "建议台词：拉起来，要撞地了！" in call["parts"][0]["text"]
+    assert "建议台词：离地过低，立即拉起！" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is False
-    assert call["metadata"]["plugin_recommended_reply"] == "拉起来，要撞地了！"
+    assert call["metadata"]["plugin_recommended_reply"] == "离地过低，立即拉起！"
     status = timeline.snapshot()["last_output_status"]
     assert status["ai_behavior"] == "respond"
     assert status["visibility"] == []
@@ -303,7 +303,7 @@ def test_critical_safety_event_can_opt_into_plugin_owned_blind_output():
     call = plugin.calls[0]
     assert call["visibility"] == ["chat"]
     assert call["ai_behavior"] == "blind"
-    assert call["parts"] == [{"type": "text", "text": "拉起来，要撞地了！"}]
+    assert call["parts"] == [{"type": "text", "text": "离地过低，立即拉起！"}]
     assert call["metadata"]["plugin_owned_output"] is True
 
 
@@ -351,7 +351,7 @@ def test_plugin_owned_urgent_output_can_be_disabled_by_plugin_config_when_battle
     call = plugin.calls[0]
     assert call["visibility"] == []
     assert call["ai_behavior"] == "respond"
-    assert "建议台词：拉起来，要撞地了！" in call["parts"][0]["text"]
+    assert "建议台词：离地过低，立即拉起！" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is False
 
 
@@ -374,7 +374,7 @@ def test_ground_kill_prompt_leaves_expression_to_the_character():
     )
 
     assert "回应方式由你根据当前人设与对话上下文决定" in prompt
-    assert "插件不指定情绪或措辞" in prompt
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in prompt
     assert "轻夸" not in prompt
     assert "调侃" not in prompt
     assert "提醒别贪" not in prompt
@@ -467,12 +467,12 @@ def test_spawn_prompt_leaves_expression_to_persona_and_forbids_invented_cues():
 
     assert "当前模式：空战/飞行" in prompt
     assert "角色：后座或僚机" in prompt
-    assert "可用语境：上机、升空、跟上、护住你" in prompt
-    assert "语境：只用空战飞行词，不串其他载具域" in prompt
+    assert "语境：只按本条事件的载具域回应" in prompt
+    assert "事件不证明载具运动状态" in prompt
     assert "输出：一句中文台词，28字内" in prompt
     assert "不复述规则/字段" in prompt
     assert "不加前缀或引号" in prompt
-    assert "插件不指定情绪或措辞" in prompt
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in prompt
     assert "短促开局招呼" not in prompt
     assert "可活泼即兴" not in prompt
     assert "建议台词：" not in prompt
@@ -486,8 +486,7 @@ def test_spawn_prompt_uses_ground_opening_terms():
 
     assert "当前模式：陆战/地面载具" in prompt
     assert "角色：车组搭档" in prompt
-    assert "可用语境：上车、出击、车组、装填、掩体、看路" in prompt
-    assert "语境：只用陆战车组词，不串其他载具域" in prompt
+    assert "语境：只按本条事件的载具域回应" in prompt
     assert "建议台词：" not in prompt
     for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
         assert air_term not in prompt
@@ -498,8 +497,7 @@ def test_spawn_prompt_uses_helicopter_opening_terms():
 
     assert "当前模式：直升机/旋翼机" in prompt
     assert "角色：机组搭档" in prompt
-    assert "可用语境：起飞、贴地、悬停、看高度、跟上" in prompt
-    assert "语境：只用直升机机组词，不串其他载具域" in prompt
+    assert "语境：只按本条事件的载具域回应" in prompt
     assert "建议台词：" not in prompt
     for fixed_wing_or_ground_term in ("后座", "僚机", "机翼", "拉杆", "车组", "装填", "掩体", "舰桥"):
         assert fixed_wing_or_ground_term not in prompt
@@ -510,8 +508,7 @@ def test_spawn_prompt_uses_naval_opening_terms():
 
     assert "当前模式：海战/舰艇" in prompt
     assert "角色：舰桥观察员" in prompt
-    assert "可用语境：上舰、出航、舰桥、航向、海面" in prompt
-    assert "语境：只用海战舰艇词，不串其他载具域" in prompt
+    assert "语境：只按本条事件的载具域回应" in prompt
     assert "建议台词：" not in prompt
     for non_naval_term in ("空战", "飞行", "升空", "后座", "云霄", "坦克", "装填手", "履带"):
         assert non_naval_term not in prompt
@@ -533,7 +530,7 @@ def test_spawn_push_allows_persona_owned_bounded_prompt():
     assert "角色：车组搭档" in call["parts"][0]["text"]
     for air_term in ("空战", "飞行", "升空", "后座", "云霄", "天空", "飞机", "空中", "机翼", "拉杆"):
         assert air_term not in call["parts"][0]["text"]
-    assert "插件不指定情绪或措辞" in call["parts"][0]["text"]
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in call["parts"][0]["text"]
     assert "别报敌情/方位/锁定/击杀/威胁" in call["parts"][0]["text"]
     assert call["metadata"]["plugin_owned_output"] is False
     assert call["metadata"]["plugin_recommended_reply"] == ""
@@ -755,7 +752,7 @@ def test_kill_prompt_only_constrains_facts_and_output_shape():
 
     assert "{MASTER_NAME} 刚取得可信战果" in prompt
     assert "不复盘或补充未提供的战术细节" in prompt
-    assert "插件不指定情绪或措辞" in prompt
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in prompt
     for prescribed_style in ("轻夸", "调侃", "坏笑", "安慰", "得意", "提醒留速"):
         assert prescribed_style not in prompt
     assert "不反问、不续聊" in prompt

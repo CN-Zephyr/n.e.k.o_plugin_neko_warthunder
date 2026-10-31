@@ -126,6 +126,7 @@ def test_parse_ground_processed_fields_from_v18_contract():
             "gear_position": -1,
             "gunner_state": 0,
             "driver_state": 0,
+            "laser_warning_state": 1,
             "flags": {
                 "crew_critical": True,
                 "ammo_empty": True,
@@ -146,6 +147,7 @@ def test_parse_ground_processed_fields_from_v18_contract():
     assert s.gear_position == -1
     assert s.gunner_state == 0
     assert s.driver_state == 0
+    assert s.laser_warning_state == 1
     assert s.flag("crew_critical")
     assert s.flag("ammo_empty")
     assert s.flag("laser_warning")

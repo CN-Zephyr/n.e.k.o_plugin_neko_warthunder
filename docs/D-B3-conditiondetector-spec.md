@@ -1,6 +1,6 @@
 # D-B3｜ConditionDetector 规格（v1 · RB 空战）
 
-> 状态：v0.2（汇合后）· 范围：v1 RB 空战
+> 更新：2026-10-29。本文保留通用设计；注册描述符和短历史等是设计抽象，不宣称当前每个离散 Detector 都是纯配置。当前候选结构、配置与生命周期以 `core/contracts.py`、`detectors/_base.py`、condition/discrete 构造函数为准，阶段与能力见 [统一状态](当前开发状态.md)。
 > 用途：定义"把连续/离散输入翻译成离散候选事件"的**统一检测单元**，从结构上杜绝 `state_evaluator` 变成 if/else 沼泽
 > 关联：D-B5 v0.2（事件→数据层来源）/ D-B1（Scenario）/ D-B2（BattleEvent）/ D-B4（仲裁）
 
@@ -19,7 +19,7 @@
 
 | 数据源 | 边沿语义 | 我们怎么消费 | v1 例 |
 |---|---|---|---|
-| `processed.flags` / `alerts` | **电平型**（每帧出现） | ConditionDetector：**我们**做边沿+debounce+迟滞+re-arm | stall/aoa/altitude/fuel/overheat/overspeed（数据层 v1.6 已给 flag，插件侧待验证） |
+| `processed.flags` / `alerts` | **电平型**（每帧出现） | ConditionDetector：**我们**做边沿+debounce+迟滞+re-arm | stall/aoa/altitude/fuel/overheat/overspeed（插件已接入；剩余为当前源码真机复验） |
 | `hud_notices` / `combat.feed` | **已边沿型**（带递增 id） | DiscreteDetector：hud_notices 按 id 去重；combat.feed 按已播报 owned id 去重，允许同 id 后补 ownership 时补触发 | overheat 技术通知 / you_killed / you_died |
 | `proximity.events` | **已边沿型**（首次进入触发一次，带 id/kind） | DiscreteDetector：按 id 去重；短窗连续近距离后方事件保守升级（V2 已消费，生成安全 generic 接近威胁事件） | enemy_nearby / air_threat_nearby / enemy_on_six / tailing_risk |
 | `situation.enemies` / `situation.nearest_air_threat` | 连续态势摘要（无事件 id） | AirSituationDetector：取最近安全空中敌方摘要，按距离段/钟点去重；可生成空中威胁、后方威胁，并用短窗连续近距离后方帧保守升级；raw label 不进 prompt | air_threat_nearby / enemy_on_six / tailing_risk |
@@ -44,12 +44,12 @@ Detector = **一个纯粹的"条件 → 离散候选事件"单元**。它只回�
 - ❌ Scenario 门控（"DEAD 里别报失速"）→ Arbiter（查 D-B1 矩阵）。
 - ❌ 限流 / cooldown / 抢占 → Arbiter（见第 6 节）。
 - ❌ 跨 Detector 去重（如多个危急安全事件同窗竞争）→ Arbiter。
-- ❌ 拼提示文本 / 台词 → dispatcher 统一收口；危急动作类可由插件短句直出，其余需要语气变化的事件走 bounded `respond`。
+- ❌ 拼提示文本 / 台词 → Dispatcher 统一收口；危急与普通事件默认均走 bounded `respond`，插件短句直出只在显式兼容模式启用。
 - ❌ `push_message` 或任何输出副作用。
 - ❌ 读原始 8111 / 做单位归一 → 数据层（合作者）。
 - ❌ 写 / 改 BattleState（只读消费）。
 - ❌ 感知其它 Detector / Scenario / 猫娘的存在（零耦合）。
-- ❌ 决定 severity / priority（这些是 D-B2 字典的属性，按 event_id 查，不在 Detector 里算）。
+- ❌ 自定 severity / priority 策略；Detector 保留上游 warning/critical 档为 level，数值 severity/priority 按事件目录派生。
 
 > 一句话纪律：**Detector 产出"候选"，不产出"决策"。** 任何"要不要/什么时候/对谁说"都不属于 Detector。
 
@@ -65,11 +65,12 @@ Detector = **一个纯粹的"条件 → 离散候选事件"单元**。它只回�
 Detector 每 tick 产出 **0 或 1 个候选**，形状统一：
 
 - `event_id`：对应 D-B2 字典里的事件（如 `stall_risk`）。
-- `edge`：`enter` / `recovery`（recovery 仅当该事件配置 `wants_recovery=true`，v1 只给生死级）。
+- `edge`：`enter` / `recovery`（协议允许 recovery 仅当 `wants_recovery=true`；当前注册配置不启用 recovery，能力仍暂缓）。
 - `payload`：D-B2 声明的派生上下文标量（如 `ias_kmh/aoa_deg/...`）。
 - `ts`：边沿发生时刻。
+- `level`：上游 warning / critical 等级；当前 BattleEvent 按 event_id + level 派生 severity，priority 等来自目录。trace_id 只供海战本地观察关联，不进入投递 payload。
 
-候选**不含** severity/priority/cooldown/scenario——那些由 Arbiter 按 `event_id` 查 D-B2/D-B1。Detector 另**暴露自身状态**（`armed`/`active`）供 Scenario 解析器读取（"危急集合里有 Detector active → CRITICAL_RISK"），但 Detector 自己不判 Scenario。
+候选不自行制定 severity/priority/cooldown/scenario 策略；当前 BattleEvent 有目录派生属性，不应将早期简化形状当成完整 dataclass 合同。Detector 可暴露自身状态（`armed`/`active`）供诊断；当前 Scenario 直接读 BattleState 危急 flags，而非以 Detector active 驱动。Detector 自己不判 Scenario。
 
 ## 4. 连续 Detector 的状态机（enter/exit/confirm/hysteresis/re-arm 都在这里）
 
@@ -140,8 +141,8 @@ stateDiagram-v2
   - `required_fields` / `optional_fields`（→ D-B5；引擎据此做缺字段降级）
   - `signal`：从 BattleState 取哪些值（描述）
   - `enter` / `exit` 谓词、`confirm_enter` / `confirm_exit`（condition 家族）
-  - `wants_recovery`：是否产 recovery 边沿（v1 仅生死级 true）
-  - 阈值参数（草稿值，**待 D-A1 校准**；未来可做"逐机/逐模式阈值 profile"，仍是换配置不换逻辑）
+  - `wants_recovery`：协议是否产 recovery 边沿；当前注册配置不启用，不能把协议能力写成已开播
+  - Detector 只配置边沿确认/退出等参数；逐机阈值 profile 已由数据层维护，原始阈值草稿不是插件自行重算依据
 - **加一个场景 = 往注册表加一条描述符**，零改引擎、零改其它 Detector。这就是防 if/else 沼泽的结构保证。
 
 ## 8. 防 if/else 的硬纪律（落到评审要求）
@@ -156,5 +157,31 @@ stateDiagram-v2
 
 - **上游**：Detector 读 D-A5 定型的 `TelemetrySnapshot` 派生出的 BattleState；字段缺失按 D-B5 降级。
 - **下游**：候选交 D-B4 Arbiter，由它做 Scenario 门控（D-B1 矩阵）+ cooldown/限流/抢占（D-B2 属性）+ 跨事件去重。
-- **Scenario 解析**：读危急集合 Detector 的 `active` 状态 → 决定 CRITICAL_RISK（D-B1）。
-- 未决：① 各 Detector 的 enter/exit 阈值与 confirm 窗口（全部待 D-A1 抓包校准）；② 降级粗判（如无 AoA 的失速）是否单独成一个低置信 Detector；③ 阈值 profile 机制 v1 是否引入（建议 v1 先单套 RB 空战通用值，profile 留 v2）。
+- **Scenario 解析**：当前 `core/scenario.py` 读取 BattleState 中危急 flags → 决定 CRITICAL_RISK；不等待某 Detector 的 active 状态。
+- 当前待评审：具体新能力的确认窗口、缺字段降级和实际机型证据。逐机 profile 已在数据层实现，不再作为“留 v2”的未实现项；插件连续安全 Detector 仍消费 flags，不新增原始阈值粗判。原早期“v1 生死级 recovery”提案已被 recovery 暂缓决策取代。
+
+
+## 当前陆战与生命周期补充（2026-10-27）
+
+- 已注册 `ground_laser_warning`（1 帧进入/2 帧退出）、`ground_crew_loss`、`ground_ammo_low`、`ground_ammo_empty`（后三项均 2 帧进入/2 帧退出）；各自真实输出策略见 D-B5。
+- 已注册直升机 `heli_vrs_risk`（2 次有效观测进入/2 次解除后重武装），要求已知且新鲜的载具采样；无 recovery/心跳，真实输出硬禁用，见 [VRS 开发记录](直升机VRS-dry-run-20261027.md)。
+- `ground_gunner_disabled` / `ground_driver_disabled` 仅保留兼容目录/数据状态，不注册 Detector；recovery 仍不启用。
+- `replay=true` 引擎静默并重置；阵亡期间按 `dead_state_policy` 区分条件重置与持久 feed 游标推进，避免同局重生重播旧条目。
+- 连续空战 critical 可按配置心跳重发仍成立的新鲜事件；low_fuel 的每局一次在实际投递确认后消耗，不应因 dry-run 先观察而永久丢失真实机会。
+- 条件已经不成立的激光/弹药候选在 Arbiter 前置复核中撤销，不能用旧 payload 继续占槽或失败重试。全部真机通过仍需逐项验收。
+
+## 海战聚合地图边沿（2026-10-27）
+
+NavalContactDetector 是独立离散快照检测器，不借用固定翼 flags。每类两个不同成功地图样本确认进入；活动期间不按目标身份或数量变化重报，两个有效消失样本才重武装，无 recovery/心跳。重复 map count 不推进。
+
+无效来源立即重置；战局/生命、成功计数回退、源时间回退或大于 5 秒的未观测采样间隔重新确认。只消费已确认海战的有限聚合计数，不新增目标扫描或物理阈值。
+
+## 海战只读检测诊断（2026-10-27）
+
+`naval_detection` 与检测/仲裁共用来源谓词。来源失败投影为有限原因码；采样年龄在读取时计算，不 feed/reset。每个 NavalContactDetector 在一次更新完成后发布不可变的采样键/活动态/进入与退出计数快照，卡片按当前战局、生命和成功序号匹配；未处理的新样本显示 pending，来源过期/无效显示 blocked，不借用旧进度。
+
+进度为 confirming 1/2、active 2/2、clearing 1/2、absent 0/2；停用显示 disabled。active 表示本次出现曾生成候选，仲裁或 dry-run 记录结果仍以活动页为准，不表示播报。两类事件的真实输出硬禁用不变，无新增配置、动作或持久状态。完整来源原因与验证见 [诊断卡记录](海战dry-run检测诊断卡-20261027.md)。
+
+## 海战检测结果对照（2026-10-28）
+
+每次海战图标类别重新确认时生成新的本地关联标识，与不可变进度一起发布。仅当前 active/clearing 且来源采样键一致时用于查询结果；pending、confirming、absent、blocked 或停用不沿用旧确认的结果。读取不 feed/reset。 真实输出继续双边界硬关闭，见 [结果对照记录](海战检测结果对照-20261028.md)。

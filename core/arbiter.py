@@ -13,13 +13,18 @@ from .contracts import (
     COMBAT_STRESS,
     CRITICAL_RISK,
     DEAD,
+    GROUND_STATUS_GATED_EVENTS,
+    HELICOPTER_DRY_RUN_ONLY_EVENTS,
+    NAVAL_DRY_RUN_ONLY_EVENTS,
     BattleEvent,
+    BattleState,
     broadcast_category_enabled,
     broadcast_frequency_multiplier,
     category_allowed,
     event_max_age_seconds,
 )
 from .safety_guard import SafetyGuard
+from .telemetry_freshness import helicopter_vrs_active, naval_contact_still_active
 
 
 @dataclass(frozen=True)
@@ -53,13 +58,68 @@ class Arbiter:
         """Roll back cooldown bookkeeping without resurrecting consumed buffers."""
         self._last_fired = dict(checkpoint.last_fired)
 
-    def decide(self, candidates: list[BattleEvent], scenario: str, now: float) -> tuple[BattleEvent | None, list[dict[str, Any]]]:
+    def decide(
+        self, candidates: list[BattleEvent], scenario: str, now: float,
+        *, current_state: BattleState | None = None,
+    ) -> tuple[BattleEvent | None, list[dict[str, Any]]]:
         chain: list[dict[str, Any]] = []
 
         if self.safety.stopped:
             for c in candidates:
                 chain.append(_rec(c, "suppressed", self.safety.status()))
             return None, chain
+
+        # 条件可能在限流/投递重试期间变化；旧提醒不应占槽或补播。
+        if self._window_best is not None:
+            reason = _cleared_vehicle_condition(self._window_best, current_state, now)
+            if reason:
+                chain.append(_rec(self._window_best, "dropped", reason))
+                self._window_best = None
+        current_candidates = []
+        for candidate in candidates:
+            reason = _cleared_vehicle_condition(candidate, current_state, now)
+            if reason:
+                chain.append(_rec(candidate, "dropped", reason))
+            else:
+                current_candidates.append(candidate)
+        candidates = current_candidates
+
+        # 未开启的陆战提醒不能占用单槽窗口，否则会先挤掉可播报事件，
+        # 再到 Dispatcher 才被拦下。关闭开关时也释放此前缓冲的提醒。
+        config = self.safety.config
+        if not config.dry_run:
+            if self._window_best is not None and self._window_best.event_id in HELICOPTER_DRY_RUN_ONLY_EVENTS:
+                chain.append(_rec(self._window_best, "suppressed", "heli_vrs_dry_run_only"))
+                self._window_best = None
+            enabled_candidates = []
+            for candidate in candidates:
+                if candidate.event_id in HELICOPTER_DRY_RUN_ONLY_EVENTS:
+                    chain.append(_rec(candidate, "suppressed", "heli_vrs_dry_run_only"))
+                else:
+                    enabled_candidates.append(candidate)
+            candidates = enabled_candidates
+        if not config.dry_run:
+            if self._window_best is not None and self._window_best.event_id in NAVAL_DRY_RUN_ONLY_EVENTS:
+                chain.append(_rec(self._window_best, "suppressed", "naval_dry_run_only"))
+                self._window_best = None
+            enabled_candidates = []
+            for candidate in candidates:
+                if candidate.event_id in NAVAL_DRY_RUN_ONLY_EVENTS:
+                    chain.append(_rec(candidate, "suppressed", "naval_dry_run_only"))
+                else:
+                    enabled_candidates.append(candidate)
+            candidates = enabled_candidates
+        if not config.dry_run and not config.ground_status_real_output_enabled:
+            if self._window_best is not None and self._window_best.event_id in GROUND_STATUS_GATED_EVENTS:
+                chain.append(_rec(self._window_best, "suppressed", "ground_status_output_disabled"))
+                self._window_best = None
+            enabled_candidates = []
+            for candidate in candidates:
+                if candidate.event_id in GROUND_STATUS_GATED_EVENTS:
+                    chain.append(_rec(candidate, "suppressed", "ground_status_output_disabled"))
+                else:
+                    enabled_candidates.append(candidate)
+            candidates = enabled_candidates
 
         # [1] Scenario 门控 + [2] cooldown 去重
         kill_coalesce_window = self.safety.config.kill_coalesce_window_seconds
@@ -297,6 +357,32 @@ def _rank(e: BattleEvent) -> tuple[int, int, float]:
     return (e.priority, e.severity, e.ts)
 
 
+def _cleared_vehicle_condition(event: BattleEvent, state: BattleState | None, now: float) -> str | None:
+    if event.event_id in NAVAL_DRY_RUN_ONLY_EVENTS:
+        return None if naval_contact_still_active(event, state, now) else "naval_contact_cleared"
+    if event.event_id in HELICOPTER_DRY_RUN_ONLY_EVENTS:
+        active = helicopter_vrs_active(state, now)
+        if active and event.level == "critical" and not state.flag("vrs_critical"):
+            active = False
+        return None if active else "heli_vrs_condition_cleared"
+    flag = {
+        "ground_ammo_low": "ammo_low", "ground_ammo_empty": "ammo_empty",
+        "ground_laser_warning": "laser_warning",
+    }.get(event.event_id)
+    if state is None or flag is None:
+        return None
+    active = bool(state.connected and state.conn_state == "in_battle" and state.is_alive()
+                  and not state.replay and (state.domain or "").lower() == "ground" and state.flag(flag))
+    if event.event_id == "ground_ammo_low" and state.flag("ammo_empty"):
+        active = False
+    if event.event_id == "ground_laser_warning":
+        # 兼容旧数据层只有 flag 的快照；新枚举存在时只认可状态 1。
+        if state.laser_warning_state is not None and state.laser_warning_state != 1:
+            active = False
+        return None if active else "ground_laser_condition_cleared"
+    return None if active else "ground_ammo_condition_cleared"
+
+
 def _top(events: list[BattleEvent]) -> BattleEvent:
     return max(events, key=_rank)
 
@@ -369,4 +455,7 @@ def _event_allowed(event: BattleEvent, scenario: str) -> tuple[bool, str]:
 
 
 def _rec(e: BattleEvent, result: str, reason: str) -> dict[str, Any]:
-    return {"event_id": e.event_id, "edge": e.edge, "level": e.level, "result": result, "reason": reason}
+    record = {"event_id": e.event_id, "edge": e.edge, "level": e.level, "result": result, "reason": reason}
+    if e.naval_trace_id:
+        record["trace_id"] = e.naval_trace_id
+    return record

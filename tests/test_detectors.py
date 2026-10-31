@@ -432,7 +432,7 @@ def test_fixed_wing_safety_flags_are_suppressed_outside_air_domain():
         assert engine.feed(state, state) == []
 
 
-def test_ground_status_flags_emit_only_real_laser_warning_for_ground_domain():
+def test_ground_status_flags_emit_laser_crew_and_ammo_but_not_station_states():
     engine = DetectorEngine(list(build_condition_detectors()))
     prev = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground")
     cur = C.BattleState(
@@ -453,9 +453,16 @@ def test_ground_status_flags_emit_only_real_laser_warning_for_ground_domain():
         ammo_first_stage=0,
     )
 
-    events = engine.feed(prev, cur)
-    assert [event.event_id for event in events] == ["ground_laser_warning"]
-    assert events[0].payload == {"domain": "ground"}
+    first = engine.feed(prev, cur)
+    assert [e.event_id for e in first] == ["ground_laser_warning"]
+    assert first[0].payload == {"domain": "ground"}
+    # 乘员与弹药需连续两帧确认
+    second = {e.event_id: e for e in engine.feed(cur, cur)}
+    assert set(second) == {"ground_crew_loss", "ground_ammo_empty"}
+    assert second["ground_crew_loss"].level == "critical"
+    assert second["ground_crew_loss"].payload == {"domain": "ground", "crew_current": 1, "crew_total": 4}
+    assert second["ground_ammo_empty"].payload == {"domain": "ground", "ammo_first_stage": 0}
+    # 岗位状态（gunner/driver）语义未经真机确认，不产出事件
     assert engine.feed(cur, cur) == []
 
 

@@ -1,6 +1,6 @@
-# D-B2｜BattleEvent 字典（v1 · RB 空战）
+# D-B2｜BattleEvent 字典与当前事件边界
 
-> 状态：v0.2（汇合后）· 范围：v1 RB 空战，**9 个核心事件**（删 steep_dive）。V2 已另行接入接近 / 目标态势感知，包括保守持续后方威胁 `tailing_risk`；完整高置信 `being_tailed` 仍暂缓。
+> 更新：2026-10-27。当前事件数值、类别、冷却与注册以 `core/contracts.py` 和 Detector 构造函数为准；下文逐事件原始阈值是早期设计参考，插件实际只消费数据层 flags。当前能力、输出闸和真机缺口见 [统一状态](当前开发状态.md) 与 [D-B5](D-B5-event-field-requirements.md)。
 > 用途：定义 v1 的**统一语义事件模型**——理解层（StateEvaluator）唯一对外产出口
 > 关联：D-B5 v0.2（事件→数据层来源映射）/ D-B1（Scenario 门控）/ D-B3（ConditionDetector）/ D-B4（仲裁）
 
@@ -11,41 +11,59 @@
 - **`overspeed` 来源改为数据层 flag `overspeed_warn` / `overspeed_critical`**，不再由我们算阈值。数据层 v1.6 已提供，插件侧已接入；后续重点是真机验证触发节奏、critical 档位和 Arbiter 抢占语义。
 - **`overheat` 除数据层 flag 外，也可消费 `hud_notices.feed[].code=engine_overheat/oil_overheat`**。HUD notice 只使用安全 code，不把 raw 文本带入 prompt；`powertrain_failure` 暂不直接提升为播报事件。
 - 各连续事件"来源 Detector/信号"统一改读上游 flag（见 D-B3 v0.2 / D-B5 映射）；下方各条仍写原始字段，仅作 payload/语义参考。
-- **两级 severity（待你确认）**：数据层给 warning/critical；建议 critical→高 severity 可抢占、warning→中 severity，推翻早期"单级"暂定。
+- **两级 severity 已实现**：warning/critical 取事件目录的两个 severity 档；只有事件本身具备抢占资格时才可抢占，不以 critical 字样单独判断。
 
 ## 0. 字段语义约定（先钉死，免得各事件理解不一）
 
 - **BattleEvent 是统一语义事件模型**：连续派生 / 带 id 的离散事实（combat.feed / hud_notices）/ 生命周期 三类来源，**产出后形状一致**，下游只认它。`TelemetrySnapshot` 不进字典（它是输入，不是事件）。
-- **severity（0–10）**：危险/紧迫程度，决定**能否抢占**与是否驱动 `CRITICAL_RISK`。分档：9–10 生死危急；6–8 重要；3–5 一般；0–2 信息/陪伴。
+- **severity（0–10）**：事件内部的紧迫档位；抢占资格由事件目录的 preempt 与 level 共同决定，`CRITICAL_RISK` 由明确的危急 flag 集合驱动，不能只用 severity 数字判断。
 - **priority（0–10）**：同一仲裁窗口内多个候选竞争时谁先开口（高者胜）。与 severity 相关但不等同：生命周期事件可能 severity 低、priority 高（"必须说"）。
 - **是否允许抢占**：true = 可绕过全局限流/冷却**立即开口**（仅留给生死危急与阵亡）；false = 严格受限流约束。
-- **cooldown**：同一事件两次开口的最短间隔。**负值表示"每局一次"**，由 Detector 侧的
-  `once_per_battle` 兑现（Arbiter 只在 `cd > 0` 时查冷却）。2026-07-27 前该语义无人执行，
-  `low_fuel` 因油量在阈值附近抖动而反复重报（实测 13 秒内三次）。
+- **cooldown**：同一事件的冷却基准；负值的去重语义由各 Detector 兑现，不统一解释成每局一次。`low_fuel` 使用 `once_per_battle`，spawn/death/battle-end 则依据各自生命周期和事件游标；Arbiter 只在 `cd > 0` 时检查时间冷却。
 - **re-arm 条件**：退出后"算作新一次事件"需满足的条件——连续派生类需退出阈值保持一段时间（配合迟滞）；离散类按新的 feed/notice id / 新一次生命周期跳变。
 - **payload**：该事件**携带的派生上下文（具体标量子集）**，供 handler 拼"事实行"。**不是整个 snapshot**，只是这次事件相关的几个派生值。
 - **提示意图**：只描述"要让猫娘传达什么"，Detector 不写具体台词；最终输出由 dispatcher 统一管理。危急动作类默认走 bounded `respond`，由宿主生成受短播报合同约束的回复并进入 TTS；只有显式兼容开关开启时才由插件以 `blind+plugin` 固定短句直出。开局、击杀/阵亡、过热、低油、普通接近、目标点和结算默认同样走 bounded `respond`，让猫娘在事实边界内自行组织短句。
-- ⚠️ 下面所有 severity / priority / cooldown 数值均为**草稿初值，待抓包后校准**。
+- 当前数值已由事件目录采用；早期逐事件阈值描述仅作设计参考，不能用来重算数据层告警。
 
-## 1. 总览矩阵
+## 1. 当前事件目录数值（2026-10-27）
 
-| event_id | 来源类型 | 档位 | severity | priority | 抢占 | cooldown | 允许 Scenario（简写） |
-|---|---|---|---|---|---|---|---|
-| `stall_risk` | 连续派生 | 危急 | 8 | 9 | 是 | 15s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
-| `low_alt_danger` | 连续派生 | 危急 | 9 | 9 | 是 | 10s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
-| `overspeed` | 连续派生 | 危急 | 7 | 8 | 是 | 15s | IN_FLIGHT / COMBAT_STRESS →CRITICAL |
-| `overheat` | 连续派生 / HUD notice | 重要提醒 | 6 | 6 | 否 | 30s | IN_FLIGHT / COMBAT_STRESS |
-| `low_fuel` | 连续派生 | 一般提醒 | 3 | 4 | 否 | 每局 1 次（`once_per_battle`） | IN_FLIGHT |
-| `you_killed` | combat.feed 离散 | 战斗 | 3 | 5 | 否 | 8s（多杀合并） | SPAWNING / IN_FLIGHT；COMBAT_STRESS 下延迟合并 |
-| `you_died` | combat.feed 离散 | 生命周期 | 8 | 10 | 是 | 每次死亡 1 次 | DEAD（死亡瞬间） |
-| `spawn` | 生命周期 | 生命周期 | 1 | 5 | 否 | 每次出生 1 次 | SPAWNING |
-| `battle_end` | 生命周期 | 生命周期 | 1 | 6 | 否 | 每局 1 次 | BATTLE_ENDED |
+以下从当前 `core/contracts.py` 对照整理；cooldown 是标准频率基准，实际仍受场景、开关、频率、新鲜度、全局限流与投递结果约束。目录中存在条目不等于已注册 Detector。
 
-> "→CRITICAL" 表示该事件触发会把 Scenario 推入 `CRITICAL_RISK`，并在该态内作为当前告警播报；其余事件在 CRITICAL_RISK 期间被压。
+| event_id | category | severity warning/critical | priority | preempt | cooldown 基准 |
+|---|---|---|---|---|---|
+| `stall_risk` | `safety_critical` | 2/8 | 9 | 可抢占 | 15s |
+| `high_aoa` | `safety_critical` | 2/8 | 9 | 可抢占 | 10s |
+| `over_g` | `safety_critical` | 2/8 | 9 | 可抢占 | 10s |
+| `low_alt_danger` | `safety_critical` | 7/9 | 9 | 可抢占 | 10s |
+| `overspeed` | `safety_critical` | 6/7 | 8 | 可抢占 | 15s |
+| `overheat` | `safety_important` | 5/6 | 6 | 否 | 30s |
+| `low_fuel` | `safety_minor` | 3/4 | 4 | 否 | 检测器语义去重 |
+| `ground_laser_warning` | `safety_important` | 6/7 | 7 | 否 | 10s |
+| `ground_crew_loss` | `safety_important` | 5/7 | 6 | 否 | 20s |
+| `ground_gunner_disabled` | `safety_important` | 5/5 | 6 | 否 | 20s |
+| `ground_driver_disabled` | `safety_important` | 5/5 | 6 | 否 | 20s |
+| `ground_ammo_empty` | `safety_important` | 5/5 | 5 | 否 | 25s |
+| `ground_ammo_low` | `safety_minor` | 2/2 | 3 | 否 | 45s |
+| `heli_vrs_risk` | `safety_important` | 5/7 | 6 | 否 | 20s |
+| `ground_target_nearby` | `map_awareness` | 2/2 | 2 | 否 | 35s |
+| `enemy_nearby` | `map_awareness` | 2/2 | 2 | 否 | 25s |
+| `air_threat_nearby` | `map_awareness` | 3/3 | 3 | 否 | 20s |
+| `enemy_on_six` | `map_awareness` | 4/4 | 4 | 否 | 20s |
+| `tailing_risk` | `map_awareness` | 5/5 | 5 | 否 | 25s |
+| `free_text_activity` | `map_awareness` | 1/1 | 1 | 否 | 25s |
+| `player_radio_command` | `player_command` | 2/2 | 3 | 否 | 10s |
+| `you_killed` | `combat_kill` | 3/3 | 5 | 否 | 8s |
+| `you_died` | `lifecycle` | 8/8 | 10 | 可抢占 | 检测器语义去重 |
+| `spawn` | `lifecycle` | 1/1 | 5 | 否 | 检测器语义去重 |
+| `battle_end` | `lifecycle` | 1/1 | 6 | 否 | 检测器语义去重 |
 
----
+- 抢占仍需事件 `level == "critical"`；激光 critical 不因等级自动进入固定翼危急集合。
+- `ground_gunner_disabled` / `ground_driver_disabled` 是兼容目录，当前不注册 Detector。
+- 乘员减员、待发弹偏少/打空已注册，真实输出默认关闭；激光沿用原策略。free-text 与受限 V2 输出仍有独立闸门。
+- `heli_vrs_risk` 仅 dry-run，真实模式在仲裁与 Dispatcher 硬阻断，无启用开关、不进入危急集合。参数用于离线观察，见 [VRS 开发记录](直升机VRS-dry-run-20261027.md)。
+- 数据源、确认帧数与域边界见 [D-B5 当前映射](D-B5-event-field-requirements.md)，剩余真机验收见 [统一状态](当前开发状态.md)。
 
-## 2. 逐事件详定
+## 2. 早期逐事件语义参考（不作为当前阈值或触发配置）
 
 ### A 组 · 连续派生
 
@@ -213,5 +231,18 @@
 - 触发条件的**具体阈值/迟滞/confirm 窗口**在 D-B3（ConditionDetector）定义，本字典只给摘要。
 - 第 1 节矩阵的"允许/抑制 Scenario"与 D-B1 第 4 节门控矩阵一致（overheat 回填 ✅ 已完成）。
 - payload 字段须能从**数据层 `/api/telemetry`** 字段派生（见 D-B5 v0.2 映射）；落不到的（如 you_killed 的 `victim_vehicle`、you_died 的 `killer_vehicle`）标"可选"，缺则降级。
-- 全部 severity / priority / cooldown / 阈值为草稿初值，**待 D-A1 抓包后在汇合期（G3）用真实样本校准**。
+- 当前已采用代码中的 severity/priority/cooldown；逐机告警阈值由数据层 profile 管理。后续真机校准另行评估，不能把本文早期汇合期草案当作未落地实现。
 - 未决：① `/api/identity` 自动选择/展示体验是否需要继续增强；② est_minutes 估算是否 v1 做。多杀合并已在插件侧轻量实现。
+
+## 海战地图观察事件（2026-10-27）
+
+| 事件 | 含义 | category / priority / severity | cooldown / 时效 | 输出 |
+|---|---|---|---|---|
+| naval_map_contact | 地图出现敌方水面/地面图标类别 | map_awareness / 3 / 2 | 30s / 4s | 仅 dry-run，非抢占 |
+| naval_air_contact | 地图出现敌方空中图标类别 | map_awareness / 3 / 2 | 30s / 4s | 仅 dry-run，非抢占 |
+
+不确认具体敌舰、空袭、距离、锁定或航向；不新增 recovery/心跳或真实输出开关。来源与生命周期绑定见 D-B5，实际海战未验。
+
+## 海战检测结果对照（2026-10-28）
+
+BattleEvent 新增仅用于本地诊断的可选 trace_id；仅海战观察接收合法的 32 位十六进制随机标识，不含战局/生命/玩家身份。该字段不进入 payload、to_dict() 投递序列化、repr 或事件相等性；原事件含义、优先级、冷却与阈值不变。 真实输出继续双边界硬关闭，见 [结果对照记录](海战检测结果对照-20261028.md)。

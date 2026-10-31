@@ -31,6 +31,7 @@ _DOMAIN_STRESS_REASONS = frozenset({"maneuver", "air_contact", "surface_contact"
 class ScenarioResolver:
     def __init__(self) -> None:
         self._prev_alive: bool = False
+        self._last_life_key: tuple[str, int] | None = None
         self._spawn_at: float = 0.0
         self._stress_until: float = 0.0
         self._stress_reason_until: dict[str, float] = {}
@@ -39,6 +40,7 @@ class ScenarioResolver:
 
     def reset(self) -> None:
         self._prev_alive = False
+        self._last_life_key = None
         self._spawn_at = 0.0
         self._stress_until = 0.0
         self._stress_reason_until.clear()
@@ -46,8 +48,12 @@ class ScenarioResolver:
         self._stress_domain = None
 
     def resolve(self, state: BattleState, now: float, grace_seconds: float) -> str:
+        life_key = state.life_key
+        if life_key is not None and self._last_life_key is not None and life_key != self._last_life_key:
+            self._prev_alive = False
         scenario = self._classify(state, now, grace_seconds)
         self._prev_alive = self._is_alive(state)
+        self._last_life_key = life_key
         return scenario
 
     def seconds_since_spawn(self, now: float) -> float | None:
@@ -96,7 +102,12 @@ class ScenarioResolver:
         return IN_FLIGHT
 
     def _is_alive(self, state: BattleState) -> bool:
-        return state.is_alive()
+        # /state 过期只表示载具遥测未知；同一战局、同一条命且没有阵亡事实时，
+        # 不能重置出生计时。无生命编号的旧快照仍沿用原来的降级行为。
+        return state.is_alive() or bool(
+            state.connected and state.in_battle and not state.dead and self._prev_alive
+            and state.life_key is not None and state.life_key == self._last_life_key
+        )
 
     def _clear_runtime_stress(self) -> None:
         self._stress_until = 0.0

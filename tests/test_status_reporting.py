@@ -232,9 +232,10 @@ def test_user_context_refresh_cannot_move_chat_activity_backwards():
             "_ts": 50.0,
         },
     )
+    record.dump = lambda: dict(record.raw)
     plugin.ctx = types.SimpleNamespace(
         bus=types.SimpleNamespace(
-            memory=types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+            memory=types.SimpleNamespace(get=lambda **_kwargs: [record])
         )
     )
     plugin.timeline = None
@@ -482,12 +483,15 @@ def test_chat_bus_quiet_window_applies_to_all_eligible_battle_events():
         "type": "user_message", "lanlan": "test-character", "is_voice": False,
     })
 
-    def get_sync(bucket, **kwargs):
-        assert bucket == "test-character"
+    record.dump = lambda: dict(record.raw)
+
+    def get_memory(*, bucket_id, limit, timeout):
+        assert bucket_id == "test-character"
+        assert (limit, timeout) == (1, 0.25)
         reads.append(True)
         return [record]
 
-    plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=types.SimpleNamespace(get_sync=get_sync)))
+    plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=types.SimpleNamespace(get=get_memory)))
     for event_id in ("overheat", "spawn", "player_radio_command", "air_threat_nearby", "stall_risk"):
         dispatcher = NekoDispatcher(plugin, clock=lambda: 102.0)
         level = "critical" if event_id == "stall_risk" else "warning"
@@ -1200,7 +1204,8 @@ def test_user_context_refresh_keeps_only_safe_text_activity_metadata():
             "_ts": 123.0,
         },
     )
-    memory = types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+    record.dump = lambda: dict(record.raw)
+    memory = types.SimpleNamespace(get=lambda **_kwargs: [record])
     plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=memory))
 
     mode = plugin._refresh_user_chat_activity(target_lanlan="Lanlan")
@@ -1224,7 +1229,8 @@ def test_user_context_refresh_rejects_another_character_activity():
         timestamp=123.0,
         raw={"type": "user_message", "lanlan": "Other", "is_voice": False, "_ts": 123.0},
     )
-    memory = types.SimpleNamespace(get_sync=lambda *_args, **_kwargs: [record])
+    record.dump = lambda: dict(record.raw)
+    memory = types.SimpleNamespace(get=lambda **_kwargs: [record])
     plugin.ctx = types.SimpleNamespace(bus=types.SimpleNamespace(memory=memory))
 
     mode = plugin._refresh_user_chat_activity(target_lanlan="Lanlan")

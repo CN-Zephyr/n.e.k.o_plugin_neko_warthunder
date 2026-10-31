@@ -2,12 +2,53 @@
 
 from __future__ import annotations
 
+import pytest
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
+from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
 from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
-from neko_warthunder.detectors.discrete.lifecycle import build_discrete_detectors
+from neko_warthunder.detectors.discrete.lifecycle import SpawnDetector, build_discrete_detectors
+
+
+@pytest.mark.parametrize("domain,army,vehicle_valid", [
+    ("air", "air", True), ("heli", "air", True),
+    ("ground", "tank", False), ("naval", "ship", False),
+])
+@pytest.mark.parametrize("respawn", [False, True])
+def test_spawn_delivery_preserves_domain_without_inventing_motion(domain, army, vehicle_valid, respawn):
+    """Exercise telemetry -> life edge -> actual dispatch, including land without /state."""
+    prev = C.BattleState(connected=True, dead=respawn)
+    cur = parse_telemetry({
+        "state": "in_battle", "in_battle": True, "timestamp": 100.0,
+        "domain": domain, "domain_source": "indicators_army",
+        "vehicle": {"valid": vehicle_valid},
+        "indicators": {"valid": True, "army": army, "vehicle_type": "fixture_vehicle"},
+    })
+    event = SpawnDetector().detect(prev, cur)
+    assert event is not None
+    calls = []
+
+    class Plugin:
+        cfg = C.WtConfig()
+
+        def push_message(self, **kwargs):
+            calls.append(kwargs)
+            return {"submitted": True}
+
+    result = NekoDispatcher(Plugin(), clock=lambda: 100.0).push_event(event, dry_run=False)
+    assert result.startswith("pushed(") and len(calls) == 1
+    delivery = calls[0]
+    assert delivery["metadata"]["domain"] == domain
+    prompt = delivery["parts"][0]["text"]
+    assert "事件不证明载具运动状态" in prompt
+    assert ("已完成重生" in prompt) is respawn
+    assert ("已进入战局" in prompt) is not respawn
+    for unsupported_action in ("升空", "起飞", "出航", "悬停", "装填"):
+        assert unsupported_action not in prompt
+    assert "建议台词：" not in prompt
+    assert "轻松陪伴，不责怪、不嘲讽、不催战绩" in prompt
 
 
 def _alive(**kw):
@@ -59,6 +100,9 @@ def test_dispatcher_builds_prompt_for_each_event_and_recovery():
         "ground_driver_disabled": {"domain": "ground", "driver_state": 0},
         "ground_ammo_empty": {"domain": "ground", "ammo_first_stage": 0},
         "ground_ammo_low": {"domain": "ground", "ammo_first_stage": 3},
+        "heli_vrs_risk": {"domain": "heli"},
+        "naval_map_contact": {"domain": "naval"},
+        "naval_air_contact": {"domain": "naval"},
         "ground_target_nearby": {"grid": "B4", "distance_m": 2400},
         "enemy_nearby": {"distance_m": 1200, "compass": "E"},
         "air_threat_nearby": {"distance_m": 1800, "clock": 2},

@@ -29,6 +29,7 @@ def _vehicle(**overrides):
 
 def _indicators(**overrides):
     data = {
+        "valid": True,
         "vehicle_type": "su_30mk2v_venezuela",
         "army": "air",
         "is_helicopter": False,

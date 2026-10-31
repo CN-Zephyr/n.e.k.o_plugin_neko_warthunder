@@ -32,8 +32,8 @@
 
 战雷插件应继续使用：
 
-- 带确定短句的实时战况 cue：`visibility=["chat"]`, `ai_behavior="blind"`，由插件短句直出，降低 LLM 延迟并避免污染普通聊天上下文
-- 显式实验/兼容模式下的普通 cue：`visibility=[]`, `ai_behavior="respond"`，同时携带 `plugin_recommended_reply`
+- 正常发布配置下的实时战况 cue：默认 bounded `respond`，由插件声明事实、短播报与投递合同，宿主生成回复并进入 TTS；不能把文字气泡当作声音已通过
+- 普通 cue 同样默认 `visibility=[]`, `ai_behavior="respond"`，可携带 `plugin_recommended_reply`；显式兼容开关才选择插件自有直出
 - 只进上下文不打断：`ai_behavior="read"`
 - 插件自有文本直显、不进 LLM：`visibility=["chat"]`, `ai_behavior="blind"`
 - 同类战况替换：`coalesce_key="neko_warthunder:battle_event"`

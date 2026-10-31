@@ -10,6 +10,7 @@ from typing import Any
 
 from ...core.contracts import BattleState
 from ...core.flag_codes import CONDITION_FLAG_GROUPS
+from ...core.telemetry_freshness import helicopter_sample_is_fresh
 from .._base import ConditionDetector
 
 
@@ -23,6 +24,11 @@ def _is_fixed_wing_air(s: BattleState) -> bool:
 
 def _is_ground(s: BattleState) -> bool:
     return (s.domain or "").lower() == "ground"
+
+
+def _is_fresh_helicopter(s: BattleState) -> bool:
+    # Detector 使用该快照的观察时刻，兼容离线样本时钟；仲裁时再按运行时刻复验。
+    return helicopter_sample_is_fresh(s, s.timestamp + (s.age_seconds or 0.0))
 
 
 def _pl_stall(s: BattleState) -> dict[str, Any]:
@@ -78,6 +84,25 @@ def _pl_overspeed(s: BattleState) -> dict[str, Any]:
 
 def _pl_ground_laser(s: BattleState) -> dict[str, Any]:
     return _drop_none({"domain": s.domain})
+
+
+def _pl_helicopter_vrs(s: BattleState) -> dict[str, Any]:
+    return {"domain": "heli"}
+
+
+def _pl_ground_crew_loss(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"domain": s.domain, "crew_current": s.crew_current, "crew_total": s.crew_total})
+
+
+def _pl_ground_ammo(s: BattleState) -> dict[str, Any]:
+    return _drop_none({"domain": s.domain, "ammo_first_stage": s.ammo_first_stage})
+
+
+def _is_ground_ammo_low(s: BattleState) -> bool:
+    # 阈值由数据层负责；这里只排除无效计数和与打空矛盾的输入。
+    return bool(_is_ground(s) and s.connected and s.conn_state == "in_battle"
+                and s.is_alive() and s.ammo_first_stage is not None
+                and s.ammo_first_stage > 0 and not s.flag("ammo_empty"))
 
 
 # 危急持续期心跳间隔，默认对齐 critical_preempt_cooldown_seconds=5。
@@ -164,5 +189,45 @@ def build_condition_detectors(
             confirm_exit=2,
             payload_fn=_pl_ground_laser,
             predicate=_is_ground,
+        ),
+        ConditionDetector(
+            "heli_vrs_risk",
+            g["heli_vrs_risk"],
+            confirm_enter=2,
+            confirm_exit=2,
+            payload_fn=_pl_helicopter_vrs,
+            predicate=_is_fresh_helicopter,
+        ),
+        # 乘员数与一级弹药有真机录像佐证（2026-07-22 豹2A7V：4→2→1、15→9→12）。
+        # 检测始终运行以便 dry_run/时间线可观察；真实输出由 Dispatcher 按
+        # ground_status_real_output_enabled 门控，默认关闭。
+        # 乘员降到 1 时数据层同帧进入阵亡态并清空告警，因此实际只会以
+        # crew_loss（部分减员）进入，不与 you_died 的 ground_crew 兜底重复。
+        ConditionDetector(
+            "ground_crew_loss",
+            g["ground_crew_loss"],
+            confirm_enter=2,
+            confirm_exit=2,
+            payload_fn=_pl_ground_crew_loss,
+            predicate=_is_ground,
+        ),
+        # 数据层只在本次出生先见正数基线、再从正数降到 0 时锁存 ammo_empty，
+        # 补弹回正数即解除；confirm_enter=2 再压一层单帧脏值。
+        ConditionDetector(
+            "ground_ammo_empty",
+            g["ground_ammo_empty"],
+            confirm_enter=2,
+            confirm_exit=2,
+            payload_fn=_pl_ground_ammo,
+            predicate=_is_ground,
+        ),
+        # ammo_low 使用本次出生观测到的最大待发弹量，不等同弹架容量或全车余弹。
+        ConditionDetector(
+            "ground_ammo_low",
+            g["ground_ammo_low"],
+            confirm_enter=2,
+            confirm_exit=2,
+            payload_fn=_pl_ground_ammo,
+            predicate=_is_ground_ammo_low,
         ),
     ]

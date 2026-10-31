@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from wt_geo import grid_cell
 from wt_telemetry import MapInfo
 

@@ -1,6 +1,6 @@
 # D-B5｜事件 → 输入字段需求清单（v1 + 已接入 V2 / 多载具域）
 
-> 状态：v0.3（2026-07-10 真机同步）· 范围：v1 主链路 + 已接入的陆战/无线电/V2 态势边界；插件不直接解析 map/PNG
+> 状态：2026-10-29 当前映射（数据层 v1.11 源码合同，未发布）· 范围：v1 主链路 + 已接入的陆战/无线电/V2 态势边界；插件不直接解析 map/PNG
 > 用途：① 事件 → 数据层来源(flag/字段) 映射；② DTO 直接采用数据层接口文档
 > 关联：数据层 `../data_layer/data_process/后端接口文档.md`（插件内 vendored）
 
@@ -19,13 +19,17 @@
 | `stall_risk` | flags `stall_warning`/`stall_critical` | 边沿+debounce+迟滞+cooldown；不把高 AoA 混成失速播报 | ias_kmh, aoa_deg, radio_altitude_m（若有）, altitude_m |
 | `high_aoa` | flags `aoa_high` / `aoa_critical` | 独立飞控告警；不复用失速话术 | aoa_deg, ias_kmh, g_now |
 | `over_g` | flags `over_g` / `over_g_critical` | 独立飞控告警；数据层优先按 profile 的 Instructor G 限制计算，缺少时回退 datamine 结构候选 | g_now, ias_kmh, aoa_deg |
-| `overspeed` | flags `overspeed_warn` / `overspeed_critical`（数据层 v1.6 已提供，插件侧待验证） | 同上 | ias_kmh, mach |
+| `overspeed` | flags `overspeed_warn` / `overspeed_critical`（数据层已提供，2026-06-23 有历史 dry-run 正向；当前源码现场节奏未终验） | 同上 | ias_kmh, mach |
 | `overheat` | flags `engine_overheat`/`engine_overheat_critical`（OR `oil_overheat*`）；或 `hud_notices.feed[].code=engine_overheat/oil_overheat` | flags 走边沿+debounce；hud_notices 按 id 去重（不抢占） | temp_c；或 safe notice code |
 | `low_fuel` | flags `fuel_low`/`fuel_critical` | 同上（仅 IN_FLIGHT） | fuel_fraction, fuel_remaining_sec |
 | `low_alt_danger` | flags `altitude_low`/`altitude_critical` + `radio_altitude_m`（AGL，优先） | 同上；`altitude_m` 仅作为 MSL/海拔上下文，不作为优先离地判断 | radio_altitude_m, altitude_m, climb_ms |
+| `ground_crew_loss` | flags `crew_loss` / `crew_critical` | 仅 `domain == "ground"`；连续 2 帧确认。乘员降到 1 时数据层进入阵亡态并清空 flags，实际只由部分减员进入。真实输出受 `ground_status_real_output_enabled` 门控，默认关闭，dry_run 照常可见 | crew_current, crew_total, domain |
+| `ground_ammo_empty` | flag `ammo_empty`（数据层需先见正数基线，再从正数降到 0 才锁存） | 仅 `domain == "ground"`；连续 2 帧确认，补弹回正数后重新武装。真实输出门控同上 | ammo_first_stage, domain |
+| `ground_ammo_low` | flag `ammo_low`（本次出生观测最大待发弹量 > 3，正数余量不超过其默认 30%；以数据层 profile 为准） | 仅在线陆战存活态且余量为正；连续 2 帧确认、2 帧退出后重武装，45 秒事件冷却。仅描述待发弹偏少，不推断全车余弹、容量或装填速度；真实输出门控同上 | ammo_first_stage, domain |
+| `ground_laser_warning` | flag `laser_warning`（仅 LWS 状态 `1`）；`processed.laser_warning_state` 保留设备枚举 | 沿用 1 帧进入 / 2 帧退出与现有优先级、播报策略；限流/失败重试时复核当前告警，已解除或不可确认则撤销。旧数据层缺少枚举时兼容原有 flag。面板显示无设备/待机/告警/损坏，未知值保留编号；不把激光告警断言为导弹来袭 | domain |
 | `ground_gunner_disabled` | flag `gunner_disabled` | 兼容目录项；数据层保留状态，但插件不注册 Detector、不播报 | gunner_state, domain |
 | `ground_driver_disabled` | flag `driver_disabled` | 兼容目录项；数据层保留状态，但插件不注册 Detector、不播报 | driver_state, domain |
-| `spawn` | `state` not_in_battle→in_battle / 新 `vehicle_type` | 边沿一次 | vehicle_type |
+| `spawn` | 已确认进局/生命变化、载具上下文与存活状态；优先 meta battle/life | 边沿去重；同一生命遥测失败/恢复不当作重生；无可信生命信息保守降级 | vehicle_type |
 | `you_died` | `combat.feed[].is_my_death == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；不回退到 `vehicle_valid` 死亡播报 | cause, killer_name, killer_vehicle |
 | `you_killed` | `combat.feed[].is_my_kill == true` | 已播报 owned id 去重；同 id 后补 ownership 可补触发；多杀合并 | victim, victim_vehicle |
 | `battle_end` | `mission_status` / `state` | 边沿一次 | result, my{kills,deaths} |
@@ -34,8 +38,12 @@
 | `enemy_on_six` | `proximity.events[]` OR `situation.enemies[]` 中 `clock in 5/6/7` 或后向 `relative_deg` 且进入 5000m | V2：低置信后方威胁，不等同完整尾随判定 | distance_m, clock, relative_deg |
 | `tailing_risk` | 连续近距离后方 `proximity.events[]` OR 连续近距离后方 `situation.enemies[]` | V2+：保守持续后方威胁；不是完整 `being_tailed` | distance_m, clock, relative_deg |
 | `player_radio_command` | `chat[]` + `combat.self.source=manual` | 只接收手动身份匹配的自己发出的固定无线电口令；按 chat id 去重；不把 sender/msg/raw text 放进事件 payload | command, point, domain, source |
+| `heli_vrs_risk` | flags `vrs_warning/vrs_critical` | 仅新鲜的直升机存活态；2 次有效观测确认、2 次解除后重武装；只记录，真实模式在仲裁/Dispatcher 硬阻断 | domain |
 
 ### 本次拍板
+- VRS dry-run 已消费 `vrs_warning/vrs_critical` → `heli_vrs_risk`，仅新鲜的直升机存活态确认；2 次有效观测进入/2 次解除后重武装，真实输出双边界硬阻断、无启用开关。见 [VRS 开发记录](直升机VRS-dry-run-20261027.md)。
+- 直升机只读状态卡已消费 `processed.rotor_rpm`、既有 `radio_altitude_m` 和 `processed.vario_ms`；仅概览/诊断显示，不产生 BattleEvent，也不接入 VRS/旋翼转速告警。缺失/非法值保持未知，共用载具时效，见 [开发记录](直升机只读状态卡-20261027.md)。
+- 待发弹偏少/打空在仲裁限流或失败重试期间按当前 flags 复验；补弹、打空、离线或退出该模式时撤销已失效候选，不能占槽挤掉新的接近提醒。待发弹偏少仍待真机 dry_run 证据，真实输出默认关闭。
 - **overspeed → 合作者补进 `vehicle_profiles`**（never-exceed 逐机），我们消费其 flag。
 - **steep_dive → v1 删除**（与 low_alt/overspeed 重叠、最弱、数据层也没做；留 v2）。
 
@@ -46,11 +54,11 @@
 - 固定无线电互动已消费 `/api/telemetry.chat[]`，且 2026-07-10 已用两条自己发送的固定无线电完成真机 dry-run：chat id 递增、sender 与手动 identity 匹配、`进攻 D 点` 被标准化为 `attack_point/D`，raw sender/msg 未进入 payload/prompt。仍需由队友发送同口令，补“只接收自己”的反例验证。
 - 固定口令标准化已覆盖 `收到 -> affirmative`、`拒绝 -> negative`、`干得好/干得漂亮 -> well_done`；仍只处理手动 identity 匹配的自己消息。
 - 2026-07-10 陆战真机确认：`crew_current/crew_total` 可作为乘员损失事实；岗位字段不是布尔值。数据层现按 `0` 正常、`1` 无人补位、`2` 正在补位处理，`3` 只透传。
-- 数据层已把 LWS 收紧为仅 `lws == 1` 告警，并为一级弹药增加正数基线、负数无效处理和同局重生重置；离线回归 `457 passed`，下一步是真机 dry-run 复验。
-- 输出策略进一步收缩：乘员、岗位和一级弹药只作为 DTO/面板事实，不生成猫娘播报候选；陆战状态播报只保留真实激光告警。
+- 数据层已把 LWS 收紧为仅 `lws == 1` 告警，并为一级弹药增加正数基线、负数无效处理和同局重生重置；当时离线回归为 457 项通过（2026-07-10 历史结果）；最近完整回归基线见 [统一状态](当前开发状态.md#已验证的基线)，本处不重复硬写计数；真机完整序列本轮跳过、未验收，不阻塞研发。
+- 当前输出策略：乘员减员、待发弹偏少和打空均已有 Detector，真实输出共用默认关闭的 `ground_status_real_output_enabled`；激光沿用既有策略，岗位仍只读。面板显示 LWS 设备枚举、数值、岗位和采样年龄，未知或过期不作为当前事实。当前阶段、最新完整 pytest 与剩余真机项目见 [统一状态](当前开发状态.md)。
 
-### 待你确认
-- **两级 severity**：数据层已给 warning/critical 两级。建议顺势采用两级（critical→高 severity+可抢占；warning→中 severity），**推翻早期"v1 单级"暂定**。待你点头。
+### 已实现的等级边界
+- warning/critical 两级已落地；critical 不自动等于可抢占。以 `core/contracts.py` 的事件目录、危急集合和 `preempt_eligible` 为准。激光 critical 不进入固定翼危急集合。
 
 ---
 
@@ -58,7 +66,7 @@
 
 v1 的核心**不是“敌情感知”**，而是先做 **飞行安全 + 发动机状态 + 生命周期 + 带 id 的离散事件（combat.feed / hud_notices）**。
 
-v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空危险、出生、死亡、击杀、战斗结束。`steep_dive` 已删除，留待 v2 视真机数据再评估。
+早期 v1 设计事件范围（9 个，非当前完整事件目录）：低速/失速、超速、过热、低油、低空危险、出生、死亡、击杀、战斗结束。`steep_dive` 已删除，留待 v2 视真机数据再评估。
 
 “敌机接近”已在 V2 通过数据层聚合后的 `proximity.events` 边沿事实和 `situation.enemies` 连续空中敌方几何接入；保守的持续后方威胁 `tailing_risk` 已通过短窗连续近距离后方事件/帧接入。真正的高置信 `being_tailed` 仍暂缓，因为它需要更可靠的相对速度、持续性与误判控制。
 
@@ -186,7 +194,7 @@ v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空�
 - 输出：只使用 safe metadata（距离、方位、钟点、类别），不复读 raw 文本或玩家名。
 - 事件拆分：普通 proximity 目标为 `enemy_nearby`，空中目标为 `air_threat_nearby`，后向钟点 / 相对角度为 `enemy_on_six`，连续近距离后方 proximity 事件或 situation 帧保守升级为 `tailing_risk`。
 - 门控：`enemy_nearby` 按域分流。空战/未知域下仍是低优先级 map awareness，COMBAT_STRESS 下抑制；陆战/海战域下视为近敌交战观察信号，COMBAT_STRESS 下可放行。脱战压力不读 raw 文本：空战/直升机用 `situation.nearest_air_threat` / `situation.enemies[]` + `proximity.thresholds_m.vs_air`，陆战/海战用 `situation.enemies[]` + `proximity.thresholds_m.vs_ground`。`air_threat_nearby` / `enemy_on_six` / `tailing_risk` 可进入 IN_FLIGHT / COMBAT_STRESS 队列；CRITICAL_RISK / DEAD / SPAWNING 仍按 Arbiter 压制。
-- 样本状态：2026-06-20 样本经 `sample_replay` 合并 side-stream proximity 和连续 `situation.enemies` 后，已有 `proximity_events=5317`、`proximity_air_events=5300`、`proximity_rear_events=49`、`situation_rear_air_threat_live_items=1906`，并可触发 `enemy_on_six=149` / `tailing_risk=44`；目标点仍缺 3000m 内触发样本。
+- 样本状态：2026-06-20 样本经 `sample_replay` 合并 side-stream proximity 和连续 `situation.enemies` 后，已有 `proximity_events=5317`、`proximity_air_events=5300`、`proximity_rear_events=49`、`situation_rear_air_threat_live_items=1906`，并可触发 `enemy_on_six=149` / `tailing_risk=44`；该份六月捕获当时缺少 3000m 内任务点触发。七月已有近目标点覆盖记录，当前需复核归档与正式 evidence，见 [样本口径](副驾驶能力差距矩阵-20261029.md#样本与现场证据口径)，不得把旧计数当作本次回放结果。
 
 ### D2 任务目标点接近 `ground_target_nearby` — v2
 - 当前实现：插件消费 `/api/telemetry.situation.ground_targets[]`，只取最近且在阈值内的任务目标点。
@@ -207,7 +215,7 @@ v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空�
 - `/state` 必采键（待确认）：`valid`、`H, m`、`IAS, km/h`、`TAS, km/h`、`M`、`AoA, deg`、`Ny`、`Vy, m/s`、`Mfuel, kg`、`Mfuel0, kg`、`water temp 1, C`、`oil temp 1, C`、`head temp, C`、`throttle 1, %`、`RPM 1`、`flaps, %`、`gear, %`（多发注意 ` 2`/` 3` 后缀）
 - `/indicators` 必采键：`valid`、`type`、`army`、`compass`、`tangage`、`bank`、`speed`（与 state 对比取舍）
 - `combat.feed[]`：带递增 `id`、`is_my_kill`、`is_my_death`、`involves_me`、`killer/victim`、载具与 AI 标记；实测新对局 id 是否归零或单调。
-- `hud_notices.feed[]`：带递增 `id`、稳定 `code`、`severity`；raw 文本只进 audit/debug，不进 prompt。
+- `hud_notices.feed[]`：带递增 `id`、稳定 `code`、`severity`；raw 文本不进 prompt 或持久诊断日志，观察/验收只保留 code、计数等白名单摘要。
 - `/mission.json`：必采（C 组生命周期交叉确认）
 - 玩家自我身份：通过 `/api/identity` 设置/清除权威昵称，并记录它如何反映到 `combat.self` 与 ownership flag。
 - 分载具类型各采一套：液冷螺旋桨 / 气冷螺旋桨 / 喷气（温度与发动机字段差异大）
@@ -217,3 +225,19 @@ v1 事件范围（9 个）：低速/失速、超速、过热、低油、低空�
 - 上述“必须字段”的并集 = `TelemetrySnapshot` 的最小事实字段集候选。
 - A 组全部是派生，**不进** `TelemetrySnapshot`（只进 BattleState / BattleEvent）。
 - 待 D-A5 解决：① `/state` vs `/indicators` 重叠信号指定唯一权威端点；② 多发/机型字段差异 → snapshot 用“发动机数组”还是“固定 ` 1`”要定型。
+
+## 海战地图观察输入（2026-10-27）
+
+两个 dry-run 事件要求：domain=naval、有效 ship/fleet 与 domain_source=indicators_army；在线在战存活非回放、当前 battle_id/life_index；meta.fast.age_sec、meta.map_objects.age_sec/count/life_index；有效 situation.has_player/player.x/y 及 enemy_count/air_threat_count。计数为非负整数且空中数不大于敌方总数；水面/地面类别存在由总数减空中数确定，空中类别由空中数确定。
+
+map count 仅成功采样推进，不能用 fast tick 或尝试计数替代；5 秒来源时效包含缓存流逝时间。payload 仅 domain、battle_id、life_index、map_sample_count，用于撤销旧候选，不传原始文本、坐标、目标身份、图标名、距离或计数；真实投递在 prompt 之前硬阻断。
+
+## 舰艇仪表候选字段与独立采样边界（2026-10-29）
+
+现有 indicators.speed / heading_deg（原始 compass）/ rpm / throttle 只有通用传输合同，未取得本轮舰艇正向样本和专用语义；不把通用单位声明当成舰艇验证。插件仅盘点原始/规范化数值存在、缺失、非法与冲突，基础响应按时间降级，不显示数值或派生告警。
+
+meta.fast 的尝试元数据、vehicle/map_objects 的成功年龄/计数或响应 life_index，均不能充当仪表独立成功采样与生命绑定。v1.11 新增 meta.naval_indicators，严格校验成功编号/时间与 battle/life/army；失败/跨上下文帧/过期撤销，旧 external 缺新键时明确绑定未知。sample_life_bound 仅在证据完整时可为 true；仪表值、舰艇语义与真实输出仍未启用。固定 datamine 提交只补源码/静态参数证据，不代替真实样本或阈值，见 [本轮合同与证据](舰艇独立采样与字段证据-20261029.md)。
+
+## Datamine 舰艇静态资料边界（2026-10-29）
+
+固定提交的 734 顶层配置及 14 项直接静态字段只进入独立只读资料库；不写入 BattleState/processed/flags，不成为任何事件的事实输入或阈值。当前生命 ready 独立采样、原始与规范化精确型号一致才关联资料；不靠静态配置确认 domain，不做模糊/家族/缓存回退。speed 的静态速度配置、rpm 的多机结构、throttle 的加速模型都没有已验证的实时数值映射，compass 无直接静态映射；不猜单位/版本/改装。详见 [静态字段矩阵](舰艇静态资料与实时字段映射-20261029.md)。真实输出、实时仪表值及自动重生仍未开放。

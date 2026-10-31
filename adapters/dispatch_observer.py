@@ -40,6 +40,8 @@ class DispatchObserver:
             "safe_summary": f"{event.event_id}/{event.edge}/{event.level}",
         }
         details.update(metadata)
+        if event.naval_trace_id:
+            details["trace_id"] = event.naval_trace_id
         self.timeline.record_stage(
             stage=stage,
             outcome=outcome,

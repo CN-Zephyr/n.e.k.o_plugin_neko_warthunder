@@ -3,7 +3,7 @@ name = "战雷猫娘副驾驶"
 description = "War Thunder 猫娘副驾驶：只读 8111 遥测（经数据层 :8112），把连续数据转成分立战斗事件，按战场场景仲裁后让猫娘提醒/陪伴。不做外挂、不做自动操作。"
 short_description = "War Thunder catgirl copilot: reads telemetry only, turns it into battle events and proactive call-outs."
 keywords = ["war thunder", "战雷", "战争雷霆", "copilot", "副驾驶", "telemetry", "8111"]
-version = "0.1.1"
+version = "0.1.2"
 id = "neko_warthunder"
 entry = "plugin.plugins.neko_warthunder:NekoWarthunderPlugin"
 
@@ -68,7 +68,12 @@ safety_window_seconds = 60
 safety_failure_limit = 5
 # 兼容旧配置；kill/death 归属以数据层 /api/identity + combat.feed[].is_my_* 为准。
 player_name = ""
+# 小地图敌我颜色（#RRGGBB）；游戏设置里改过队友/敌人颜色时需同步，面板可改。
+ally_color = "#174DFF"
+enemy_color = "#FA0C00"
 observability_enabled = false
 observability_max_events = 100
 observability_include_prompt_preview = false
 v2_live_verified_real_output_enabled = false
+# 陆战乘员减员 / 一级待发弹偏少或打空：检测与 dry_run 照常，真实播报需显式打开。
+ground_status_real_output_enabled = false
