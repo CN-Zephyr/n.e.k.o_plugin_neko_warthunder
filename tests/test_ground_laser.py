@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+from dataclasses import asdict
 
 import pytest
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
@@ -19,13 +20,14 @@ from wt_telemetry import Indicators, VehicleState
 
 
 def _state(processor, lws, now=1000, **patch):
-    processed = processor.process(VehicleState(valid=True), Indicators(
+    indicators = Indicators(
         valid=True, army="tank", vehicle_type="synthetic-tank", lws=lws,
         crew_current=4, crew_total=4, first_stage_ammo=12,
-    ), now).to_dict()
+    )
+    processed = processor.process(VehicleState(valid=True), indicators, now).to_dict()
     payload = {"state": "in_battle", "in_battle": True, "domain": "ground", "timestamp": now,
                "battle_id": "synthetic-battle", "life_index": 1,
-               "vehicle": {"valid": True}, "indicators": {"valid": True}, "processed": processed,
+               "vehicle": {"valid": True}, "indicators": asdict(indicators), "processed": processed,
                "meta": {"vehicle": {"age_sec": 0}, "fast": {"age_sec": 0}}}
     payload.update(patch)
     return parse_telemetry(payload)
@@ -67,8 +69,8 @@ def test_invalid_lws_values_do_not_become_device_states_or_leak_text(monkeypatch
 @pytest.mark.parametrize(("patch", "status"), [
     ({"dead": True}, "dead"), ({"replay": True}, "replay"),
     ({"in_battle": False}, "waiting"), ({"state": "offline"}, "offline"),
-    ({"vehicle": {"valid": False}}, "unavailable"),
-    ({"meta": {"vehicle": {"age_sec": 6}}}, "stale"),
+    ({"indicators": {"valid": False, "army": "tank", "lws": 1}}, "unavailable"),
+    ({"meta": {"fast": {"age_sec": 6}}}, "stale"),
 ])
 def test_unsafe_or_old_lws_samples_are_hidden(monkeypatch, patch, status):
     plugin, _ = _plugin(monkeypatch, processed={"laser_warning_state": 1}, **patch)

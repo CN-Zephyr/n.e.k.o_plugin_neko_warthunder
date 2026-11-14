@@ -26,6 +26,40 @@ def _service(module):
     return service
 
 
+def test_snapshot_serializes_without_lock_and_keeps_captured_battle(monkeypatch):
+    module = _server_module()
+    service = module.TelemetryService(object())
+    service._state = module.ConnectionState.IN_BATTLE
+    service._indicators = module.Indicators(valid=True, army="air")
+    service._battle_id = "old-battle"
+    service._life_index = 2
+    service._processed = {"vehicle_class": "air", "level": "warning"}
+    service._proximity_events.append({"id": "old-event"})
+    service._map_sample_count = 3
+    serialize = module.Telemetry.to_dict
+
+    def serialize_during_battle_change(snapshot):
+        assert service._lock.acquire(blocking=False)
+        try:
+            service._battle_id = "new-battle"
+            service._life_index = 1
+            service._processed = None
+            service._proximity_events.clear()
+            service._map_sample_count = 0
+        finally:
+            service._lock.release()
+        return serialize(snapshot)
+
+    monkeypatch.setattr(module.Telemetry, "to_dict", serialize_during_battle_change)
+    snapshot = service.get_snapshot()
+
+    assert snapshot["battle_id"] == "old-battle"
+    assert snapshot["life_index"] == 2
+    assert snapshot["processed"]["level"] == "warning"
+    assert snapshot["proximity"]["events"] == [{"id": "old-event"}]
+    assert snapshot["meta"]["map_objects"]["count"] == 3
+
+
 def test_failed_vehicle_polls_cannot_refresh_old_alerts_and_cache_expires():
     from unittest.mock import patch
 

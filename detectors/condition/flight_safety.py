@@ -6,11 +6,19 @@ overspeed 消费数据层 v1.6 的 overspeed_warn / overspeed_critical，不在�
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from ...core.contracts import BattleState
+from ...core.contracts import BattleEvent, BattleState
 from ...core.flag_codes import CONDITION_FLAG_GROUPS
-from ...core.telemetry_freshness import helicopter_sample_is_fresh
+from ...core.telemetry_freshness import (
+    GROUND_SAMPLE_MAX_AGE_SECONDS,
+    ground_indicator_source,
+    helicopter_sample_is_fresh,
+    legacy_ground_replay_segment,
+    legacy_ground_sample_age,
+    modern_ground_replay_boundaries,
+)
 from .._base import ConditionDetector
 
 
@@ -24,6 +32,105 @@ def _is_fixed_wing_air(s: BattleState) -> bool:
 
 def _is_ground(s: BattleState) -> bool:
     return (s.domain or "").lower() == "ground"
+
+
+class GroundConditionDetector(ConditionDetector):
+    """Advance the existing condition FSM once per successful tank observation."""
+
+    _sample_key: tuple[str | None, int | None, int | float] | None = None
+    _sample_time: float | None = None
+    _has_source_metadata: bool | None = None
+    _replay_segment: tuple[int, int] | None = None
+    _replay_boundaries: tuple[int, int, int] | None = None
+
+    def reset(self) -> None:
+        super().reset()
+        self._sample_key = self._sample_time = None
+        self._has_source_metadata = None
+        self._replay_segment = None
+        self._replay_boundaries = None
+
+    def feed(self, prev: BattleState, cur: BattleState) -> BattleEvent | None:
+        if not _is_ground(cur):
+            # An offline response can be followed by the same cached legacy frame.
+            if self._has_source_metadata is False:
+                self.reset_transient()
+            else:
+                self.reset()
+            return None
+        source = ground_indicator_source(cur)
+        has_metadata = source is not None
+        if self._has_source_metadata is not None and self._has_source_metadata != has_metadata:
+            self.reset()
+        self._has_source_metadata = has_metadata
+        replay_segment = None
+        if source is not None:
+            if not cur.connected or cur.conn_state != "in_battle" or not cur.is_alive():
+                self.reset_transient()
+                return None
+            if source.status == "held":
+                self.reset_confirmation()
+                return None
+            if source.status != "ready":
+                self.reset_transient()
+                return None
+            boundaries = modern_ground_replay_boundaries(cur)
+            previous_boundaries = self._replay_boundaries
+            self._replay_boundaries = boundaries
+            if boundaries is not None and previous_boundaries is not None:
+                if boundaries[0] != previous_boundaries[0]:
+                    self.reset_transient()
+                    self._sample_key = self._sample_time = None
+                elif boundaries[2] != previous_boundaries[2]:
+                    self.reset_transient()
+                elif boundaries[1] != previous_boundaries[1]:
+                    self.reset_confirmation()
+            key, timestamp = source.key, source.timestamp
+        else:
+            # Older 8112 responses share the fast snapshot timestamp with the instrument payload.
+            age = legacy_ground_sample_age(cur)
+            if age is None and not cur.raw:
+                return super().feed(prev, cur)
+            if (age is None or age >= GROUND_SAMPLE_MAX_AGE_SECONDS or not cur.connected
+                    or cur.conn_state != "in_battle" or not cur.is_alive()):
+                self.reset_transient()
+                return None
+            timestamp = cur.timestamp
+            key = cur.battle_id, cur.life_index, timestamp
+            replay_segment = legacy_ground_replay_segment(cur)
+            if replay_segment != self._replay_segment:
+                self.reset_transient()
+                if (replay_segment is not None and self._replay_segment is not None
+                        and replay_segment[0] != self._replay_segment[0]):
+                    # A new pass can intentionally rewind the recorded timestamps.
+                    self._sample_key = self._sample_time = None
+                self._replay_segment = replay_segment
+            if replay_segment is not None and cur.raw["meta"].get("replay_ground_held") is True:
+                self.reset_transient()
+                return None
+        previous = self._sample_key
+        if previous is not None and key is not None:
+            if (key[0] == previous[0] and key[1] is not None and previous[1] is not None and key[1] < previous[1]):
+                return None
+            if key[:2] == previous[:2] and key[2] <= previous[2]:
+                return None
+            if (key[:2] != previous[:2] or (timestamp is not None and self._sample_time is not None
+                    and not 0 <= timestamp - self._sample_time <= GROUND_SAMPLE_MAX_AGE_SECONDS)):
+                self.reset_transient()
+        if (source is None and cur.life_key is None and _is_ground(prev)
+                and prev.vehicle_type and cur.vehicle_type and prev.vehicle_type != cur.vehicle_type):
+            self.reset_transient()
+        self._sample_key, self._sample_time = key, timestamp
+        event = super().feed(prev, cur)
+        if event is not None:
+            if source is None:
+                event.legacy_ground_life = cur.life_key
+                event.legacy_ground_unidentified = cur.life_key is None
+                event.legacy_ground_replay_segment = replay_segment
+            else:
+                event.ground_sample = source.key
+                event.ground_replay_boundaries = boundaries
+        return event
 
 
 def _is_fresh_helicopter(s: BattleState) -> bool:
@@ -52,14 +159,35 @@ def _pl_over_g(s: BattleState) -> dict[str, Any]:
 
 
 def _pl_overheat(s: BattleState) -> dict[str, Any]:
-    temperatures = (
-        ("water_temp_c", s.water_temp_c),
-        ("head_temp_c", s.head_temp_c),
-        ("turbine_temp_c", s.turbine_temp_c),
-        ("oil_temp_c", s.oil_temp_c),
-    )
-    source, temp = next(((name, value) for name, value in temperatures if value is not None), (None, None))
-    return _drop_none({"domain": s.domain, "temp_c": temp, "temp_source": source})
+    payload = _drop_none({"domain": s.domain})
+    groups = CONDITION_FLAG_GROUPS["overheat"]
+    codes = [critical for _, critical in groups if s.flag(critical)]
+    if not codes:
+        codes = [warning for warning, _ in groups if s.flag(warning)]
+    if len(codes) != 1:
+        return payload
+
+    code = codes[0]
+    fields = ("oil_temp_c",) if code.startswith("oil_") else ("water_temp_c", "head_temp_c", "turbine_temp_c")
+    temperatures = {field: value for field in fields if (value := getattr(s, field)) is not None
+                    and math.isfinite(value)}
+    processed = s.raw.get("processed") if isinstance(s.raw, dict) else None
+    alerts = processed.get("alerts") if isinstance(processed, dict) else None
+    if isinstance(alerts, list):
+        matching = [alert for alert in alerts if isinstance(alert, dict) and alert.get("code") == code]
+        if len(matching) > 1:
+            return payload
+        if matching:
+            alert = matching[0]
+            source, temperature = alert.get("temp_source"), alert.get("value")
+            # Legacy alerts carry a value but may not identify the temperature channel.
+            temperatures = {field: value for field, value in temperatures.items()
+                            if (source is None or field == source) and type(temperature) in (int, float)
+                            and value == temperature}
+    if len(temperatures) == 1:
+        source, temperature = next(iter(temperatures.items()))
+        payload.update(temp_c=temperature, temp_source=source)
+    return payload
 
 
 def _pl_low_fuel(s: BattleState) -> dict[str, Any]:
@@ -182,7 +310,7 @@ def build_condition_detectors(
             # 附近抖动时不该反复催返航。warning→critical 升级不受影响。
             once_per_battle=True,
         ),
-        ConditionDetector(
+        GroundConditionDetector(
             "ground_laser_warning",
             g["ground_laser_warning"],
             confirm_enter=1,
@@ -203,7 +331,7 @@ def build_condition_detectors(
         # ground_status_real_output_enabled 门控，默认关闭。
         # 乘员降到 1 时数据层同帧进入阵亡态并清空告警，因此实际只会以
         # crew_loss（部分减员）进入，不与 you_died 的 ground_crew 兜底重复。
-        ConditionDetector(
+        GroundConditionDetector(
             "ground_crew_loss",
             g["ground_crew_loss"],
             confirm_enter=2,
@@ -213,7 +341,7 @@ def build_condition_detectors(
         ),
         # 数据层只在本次出生先见正数基线、再从正数降到 0 时锁存 ammo_empty，
         # 补弹回正数即解除；confirm_enter=2 再压一层单帧脏值。
-        ConditionDetector(
+        GroundConditionDetector(
             "ground_ammo_empty",
             g["ground_ammo_empty"],
             confirm_enter=2,
@@ -222,7 +350,7 @@ def build_condition_detectors(
             predicate=_is_ground,
         ),
         # ammo_low 使用本次出生观测到的最大待发弹量，不等同弹架容量或全车余弹。
-        ConditionDetector(
+        GroundConditionDetector(
             "ground_ammo_low",
             g["ground_ammo_low"],
             confirm_enter=2,

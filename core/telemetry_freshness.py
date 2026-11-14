@@ -8,6 +8,82 @@ from dataclasses import dataclass
 from .contracts import NAVAL_DRY_RUN_ONLY_EVENTS, BattleEvent, BattleState
 
 
+GROUND_SAMPLE_MAX_AGE_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class GroundIndicatorSource:
+    status: str
+    age_seconds: float | None = None
+    timestamp: float | None = None
+    key: tuple[str, int, int] | None = None
+
+
+def legacy_ground_sample_age(state: BattleState, now: float | None = None) -> float | None:
+    """Age a recorded tank sample by its fast snapshot time on older 8112 responses."""
+    raw = state.raw if isinstance(state.raw, dict) else {}
+    indicators = raw.get("indicators")
+    timestamp = state.timestamp
+    if (not isinstance(indicators, dict) or indicators.get("valid") is not True
+            or indicators.get("army") != "tank" or type(timestamp) not in (int, float)
+            or not 0 < timestamp < math.inf):
+        return None
+    age = state.age_seconds
+    recorded_age = age if type(age) in (int, float) and 0 <= age < math.inf else 0.0
+    if now is None:
+        return recorded_age
+    if type(now) not in (int, float) or not timestamp <= now < math.inf:
+        return None
+    return max(recorded_age, now - timestamp)
+
+
+def legacy_ground_replay_segment(state: BattleState) -> tuple[int, int] | None:
+    """Read the playback pass and continuous span, independently of recorded life identity."""
+    meta = state.raw.get("meta") if isinstance(state.raw, dict) else None
+    marker = meta.get("replay_ground_segment") if isinstance(meta, dict) else None
+    if isinstance(marker, list) and len(marker) == 2 and all(type(value) is int and value >= 0 for value in marker):
+        return marker[0], marker[1]
+    return None
+
+
+def modern_ground_replay_boundaries(state: BattleState) -> tuple[int, int, int] | None:
+    meta = state.raw.get("meta") if isinstance(state.raw, dict) else None
+    marker = meta.get("replay_ground_boundaries") if isinstance(meta, dict) else None
+    if (isinstance(marker, list) and len(marker) == 3
+            and all(type(value) is int and value >= 0 for value in marker) and marker[2] <= marker[1]):
+        return marker[0], marker[1], marker[2]
+    return None
+
+
+def ground_indicator_source(state: BattleState, now: float | None = None) -> GroundIndicatorSource | None:
+    """Validate the per-source metadata. None denotes an older data service."""
+    raw = state.raw if isinstance(state.raw, dict) else {}
+    meta = raw.get("meta")
+    if not isinstance(meta, dict) or "ground_indicators" not in meta:
+        return None
+    sample = meta["ground_indicators"]
+    indicators = raw.get("indicators")
+    if (not isinstance(sample, dict) or sample.get("status") not in ("ready", "held")
+            or not isinstance(indicators, dict) or indicators.get("valid") is not True
+            or indicators.get("army") != "tank"):
+        return GroundIndicatorSource("unavailable")
+    count, life, battle = sample.get("count"), sample.get("life_index"), sample.get("battle_id")
+    if (not isinstance(battle, str) or not battle or battle != state.battle_id
+            or type(life) is not int or life < 1 or life != state.life_index
+            or type(count) is not int or count < 1):
+        return GroundIndicatorSource("unavailable")
+    timestamp, age = sample.get("sample_timestamp"), sample.get("age_sec")
+    if (type(timestamp) not in (int, float) or not 0 < timestamp < math.inf
+            or type(age) not in (int, float) or not 0 <= age < math.inf):
+        return GroundIndicatorSource("unavailable")
+    if now is not None:
+        if not timestamp <= now < math.inf:
+            return GroundIndicatorSource("unavailable")
+        age = max(age, now - timestamp)
+    status = "stale" if age >= GROUND_SAMPLE_MAX_AGE_SECONDS else sample["status"]
+    return GroundIndicatorSource(status, age, timestamp, (battle, life, count))
+
+
 def helicopter_sample_is_fresh(state: BattleState | None, now: float) -> bool:
     """Require a live helicopter backed by a known, fresh vehicle sample."""
     if state is None or not (state.connected and state.conn_state == "in_battle"

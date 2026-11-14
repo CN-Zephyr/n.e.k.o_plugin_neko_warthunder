@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core import contracts as C
+from neko_warthunder.data_layer.data_process.wt_events import KillTracker
+from neko_warthunder.data_layer.data_process.wt_processor import ProcessedData, TelemetryProcessor
+from neko_warthunder.data_layer.data_process.wt_telemetry import HudMessage, Indicators
 from neko_warthunder.detectors._base import ConditionDetector, DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from neko_warthunder.detectors.discrete.free_text import FreeTextActivityDetector
@@ -197,6 +200,27 @@ def test_kill_detector_emits_when_ownership_arrives_late_for_seen_id():
     assert ev is not None and ev.event_id == "you_killed"
     assert ev.payload.get("victim") == "AI Target"
     assert det.feed(second, second) is None
+
+
+@pytest.mark.parametrize("tag", ["=TAG=", "-TAG-", "[TAG]"])
+def test_kill_tracker_ignores_squad_tag_for_ownership(tag):
+    tracker = KillTracker(player_name="Me")
+    tracker.feed([
+        HudMessage(id=1, kind="damage", msg=f"{tag} Me (Tank A) 击毁了 Other (Tank B)"),
+        HudMessage(id=2, kind="damage", msg=f"{tag} NotMe (Tank C) 击毁了 {tag} Me (Tank A)"),
+    ])
+    combat = tracker.get_summary()
+    assert combat["my"] == {"kills": 1, "deaths": 1}
+    assert [entry["is_my_kill"] for entry in combat["feed"]] == [False, True]
+    assert combat["feed"][1]["killer_squad"] == "TAG"
+    assert combat["feed"][0]["victim_squad"] == "TAG"
+
+    detector = KillDetector()
+    current = C.BattleState(in_battle=True, vehicle_valid=True, domain="ground", combat=combat)
+    event = detector.feed(C.BattleState(), current)
+    assert event is not None and event.event_id == "you_killed"
+    assert event.payload["kill_count"] == 1
+    assert detector.feed(current, current) is None
 
 
 def test_kill_requires_is_my_kill_flag():
@@ -558,6 +582,41 @@ def test_replay_telemetry_suppresses_detector_events():
     cur = parse_telemetry(payload)
     engine = DetectorEngine(list(build_condition_detectors()) + [DeathDetector()])
     assert engine.feed(prev, cur) == []
+
+
+@pytest.mark.parametrize(("thresholds", "legacy", "expected", "level"), [
+    ({"oil_temp_warn_c": 100}, False, {"temp_source": "oil_temp_c", "temp_c": 150}, "warning"),
+    ({"oil_temp_warn_c": 100}, True, {"temp_source": "oil_temp_c", "temp_c": 150}, "warning"),
+    ({"turbine_temp_critical_c": 600, "oil_temp_warn_c": 100}, False,
+     {"temp_source": "turbine_temp_c", "temp_c": 700}, "critical"),
+    ({"head_temp_warn_c": 60}, False, {"temp_source": "head_temp_c", "temp_c": 80}, "warning"),
+    ({"head_temp_warn_c": 60}, True, {}, "warning"),
+    ({"water_temp_warn_c": 60, "head_temp_warn_c": 60}, False, {}, "warning"),
+    ({"water_temp_warn_c": 60, "oil_temp_warn_c": 100}, False, {}, "warning"),
+])
+def test_overheat_payload_uses_triggering_temperature(thresholds, legacy, expected, level):
+    processed = ProcessedData()
+    TelemetryProcessor()._process_engine_temp(
+        Indicators(water_temperature=80, head_temperature=80, turbine_temperature=700, oil_temperature=150),
+        thresholds, processed,
+    )
+    serialized = processed.to_dict()
+    if legacy:
+        for alert in serialized["alerts"]:
+            alert.pop("temp_source")
+
+    engine = DetectorEngine(build_condition_detectors())
+    previous = C.BattleState()
+    events = []
+    for timestamp in (1000, 1001, 1002):
+        current = parse_telemetry({"domain": "air", "state": "in_battle", "in_battle": True,
+                                   "timestamp": timestamp, "processed": serialized})
+        events.extend(engine.feed(previous, current))
+        previous = current
+
+    event, = events
+    assert (event.event_id, event.level) == ("overheat", level)
+    assert event.payload == {"domain": "air", **expected}
 
 
 def test_hud_notice_overheat_emits_safe_overheat_event_once():

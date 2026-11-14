@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 _BASE = pathlib.Path(__file__).resolve().parent.parent
+FULL_PYTEST_COMMAND = ("uv", "run", "pytest", "-c", "tests/pytest.ini", "tests", "-q")
 if "neko_warthunder" not in sys.modules:
     _pkg = types.ModuleType("neko_warthunder")
     _pkg.__path__ = [str(_BASE)]  # type: ignore[attr-defined]
@@ -42,8 +43,7 @@ def build_checks(
     sample = plugin / pathlib.Path(sample_rel)
 
     checks = [
-        Check("logic self-check", plugin, ["uv", "run", "python", "tests/run_logic_tests.py"]),
-        Check("pytest", plugin, ["uv", "run", "pytest", "-c", "tests/pytest.ini", "tests", "-q"]),
+        Check("pytest", plugin, list(FULL_PYTEST_COMMAND)),
         Check(
             "vehicle profile id audit",
             plugin,
@@ -282,7 +282,7 @@ def _format_cmd(check: Check) -> str:
 def print_plan(checks: Sequence[Check]) -> None:
     print("# neko_warthunder offline preflight")
     print("## Quick read")
-    print("- baseline: logic self-check uses standard pytest; record the actual full-suite result")
+    print("- baseline: run the standard pytest suite once and record the result")
     print("- vehicle profile id audit must keep Wiki gameId / runtime vehicle_type identity policy intact")
     print("- release defaults gate must keep dry_run-first and unverified real output closed")
     print("- output freshness gate must prove battle pushes are fresh, coalesced, targeted, and plugin-dialogue constrained")

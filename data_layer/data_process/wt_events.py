@@ -167,11 +167,11 @@ def _parse_actor(part: str) -> tuple[str, str, str, bool]:
         part = part[2:].strip()
 
     squad = ""
-    # 战队标签：-TAG- name 或 [TAG] name
-    m2 = re.match(r"^[\-\[]([^\-\]]{1,12})[\-\]]\s+(.+)$", part)
-    if m2:
-        squad = m2.group(1).strip()
-        name = m2.group(2).strip()
+    # 战队标签单独保存，击杀归属只比较昵称。支持 -TAG-、[TAG] 和 =TAG=。
+    tagged_actor = re.match(r"^(?:-([^-]{1,12})-|\[([^\]]{1,12})\]|=([^=]{1,12})=)\s+(.+)$", part)
+    if tagged_actor:
+        squad = next(tag for tag in tagged_actor.groups()[:3] if tag is not None).strip()
+        name = tagged_actor.group(4).strip()
     else:
         name = part
 

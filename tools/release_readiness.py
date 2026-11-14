@@ -12,10 +12,11 @@ import json
 import os
 import pathlib
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Sequence
 
 from _bootstrap import PLUGIN_ROOT as _BASE
+from neko_warthunder.tools import preflight
 from neko_warthunder.tools.rc_gap_summary import build_gap_summary
 from neko_warthunder.tools.v2_readiness import build_v2_readiness
 
@@ -27,6 +28,7 @@ class Check:
     cmd: list[str]
     blocking: bool = True
     review_hint: str = ""
+    suite: str | None = None
 
 
 def build_checks(
@@ -42,8 +44,7 @@ def build_checks(
     sample = plugin / pathlib.Path(sample_rel)
 
     checks = [
-        Check("logic self-check", plugin, ["uv", "run", "python", "tests/run_logic_tests.py"]),
-        Check("pytest", plugin, ["uv", "run", "pytest", "-c", "tests/pytest.ini", "tests", "-q"]),
+        Check("pytest", plugin, list(preflight.FULL_PYTEST_COMMAND)),
         Check(
             "rc docs audit",
             plugin,
@@ -250,22 +251,34 @@ def build_checks(
 
 def run_checks(checks: Sequence[Check], *, stream_output: bool = True) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
+    preflight_pytest: dict[pathlib.Path, subprocess.CompletedProcess[str]] = {}
     for check in checks:
-        completed = subprocess.run(
-            check.cmd,
-            cwd=check.cwd,
-            capture_output=not stream_output,
-            text=not stream_output,
-            encoding="utf-8" if not stream_output else None,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        )
+        full_pytest = check.name == "pytest" and tuple(check.cmd) == preflight.FULL_PYTEST_COMMAND
+        reused = preflight_pytest.get(check.cwd) if full_pytest and check.suite == "release_readiness" else None
+        if reused is None:
+            completed = subprocess.run(
+                check.cmd,
+                cwd=check.cwd,
+                capture_output=not stream_output,
+                text=not stream_output,
+                encoding="utf-8" if not stream_output else None,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            if full_pytest and check.suite == "preflight" and completed.returncode == 0:
+                preflight_pytest[check.cwd] = completed
+        else:
+            completed = reused
         item = {
             "name": check.name,
             "returncode": completed.returncode,
             "blocking": check.blocking,
             "cmd": " ".join(check.cmd),
         }
-        if not stream_output:
+        if check.suite:
+            item["suite"] = check.suite
+        if reused is not None:
+            item["reused_from"] = "preflight"
+        elif not stream_output:
             stdout = _compact_process_output(getattr(completed, "stdout", "") or "")
             stderr = _compact_process_output(getattr(completed, "stderr", "") or "")
             if stdout:
@@ -307,6 +320,7 @@ def plan_payload(
                 "cwd": str(check.cwd),
                 "blocking": check.blocking,
                 "review_hint": check.review_hint,
+                **({"suite": check.suite} if check.suite else {}),
             }
             for check in checks
         ],
@@ -452,7 +466,10 @@ def render_text(payload: dict[str, Any]) -> str:
         suffix = ""
         if "returncode" in check:
             suffix = f" -> {check['returncode']}"
-        lines.append(f"{index}. {check['name']}{suffix}")
+        suite = f"{check['suite']} / " if check.get("suite") else ""
+        if check.get("reused_from"):
+            suffix += f" (reused from {check['reused_from']})"
+        lines.append(f"{index}. {suite}{check['name']}{suffix}")
         lines.append(f"   cmd: {check['cmd']}")
         if check.get("review_hint"):
             lines.append(f"   review: {check['review_hint']}")
@@ -468,6 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         help="N.E.K.O host repository root for optional host contract tests and plugin check.",
     )
     parser.add_argument("--run", action="store_true", help="Execute checks instead of printing the plan.")
+    parser.add_argument("--with-preflight", action="store_true",
+                        help="Run preflight first and reuse its matching pytest result in this run.")
     parser.add_argument(
         "--include-local-sample",
         action="store_true",
@@ -486,6 +505,17 @@ def main(argv: list[str] | None = None) -> int:
         include_local_sample=args.include_local_sample,
         final_smoke_evidence=args.final_smoke_evidence,
     )
+    if args.with_preflight:
+        preflight_checks = preflight.build_checks(
+            plugin_root=args.plugin_root,
+            host_root=args.host_root,
+            final_smoke_evidence=args.final_smoke_evidence,
+        )
+        checks = [
+            *(Check(check.name, check.cwd, check.cmd, review_hint=check.review_hint, suite="preflight")
+              for check in preflight_checks),
+            *(replace(check, suite="release_readiness") for check in checks),
+        ]
     sample_summary = (
         _load_sample_summary(args.plugin_root, "local_samples/data_process_20260620")
         if args.include_local_sample

@@ -76,9 +76,9 @@ def snapshot_trusted_facts(state: BattleState, dashboard: dict[str, Any], now: f
                       "naval": "naval_status", "unknown": "map_status"}[domain]
     projection = dashboard.get(projection_key)
     projection = projection if isinstance(projection, dict) else {}
-    source = dashboard.get("vehicle_source") if not map_domain else projection
+    source = projection if map_domain or domain == "ground" else dashboard.get("vehicle_source")
     source = source if isinstance(source, dict) else {}
-    statuses = {"ready", "waiting", "offline", "dead", "replay", "stale", "unavailable", "no_player"}
+    statuses = {"ready", "held", "waiting", "offline", "dead", "replay", "stale", "unavailable", "no_player"}
     source_status = source.get("status") if source.get("status") in statuses else "unavailable"
     age = source.get("sample_age_seconds")
     age = age if _number(age) and age >= 0 else None

@@ -50,6 +50,7 @@ RUNTIME_SYNC_SENTINELS: tuple[pathlib.Path, ...] = (
     pathlib.Path("adapters") / "identity_client.py",
     pathlib.Path("adapters") / "neko_dispatcher.py",
     pathlib.Path("core") / "arbiter.py",
+    pathlib.Path("data_layer") / "data_process" / "wt_http.py",
     pathlib.Path("data_layer") / "data_process" / "wt_recorder.py",
     pathlib.Path("data_layer") / "data_process" / "wt_server.py",
     pathlib.Path("data_layer") / "data_process" / "vehicle_profiles.json",

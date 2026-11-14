@@ -15,6 +15,7 @@ import {
   Warning,
   useEffect,
   useClipboard,
+  useRef,
   useState,
   useToast,
 } from "@neko/plugin-ui"
@@ -94,14 +95,21 @@ type OnDemandState = {
 type GroundStatusState = {
   status?: string
   sample_age_seconds?: number | null
+  sample_timestamp?: number | null
   crew_current?: number | null
   crew_total?: number | null
   ammo_first_stage?: number | null
   gun_stabilizer?: boolean | null
   gear_position?: number | null
+  speed_kmh?: number | null
+  engine_rpm?: number | null
   gunner_state?: number | null
   driver_state?: number | null
   laser_warning_state?: number | null
+  track_broken?: boolean | null
+  h_drive_dead?: boolean | null
+  breach_dead?: boolean | null
+  barrel_dead?: boolean | null
 }
 
 type HelicopterStatusState = {
@@ -114,6 +122,8 @@ type HelicopterStatusState = {
 
 type NavalStatusState = {
   status?: string
+  battlefield?: "naval"
+  personal_combat?: { kills?: number; deaths?: number }
   sample_age_seconds?: number | null
   enemy_count?: number | null
   ally_count?: number | null
@@ -313,6 +323,8 @@ const DOMAIN_LABELS: Record<string, string> = {
 // 面板自动刷新间隔。取 6s：数据层轮询是 0.4s 级，面板只需跟上"看得出在变"，
 // 太密会给宿主 context 通道添无谓压力。
 const PANEL_REFRESH_INTERVAL_MS = 6000
+const GROUND_PANEL_REFRESH_INTERVAL_MS = 2000
+const GROUND_SAMPLE_MAX_AGE_MS = 5000
 
 const CONN_STATE_LABELS: Record<string, string> = {
   offline: "离线",
@@ -980,6 +992,9 @@ function activityStatus(record: ObserveRecord): { status: string; tone: PanelTon
   if (reason === "ground_laser_condition_cleared") {
     return { status: "激光告警已失效", tone: "default", kind: "suppressed", detail: "最新数据已不再确认激光告警，旧提醒已撤销。" }
   }
+  if (reason === "ground_crew_condition_cleared") {
+    return { status: "减员提醒已失效", tone: "default", kind: "suppressed", detail: "当前仪表无法确认这条减员提醒，旧提醒已撤销。" }
+  }
   if (reason === "v2_live_evidence_pending") {
     return { status: "等待真机验证", tone: "info", kind: "suppressed", detail: "该提醒仍处于验证阶段，本次只保留安全记录。" }
   }
@@ -1256,12 +1271,51 @@ function groundLaserText(value: number | null | undefined): string {
   return labels[value] || `待确认（${value}）`
 }
 
+function useGroundSampleAge(ground: GroundStatusState | null | undefined): number | null {
+  const sample = useRef<{
+    ground: GroundStatusState; timestamp: number | null; sampledAt: number | null
+  } | null>(null)
+  const [, refreshClock] = useState(0)
+  const now = performance.now()
+  if (!ground) {
+    sample.current = null
+  } else if (ground !== sample.current?.ground) {
+    const age = ground.sample_age_seconds
+    const timestamp = typeof ground.sample_timestamp === "number" && Number.isFinite(ground.sample_timestamp)
+      && ground.sample_timestamp > 0 ? ground.sample_timestamp : null
+    let sampledAt = typeof age === "number" && Number.isFinite(age) && age >= 0 ? now - age * 1000 : null
+    // The same telemetry can arrive in several dashboard responses. Keep its earliest deadline.
+    const previous = sample.current
+    if (timestamp !== null && previous?.timestamp === timestamp && previous.sampledAt !== null && sampledAt !== null) {
+      sampledAt = Math.min(previous.sampledAt, sampledAt)
+    }
+    sample.current = { ground, timestamp, sampledAt }
+  }
+
+  const sampledAt = sample.current?.sampledAt ?? null
+  const expiresAt = sampledAt === null ? null : sampledAt + GROUND_SAMPLE_MAX_AGE_MS
+  const pendingExpiry = expiresAt !== null && now < expiresAt ? expiresAt : null
+  useEffect(() => {
+    if (pendingExpiry === null) return
+    const update = () => refreshClock(value => value + 1)
+    const onVisibilityChange = () => { if (!document.hidden) update() }
+    const timer = setTimeout(update, Math.max(0, pendingExpiry - performance.now() + 1))
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+    }
+  }, [pendingExpiry])
+  return sampledAt === null ? null : (now - sampledAt) / 1000
+}
+
 function GroundStatusCard(props: {
   ground: GroundStatusState; dryRun: boolean; realOutput: boolean; explanation?: { status: string } | null
 }) {
   const ground = props.ground
   const states: Record<string, { label: string; detail: string; tone: PanelTone }> = {
     ready: { label: "已读取", detail: "显示最近一次采样的载具状态。", tone: "success" },
+    held: { label: "暂用上次数据", detail: "本次仪表采集失败，显示仍在有效期内的上一次采样。", tone: "warning" },
     waiting: { label: "等待进场", detail: "进入陆战后显示当前载具状态。", tone: "info" },
     unavailable: { label: "等待数据", detail: "暂未取得有效载具数据，未知值不会当作零。", tone: "info" },
     stale: { label: "数据过期", detail: "等待新的载具采样，暂不显示旧车状态。", tone: "warning" },
@@ -1270,7 +1324,7 @@ function GroundStatusCard(props: {
     replay: { label: "回放已暂停", detail: "回放期间不显示可能失真的载具状态。", tone: "info" },
   }
   const summary = states[ground.status || "unavailable"] || states.unavailable
-  const ready = ground.status === "ready"
+  const ready = ground.status === "ready" || ground.status === "held"
   const crew = ready && Number.isInteger(ground.crew_current) && Number.isInteger(ground.crew_total)
     && typeof ground.crew_current === "number" && typeof ground.crew_total === "number"
     && ground.crew_total > 0 && ground.crew_current >= 0 && ground.crew_current <= ground.crew_total
@@ -1284,6 +1338,10 @@ function GroundStatusCard(props: {
     : "暂无数据"
   const stabilizer = ready && typeof ground.gun_stabilizer === "boolean"
     ? ground.gun_stabilizer ? "开启" : "关闭" : "暂无数据"
+  const moduleDamage = (value: boolean | null | undefined, damaged: string) => {
+    if (!ready || typeof value !== "boolean") return "暂无数据"
+    return value ? damaged : "未报告损伤"
+  }
   const explanations: Record<string, string> = {
     source_unavailable: "当前来源不可用于解释，等待新数据。",
     count_unknown: "当前一级待发弹数量未知，不能当作零发。",
@@ -1293,16 +1351,24 @@ function GroundStatusCard(props: {
     low_flagged: "当前读到待发弹，数据层给出偏少标记；不能据此推算满弹容量或剩余开火次数。",
     observed_count: "当前已读到待发弹，未取得一致的偏少或耗尽标记；不代表弹量充足或已补满。",
   }
-  const explanationCode = ready && Object.prototype.hasOwnProperty.call(explanations, props.explanation?.status || "")
+  const explanationCode = ground.status === "ready" && Object.prototype.hasOwnProperty.call(explanations, props.explanation?.status || "")
     ? props.explanation!.status : "source_unavailable"
   const rows = [
     { key: "crew", label: "乘员", value: crew },
     { key: "ammo", label: "一级待发弹", value: ammo },
     { key: "stabilizer", label: "火炮稳定器", value: stabilizer },
     { key: "gear", label: "档位", value: gear },
+    { key: "speed", label: "车速", value: ready && typeof ground.speed_kmh === "number" && Number.isFinite(ground.speed_kmh)
+      ? numberText(ground.speed_kmh, " km/h", 1) : "暂无数据" },
+    { key: "rpm", label: "发动机转速", value: ready && typeof ground.engine_rpm === "number"
+      && Number.isFinite(ground.engine_rpm) && ground.engine_rpm >= 0 ? numberText(ground.engine_rpm, " rpm") : "暂无数据" },
     { key: "gunner", label: "炮手岗位", value: ready ? groundStationText(ground.gunner_state) : "暂无数据" },
     { key: "driver", label: "驾驶员岗位", value: ready ? groundStationText(ground.driver_state) : "暂无数据" },
-    { key: "laser", label: "激光告警器", value: ready ? groundLaserText(ground.laser_warning_state) : "暂无数据" },
+    { key: "laser", label: "激光告警器", value: ground.status === "ready" ? groundLaserText(ground.laser_warning_state) : "暂无数据" },
+    { key: "track", label: "履带", value: moduleDamage(ground.track_broken, "已断裂") },
+    { key: "h_drive", label: "炮塔横向驱动", value: moduleDamage(ground.h_drive_dead, "已损毁") },
+    { key: "breach", label: "炮闩", value: moduleDamage(ground.breach_dead, "已损毁") },
+    { key: "barrel", label: "炮管", value: moduleDamage(ground.barrel_dead, "已损毁") },
   ]
   return (
     <section className="wt-vehicle-status" role="region" aria-label="陆战状态">
@@ -1322,7 +1388,7 @@ function GroundStatusCard(props: {
       <p className="wt-vehicle-note" data-ammo-explanation={explanationCode}>
         待发弹说明：{explanations[explanationCode]} 检测候选与输出结果请在活动页对照。
       </p>
-      {ready && ground.laser_warning_state === 1 && (
+      {ground.status === "ready" && ground.laser_warning_state === 1 && (
         <p className="wt-vehicle-note" role="status">最近采样检测到激光告警，注意观察并寻找掩体；不能据此确认导弹来袭。</p>
       )}
       <p className="wt-vehicle-note">乘员与弹药提醒：{!props.dryRun && props.realOutput ? "已允许播报" : "仅记录"}。</p>
@@ -1374,7 +1440,8 @@ function HelicopterStatusCard(props: { helicopter: HelicopterStatusState }) {
 
 function MapStatusCard(props: { naval: NavalStatusState; confirmedNaval: boolean }) {
   const naval = props.naval
-  const title = props.confirmedNaval ? "海战地图态势" : "地图态势（载具未确认）"
+  const navalBattlefield = naval.status === "ready" && naval.battlefield === "naval"
+  const title = props.confirmedNaval || navalBattlefield ? "海战地图态势" : "地图态势（载具未确认）"
   const states: Record<string, { label: string; detail: string; tone: PanelTone }> = {
     ready: { label: "已读取", detail: "显示本次生命内最近成功采样的地图态势。", tone: "success" },
     waiting: { label: "等待进场", detail: "进入战局并取得自身地图位置后显示态势。", tone: "info" },
@@ -1411,11 +1478,16 @@ function MapStatusCard(props: { naval: NavalStatusState; confirmedNaval: boolean
       </p>
       <dl className="wt-vehicle-grid">
         {rows.map(row => <div key={row.key} className="wt-vehicle-stat"><dt>{row.label}</dt><dd>{row.value}</dd></div>)}
+        {ready && naval.personal_combat ? <>
+          <div className="wt-vehicle-stat"><dt>本局本人击毁</dt><dd>{value(naval.personal_combat.kills, " 次")}</dd></div>
+          <div className="wt-vehicle-stat"><dt>本局本人阵亡</dt><dd>{value(naval.personal_combat.deaths, " 次")}</dd></div>
+        </> : null}
       </dl>
       <p className="wt-vehicle-note">数量仅指地图已显示单位；图标不能确认舰种，距离不含高度。</p>
       <p className="wt-vehicle-note">{props.confirmedNaval
         ? "兵种字段确认海战；本卡只读，不触发播报。"
-        : "尚未确认载具域，仅显示通用地图态势，不触发专项播报。"}</p>
+        : navalBattlefield ? "舰艇重生点提示当前为海战场景。本舰仪表不可用，专项观察待载具确认。"
+          : "尚未确认载具域，仅显示通用地图态势，不触发专项播报。"}</p>
     </section>
   )
 }
@@ -1666,6 +1738,26 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
   const clipboard = useClipboard()
   const onboardingRequired = state.onboarding?.required === true
   const [activeTab, setActiveTab] = useState("overview")
+  const ground = state.domain === "ground" ? state.ground_status : null
+  const groundAge = useGroundSampleAge(ground)
+  const hasGroundReadings = ground?.status === "ready" || ground?.status === "held"
+  const groundStatus = hasGroundReadings
+    ? groundAge === null ? "unavailable" : groundAge * 1000 >= GROUND_SAMPLE_MAX_AGE_MS ? "stale" : ground.status
+    : ground?.status
+  const groundForDisplay = { ...ground, status: groundStatus, sample_age_seconds: groundAge }
+  const facts = state.trusted_facts
+  const groundFactsUnavailable = facts?.domain === "ground" && hasGroundReadings
+    && (groundStatus === "stale" || groundStatus === "unavailable")
+  const factsForDisplay = groundFactsUnavailable ? {
+    ...facts,
+    status: "unavailable",
+    sources: facts.sources.map(source => ({ ...source, status: groundStatus === "stale" ? "stale" : "unknown_age",
+      age_seconds: groundAge })),
+    facts: facts.facts.map(fact => ({ ...fact, status: "unavailable", value: null, total: null })),
+  } : facts
+  const refreshInterval = useRef(PANEL_REFRESH_INTERVAL_MS)
+  refreshInterval.current = state.domain === "ground" && (activeTab === "overview" || activeTab === "diagnostics")
+    ? GROUND_PANEL_REFRESH_INTERVAL_MS : PANEL_REFRESH_INTERVAL_MS
   const [activityFilter, setActivityFilter] = useState("all")
   const [onboardingOpen, setOnboardingOpen] = useState(onboardingRequired)
   const [onboardingAutoOpened, setOnboardingAutoOpened] = useState(false)
@@ -1722,30 +1814,43 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
     let refreshInFlight = false
     let timer: ReturnType<typeof setTimeout> | undefined
 
-    const hidden = () =>
-      typeof document !== "undefined" && (document as { hidden?: boolean }).hidden === true
+    const hidden = () => document.hidden
 
-    const tick = async () => {
-      if (cancelled) return
-      if (!hidden() && !refreshInFlight) {
-        refreshInFlight = true
-        try {
-          await props.api.refresh()
-        } catch {
-          // 刷新失败只影响这一拍：下一拍照常重试，不打断面板。
-        } finally {
-          refreshInFlight = false
-        }
-      }
-      if (!cancelled) {
-        timer = setTimeout(() => { void tick() }, PANEL_REFRESH_INTERVAL_MS)
+    const stopTimer = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+    }
+
+    const scheduleNext = () => {
+      if (!cancelled && !hidden()) {
+        timer = setTimeout(() => { void tick() }, refreshInterval.current)
       }
     }
 
-    timer = setTimeout(() => { void tick() }, PANEL_REFRESH_INTERVAL_MS)
+    const tick = async () => {
+      stopTimer()
+      if (cancelled || hidden() || refreshInFlight) return
+      refreshInFlight = true
+      try {
+        await props.api.refresh()
+      } catch {
+        // A failed refresh leaves the last sample's deadline in effect.
+      } finally {
+        refreshInFlight = false
+        scheduleNext()
+      }
+    }
+
+    const onVisibilityChange = () => {
+      if (hidden()) stopTimer()
+      else void tick()
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    scheduleNext()
     return () => {
       cancelled = true
-      if (timer !== undefined) clearTimeout(timer)
+      stopTimer()
+      document.removeEventListener("visibilitychange", onVisibilityChange)
     }
   }, [props.api])
 
@@ -2078,7 +2183,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             </div>
           </div>
 
-          {state.trusted_facts ? <TrustedFactsCard facts={state.trusted_facts} openActivity={() => setActiveTab("activity")} /> : null}
+          {factsForDisplay ? <TrustedFactsCard facts={factsForDisplay} openActivity={() => setActiveTab("activity")} /> : null}
 
           <div className="wt-identity">
             <div>
@@ -2088,7 +2193,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
             <Button className="wt-link-action" onClick={openIdentityModal}>{playerName ? "修改" : "设置"}</Button>
           </div>
           {state.domain === "ground" ? <GroundStatusCard
-            ground={state.ground_status || {}} dryRun={detectOnly}
+            ground={groundForDisplay} dryRun={detectOnly}
             explanation={state.ground_ammo_explanation}
             realOutput={outputPolicy.ground_status_real_output_enabled === true}
           /> : null}
@@ -2233,7 +2338,7 @@ export default function NekoWarthunderPanel(props: PluginSurfaceProps<DashboardS
           </div>
 
           {state.domain === "ground" ? <GroundStatusCard
-            ground={state.ground_status || {}} dryRun={detectOnly}
+            ground={groundForDisplay} dryRun={detectOnly}
             explanation={state.ground_ammo_explanation}
             realOutput={outputPolicy.ground_status_real_output_enabled === true}
           /> : null}

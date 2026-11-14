@@ -50,6 +50,7 @@ class Alert:
     level: str       # info / warning / critical
     message: str     # 给人看的中文描述
     value: float | None = None  # 触发时的相关数值
+    temp_source: str | None = None  # 过热告警对应的温度字段
 
 
 @dataclass
@@ -105,7 +106,11 @@ class ProcessedData:
     level: str = "info"  # 所有告警里的最高等级
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        for alert in result["alerts"]:
+            if alert["temp_source"] is None:
+                del alert["temp_source"]
+        return result
 
 
 def _compact_name(s: str) -> str:
@@ -349,8 +354,9 @@ class TelemetryProcessor:
 
     # -- 各项规则 ----------------------------------------------------------
 
-    def _add(self, result: ProcessedData, code: str, level: str, msg: str, value: float | None) -> None:
-        result.alerts.append(Alert(code=code, level=level, message=msg, value=value))
+    def _add(self, result: ProcessedData, code: str, level: str, msg: str, value: float | None,
+             *, temp_source: str | None = None) -> None:
+        result.alerts.append(Alert(code=code, level=level, message=msg, value=value, temp_source=temp_source))
         result.flags[code] = True
 
     def _process_fuel(self, vehicle: Any, cfg: dict[str, Any], timestamp: float, result: ProcessedData) -> None:
@@ -454,40 +460,41 @@ class TelemetryProcessor:
             tw = cfg.get("turbine_temp_warn_c")
             if tc is not None and turbine >= tc:
                 self._add(result, "engine_overheat_critical", "critical",
-                          f"发动机过热：涡轮 {turbine:.0f}℃，即将损坏", round(turbine, 1))
+                          f"发动机过热：涡轮 {turbine:.0f}℃，即将损坏", round(turbine, 1),
+                          temp_source="turbine_temp_c")
             elif tw is not None and turbine >= tw:
                 self._add(result, "engine_overheat", "warning",
-                          f"涡轮温度偏高：{turbine:.0f}℃", round(turbine, 1))
+                          f"涡轮温度偏高：{turbine:.0f}℃", round(turbine, 1), temp_source="turbine_temp_c")
 
         if water is not None:
             wc = cfg.get("water_temp_critical_c")
             ww = cfg.get("water_temp_warn_c")
             if wc is not None and water >= wc:
                 self._add(result, "engine_overheat_critical", "critical",
-                          f"发动机过热：水温 {water:.0f}℃，即将损坏", round(water, 1))
+                          f"发动机过热：水温 {water:.0f}℃，即将损坏", round(water, 1), temp_source="water_temp_c")
             elif ww is not None and water >= ww:
                 self._add(result, "engine_overheat", "warning",
-                          f"水温偏高：{water:.0f}℃", round(water, 1))
+                          f"水温偏高：{water:.0f}℃", round(water, 1), temp_source="water_temp_c")
 
         if head is not None:
             hc = cfg.get("head_temp_critical_c")
             hw = cfg.get("head_temp_warn_c")
             if hc is not None and head >= hc:
                 self._add(result, "engine_overheat_critical", "critical",
-                          f"发动机过热：缸头 {head:.0f}℃，即将损坏", round(head, 1))
+                          f"发动机过热：缸头 {head:.0f}℃，即将损坏", round(head, 1), temp_source="head_temp_c")
             elif hw is not None and head >= hw:
                 self._add(result, "engine_overheat", "warning",
-                          f"缸头温度偏高：{head:.0f}℃", round(head, 1))
+                          f"缸头温度偏高：{head:.0f}℃", round(head, 1), temp_source="head_temp_c")
 
         if oil is not None:
             oc = cfg.get("oil_temp_critical_c")
             ow = cfg.get("oil_temp_warn_c")
             if oc is not None and oil >= oc:
                 self._add(result, "oil_overheat_critical", "critical",
-                          f"机油过热：油温 {oil:.0f}℃", round(oil, 1))
+                          f"机油过热：油温 {oil:.0f}℃", round(oil, 1), temp_source="oil_temp_c")
             elif ow is not None and oil >= ow:
                 self._add(result, "oil_overheat", "warning",
-                          f"油温偏高：{oil:.0f}℃", round(oil, 1))
+                          f"油温偏高：{oil:.0f}℃", round(oil, 1), temp_source="oil_temp_c")
 
     def _process_afterburner(self, indicators: Any, cfg: dict[str, Any], dt: float, result: ProcessedData) -> None:
         thr = getattr(indicators, "throttle", None)

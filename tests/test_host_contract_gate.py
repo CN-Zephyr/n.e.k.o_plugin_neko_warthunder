@@ -92,6 +92,7 @@ def test_host_contract_gate_passes_synced_runtime_copy(tmp_path):
         Path("adapters/dispatch_observer.py"),
         Path("adapters/event_delivery.py"),
         Path("adapters/identity_client.py"),
+        Path("data_layer/data_process/wt_http.py"),
         Path("data_layer/data_process/wt_recorder.py"),
         Path("data_layer/data_process/wt_server.py"),
     }.issubset(set(host_contract_gate.RUNTIME_SYNC_SENTINELS))

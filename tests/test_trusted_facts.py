@@ -81,11 +81,28 @@ def test_cached_sources_age_without_being_refreshed_by_dashboard_reads(monkeypat
 
 @pytest.mark.parametrize("age", [None, -1, True, "bad", float("nan"), float("inf")])
 def test_missing_or_invalid_independent_vehicle_age_is_not_replaced_by_fast_age(monkeypatch, age):
-    plugin, _ = ground_plugin(monkeypatch, meta={"fast": {"age_sec": 0.2}, "vehicle": {"age_sec": age}})
+    plugin, _ = heli_plugin(monkeypatch, meta={"fast": {"age_sec": 0.2}, "vehicle": {"age_sec": age}})
     card = summary(plugin)
     assert card["sources"][0]["status"] == "unknown_age"
     assert all(f["value"] is None for f in card["facts"])
     json.dumps(card, allow_nan=False)
+
+
+def test_ground_summary_uses_current_tank_indicators_and_omits_module_damage(monkeypatch):
+    damage = {"track_broken": 1, "h_drive_dead": 1, "breach_dead": 1, "barrel_dead": 1}
+    plugin, _ = ground_plugin(
+        monkeypatch,
+        vehicle={"valid": False},
+        indicators={"valid": True, "army": "tank", "first_stage_ammo": 12, "raw": damage},
+        meta={"fast": {"age_sec": 0.2}, "vehicle": {"age_sec": 9}},
+        processed={"ammo_first_stage": 0},
+    )
+    card = summary(plugin)
+    source, = card["sources"]
+    assert source["id"] == "vehicle" and source["status"] == "ready"
+    assert source["age_seconds"] == pytest.approx(0.2)
+    assert next(row for row in card["facts"] if row["id"] == "ammo_first_stage")["value"] == 12
+    assert not damage.keys() & {row["id"] for row in card["facts"]}
 
 
 @pytest.mark.parametrize("kind", ["future", "missing_fast", "negative_fast", "invalid_timestamp"])

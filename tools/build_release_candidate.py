@@ -35,6 +35,7 @@ INSTALLED_REQUIRED_FILES = (
     "adapters/dispatch_observer.py",
     "adapters/event_delivery.py",
     "ui/panel.tsx",
+    "data_layer/data_process/wt_http.py",
     "data_layer/data_process/wt_server.py",
     "i18n/en.json",
     "i18n/zh-CN.json",

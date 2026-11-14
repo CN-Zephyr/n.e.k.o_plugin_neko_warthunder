@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
+from dataclasses import asdict
 
 import pytest
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
@@ -15,19 +16,21 @@ from neko_warthunder.core.safety_guard import SafetyGuard
 from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
+from neko_warthunder.tools.replay_8112_server import ReplayState
 from test_status_reporting import _plugin_for_action_tests
 from wt_processor import TelemetryProcessor
 from wt_telemetry import Indicators, VehicleState
 
 
 def _state(processor, ammo, now=1000, **patch):
-    processed = processor.process(VehicleState(valid=True), Indicators(
+    indicators = Indicators(
         valid=True, army="tank", vehicle_type="synthetic-tank", first_stage_ammo=ammo,
         crew_current=4, crew_total=4,
-    ), now).to_dict()
+    )
+    processed = processor.process(VehicleState(valid=True), indicators, now).to_dict()
     payload = {"state": "in_battle", "in_battle": True, "domain": "ground", "timestamp": now,
                "battle_id": "synthetic-battle", "life_index": 1,
-               "vehicle": {"valid": True}, "indicators": {"valid": True}, "processed": processed}
+               "vehicle": {"valid": True}, "indicators": asdict(indicators), "processed": processed}
     payload.update(patch)
     return parse_telemetry(payload)
 
@@ -65,6 +68,187 @@ def _evaluate(plugin, moment, processor, ammo, now, **patch):
 
 def _ammo_outputs(plugin):
     return [item for item in plugin.pushed_messages if item["metadata"]["event_id"].startswith("ground_ammo_")]
+
+
+def _sample_meta(count, sample_timestamp, *, status="ready", life=1, age=0):
+    return {"fast": {"age_sec": 0}, "ground_indicators": {
+        "status": status, "count": count, "age_sec": age, "sample_timestamp": sample_timestamp,
+        "battle_id": "synthetic-battle", "life_index": life,
+    }}
+
+
+@pytest.mark.parametrize("with_source", [False, True])
+def test_repeated_read_does_not_confirm_low_ammo_but_equal_new_samples_do(with_source):
+    processor, engine = TelemetryProcessor(), _engine()
+    baseline = _state(processor, 12)
+    first_meta = _sample_meta(1, 1001) if with_source else {}
+    first = _state(processor, 3, 1001, meta=first_meta)
+    repeat = (_state(processor, 3, 1001.2, meta=_sample_meta(1, 1001, age=0.2))
+              if with_source else first)
+    second_meta = _sample_meta(2, 1002) if with_source else {}
+    second = _state(processor, 3, 1002, meta=second_meta)
+
+    assert engine.feed(baseline, first) == []
+    assert engine.feed(first, repeat) == []
+    assert [event.event_id for event in engine.feed(repeat, second)] == ["ground_ammo_low"]
+
+
+@pytest.mark.parametrize(("status", "sample_life", "sample_age"), [
+    ("held", 2, 0.4), ("unavailable", 2, 0.4), ("ready", 1, 0.4), ("ready", 2, 5.0),
+])
+def test_unusable_sample_breaks_low_ammo_confirmation(status, sample_life, sample_age):
+    processor, engine = TelemetryProcessor(), _engine()
+    baseline = _state(processor, 12)
+    first = _state(processor, 3, 1001, life_index=2, meta=_sample_meta(1, 1001, life=2))
+    unusable = _state(processor, 3, 1001.4, life_index=2,
+                      meta=_sample_meta(1, 1001, status=status, life=sample_life, age=sample_age))
+    second = _state(processor, 3, 1002, life_index=2, meta=_sample_meta(2, 1002, life=2))
+    third = _state(processor, 3, 1003, life_index=2, meta=_sample_meta(3, 1003, life=2))
+
+    assert engine.feed(baseline, first) == []
+    assert engine.feed(first, unusable) == []
+    assert engine.feed(unusable, second) == []
+    assert [event.event_id for event in engine.feed(second, third)] == ["ground_ammo_low"]
+
+
+def test_repeated_clear_sample_does_not_rearm_low_ammo():
+    processor, engine = TelemetryProcessor(), _engine()
+    baseline = _state(processor, 12)
+    first = _state(processor, 3, 1001, meta=_sample_meta(1, 1001))
+    second = _state(processor, 3, 1002, meta=_sample_meta(2, 1002))
+    clear = _state(processor, 12, 1003, meta=_sample_meta(3, 1003))
+    clear_repeat = _state(processor, 12, 1003.2, meta=_sample_meta(3, 1003, age=0.2))
+    low_again = _state(processor, 3, 1004, meta=_sample_meta(4, 1004))
+    continued_low = _state(processor, 3, 1005, meta=_sample_meta(5, 1005))
+
+    assert engine.feed(baseline, first) == []
+    assert [event.event_id for event in engine.feed(first, second)] == ["ground_ammo_low"]
+    assert engine.feed(second, clear) == []
+    assert engine.feed(clear, clear_repeat) == []
+    assert engine.feed(clear_repeat, low_again) == []
+    assert engine.feed(low_again, continued_low) == []
+
+
+@pytest.mark.parametrize("unusable", ["held", "previous_life"])
+def test_pending_low_ammo_retry_needs_fresh_sample_from_original_life(monkeypatch, unusable):
+    plugin, moment = _runtime(monkeypatch)
+    processor = TelemetryProcessor()
+    push = plugin.push_message
+
+    def fail(**kwargs):
+        if kwargs["metadata"]["event_id"] == "ground_ammo_low":
+            raise RuntimeError("synthetic failure")
+        return push(**kwargs)
+
+    plugin.push_message = fail
+    _evaluate(plugin, moment, processor, 12, 1000, meta=_sample_meta(1, 1000))
+    _evaluate(plugin, moment, processor, 3, 1001, meta=_sample_meta(2, 1001))
+    _evaluate(plugin, moment, processor, 3, 1002, meta=_sample_meta(3, 1002))
+    assert plugin._pending_dispatch_event.event_id == "ground_ammo_low"
+
+    plugin.push_message = push
+    if unusable == "held":
+        _evaluate(plugin, moment, processor, 3, 1003, meta=_sample_meta(3, 1002, status="held", age=1))
+    else:
+        _evaluate(plugin, moment, processor, 3, 1003, life_index=2, meta=_sample_meta(4, 1003, life=2))
+    assert plugin._pending_dispatch_event is None
+    assert _ammo_outputs(plugin) == []
+    assert "ground_ammo_low" not in plugin.arbiter._last_fired
+
+
+def test_held_low_ammo_cannot_claim_buffer_after_rate_limit(monkeypatch):
+    plugin, moment = _runtime(monkeypatch)
+    plugin.cfg.global_rate_limit_seconds = 2
+    processor = TelemetryProcessor()
+    _evaluate(plugin, moment, processor, 12, 1000, meta=_sample_meta(1, 1000))
+    _evaluate(plugin, moment, processor, 3, 1001, meta=_sample_meta(2, 1001))
+    plugin.safety.mark_output(critical=False, now=1001)
+    _evaluate(plugin, moment, processor, 3, 1002, meta=_sample_meta(3, 1002))
+    assert plugin.arbiter._window_best.event_id == "ground_ammo_low"
+
+    _evaluate(plugin, moment, processor, 3, 1003, meta=_sample_meta(3, 1002, status="held", age=1))
+    assert plugin.arbiter._window_best is None
+    assert _ammo_outputs(plugin) == []
+
+
+def test_held_legacy_replay_frame_cannot_claim_buffer_when_the_panel_expires(monkeypatch):
+    plugin, moment = _runtime(monkeypatch)
+    plugin.cfg.global_rate_limit_seconds = 7
+    processor = TelemetryProcessor()
+    frames = [_state(processor, ammo, ts).raw for ts, ammo in [(10, 12), (11, 3), (12, 3)]]
+    replay = ReplayState(frames, clock=lambda: moment[0])
+
+    for now in (1000, 1001, 1002):
+        moment[0] = now
+        previous, plugin.state = plugin.state, parse_telemetry(replay.current_payload())
+        if now == 1001:
+            plugin.safety.mark_output(critical=False, now=now)
+        plugin._evaluate(previous, plugin.state)
+    assert plugin.arbiter._window_best.event_id == "ground_ammo_low"
+
+    moment[0] = 1008  # End of the rate-limit window, but six seconds after the last replay frame.
+    previous, plugin.state = plugin.state, parse_telemetry(replay.current_payload())
+    assert plugin.state.timestamp == previous.timestamp and plugin.state.age_seconds == 6
+    assert asyncio.run(plugin.dashboard_context())["ground_status"]["status"] == "stale"
+    plugin._evaluate(previous, plugin.state)
+    assert plugin.arbiter._window_best is None
+    assert _ammo_outputs(plugin) == []
+
+
+def test_legacy_replay_ammo_buffer_cannot_cross_a_respawn(monkeypatch):
+    plugin, moment = _runtime(monkeypatch)
+    plugin.cfg.global_rate_limit_seconds = 3
+    plugin.cfg.broadcast_categories = {"lifecycle": False}
+    processor = TelemetryProcessor()
+    frames = [_state(processor, ammo, ts, life_index=life).raw
+              for ts, ammo, life in [(10, 12, 1), (11, 3, 1), (12, 3, 1), (13, 3, 2)]]
+    replay = ReplayState(frames, clock=lambda: moment[0])
+    plugin.safety.mark_output(critical=False, now=1000)
+
+    for now in (1000, 1001, 1002):
+        moment[0] = now
+        previous, plugin.state = plugin.state, parse_telemetry(replay.current_payload())
+        plugin._evaluate(previous, plugin.state)
+    assert plugin.arbiter._window_best.event_id == "ground_ammo_low"
+
+    moment[0] = 1003
+    previous, plugin.state = plugin.state, parse_telemetry(replay.current_payload())
+    assert plugin.state.life_index == 2 and plugin.state.flag("ammo_low")
+    assert plugin.state.age_seconds == 0
+    plugin._evaluate(previous, plugin.state)
+    assert plugin.arbiter._window_best is None
+    assert _ammo_outputs(plugin) == []
+
+
+@pytest.mark.parametrize(("event_id", "flag", "reason"), [
+    ("ground_ammo_low", "ammo_low", "ground_ammo_condition_cleared"),
+    ("ground_ammo_empty", "ammo_empty", "ground_ammo_condition_cleared"),
+    ("ground_laser_warning", "laser_warning", "ground_laser_condition_cleared"),
+    ("ground_crew_loss", "crew_loss", "ground_crew_condition_cleared"),
+])
+def test_legacy_arbiter_expires_verifiable_ground_flags_before_event_ttl(event_id, flag, reason):
+    cfg = C.WtConfig(dry_run=False, ground_status_real_output_enabled=True)
+    state = _state(TelemetryProcessor(), 3, 1000)
+    state.flags = {flag: True}
+    event = C.BattleEvent(event_id, ts=1005, payload={"domain": "ground"})
+    chosen, chain = Arbiter(SafetyGuard(cfg)).decide([event], C.IN_FLIGHT, 1005, current_state=state)
+    assert chosen is None
+    assert any(record["reason"] == reason for record in chain)
+
+
+@pytest.mark.parametrize("life", [1, 2])
+def test_confirmed_low_ammo_candidate_is_bound_to_its_life(life):
+    processor, engine = TelemetryProcessor(), _engine()
+    baseline = _state(processor, 12)
+    first = _state(processor, 3, 1001, meta=_sample_meta(1, 1001))
+    second = _state(processor, 3, 1002, meta=_sample_meta(2, 1002))
+    current = _state(processor, 3, 1003, life_index=life, meta=_sample_meta(3, 1003, life=life))
+    assert engine.feed(baseline, first) == []
+    event, = engine.feed(first, second)
+
+    cfg = C.WtConfig(dry_run=False, ground_status_real_output_enabled=True)
+    chosen, _ = Arbiter(SafetyGuard(cfg)).decide([event], C.IN_FLIGHT, 1003, current_state=current)
+    assert chosen is (event if life == 1 else None)
 
 
 def test_low_requires_two_frames_emits_once_and_rearms_after_resupply():
@@ -213,6 +397,47 @@ def test_full_pipeline_cancels_buffer_after_resupply(monkeypatch):
     _evaluate(plugin, moment, processor, 12, 1003)
     assert plugin.arbiter._window_best is None
     assert _ammo_outputs(plugin) == []
+
+
+def test_indicators_probe_grace_does_not_confirm_cached_ammo(monkeypatch):
+    server = importlib.import_module("wt_server")
+    plugin, moment = _runtime(monkeypatch)
+
+    class Client:
+        ammo = 12
+        probe_ok = True
+
+        def get_indicators_with_status(self):
+            if not self.probe_ok:
+                return False, server.ConnectionState.OFFLINE, server.Indicators(), server.MapInfo()
+            return (True, server.ConnectionState.IN_BATTLE,
+                    server.Indicators(valid=True, army="tank", vehicle_type="synthetic-tank",
+                                      first_stage_ammo=self.ammo, crew_current=4, crew_total=4),
+                    server.MapInfo(valid=True))
+
+        def get_state_with_status(self):
+            return True, server.VehicleState(valid=False)
+
+    client = Client()
+    service = server.TelemetryService(client)
+    service._state = server.ConnectionState.IN_BATTLE
+    service._battle_entry_ts = service._life_entry_ts = 100
+    service._battle_id, service._life_index = "synthetic-battle", 1
+    for now, ammo, probe_ok in [(1000, 12, True), (1001, 3, True), (1001.4, 3, False),
+                                 (1002, 3, True), (1003, 3, True)]:
+        moment[0] = now
+        client.ammo, client.probe_ok = ammo, probe_ok
+        service._poll_fast()
+        previous, current = plugin.state, parse_telemetry(service.get_snapshot())
+        plugin.state = current
+        if not probe_ok:
+            assert current.in_battle and current.timestamp == previous.timestamp
+        if ammo == 3:
+            assert current.flag("ammo_low")
+        plugin._evaluate(previous, current)
+        if now < 1003:
+            assert _ammo_outputs(plugin) == []
+    assert [item["metadata"]["event_id"] for item in _ammo_outputs(plugin)] == ["ground_ammo_low"]
 
 
 def test_service_outage_and_same_vehicle_respawn_cannot_reuse_old_ammo_baseline(monkeypatch):

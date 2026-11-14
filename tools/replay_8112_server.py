@@ -7,6 +7,10 @@ Usage:
 The server intentionally prints only aggregate/status lines. Raw telemetry,
 combat feed, HUD text, chat, and award text are returned to the local plugin but
 are not logged by this tool.
+
+Ground recordings play on the captured observation timeline. Each sample keeps
+its identity and ages in wall-clock seconds, including while the last frame is held.
+For recorder sessions, the adjacent events stream preserves probe interruptions between frames.
 """
 
 from __future__ import annotations
@@ -16,17 +20,39 @@ import bisect
 import copy
 import gzip
 import json
+import math
 import pathlib
+import re
 import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 JsonDict = dict[str, Any]
 Clock = Callable[[], float]
+_GROUND_FRAME_FALLBACK_INTERVAL = 1.0
+_GROUND_OFFLINE_GRACE_SECONDS = 1.0
+_RECORDER_FRAME_NAME = re.compile(r"frames\.(\d+)\.jsonl(?:\.gz)?")
+
+
+class CapturedFrame(dict[str, Any]):
+    """Payload with the recorder's observation time kept outside the HTTP body."""
+
+    def __init__(self, payload: JsonDict, observed_at: float) -> None:
+        super().__init__(payload)
+        self.observed_at = observed_at
+
+
+class RecordedFrames(list[JsonDict]):
+    """Frames with optional same-session probe failure times kept off the HTTP payload."""
+
+    def __init__(self, frames: list[JsonDict], probe_failures: tuple[float, ...]) -> None:
+        super().__init__(frames)
+        self.probe_failures = probe_failures
+
 
 _INTERFERENCE_WINDOWS: tuple[JsonDict, ...] = (
     {
@@ -63,17 +89,21 @@ def _read_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _load_jsonl(path: pathlib.Path) -> list[JsonDict]:
-    rows: list[JsonDict] = []
-    with (gzip.open(path, "rt", encoding="utf-8") if path.suffix == ".gz" else path.open("rt", encoding="utf-8")) as f:
+def _iter_jsonl(path: pathlib.Path, *, skip_invalid: bool = False) -> Iterator[JsonDict]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8", errors="replace" if skip_invalid else "strict") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                if skip_invalid:
+                    continue
+                raise
             if isinstance(row, dict):
-                rows.append(row)
-    return rows
+                yield row
 
 
 def _load_json(path: pathlib.Path) -> list[JsonDict]:
@@ -85,6 +115,15 @@ def _load_json(path: pathlib.Path) -> list[JsonDict]:
     return []
 
 
+def _recorder_frame_files(directory: pathlib.Path) -> list[pathlib.Path]:
+    files: dict[int, pathlib.Path] = {}
+    for path in sorted(directory.glob("frames.*.jsonl*")):
+        if (match := _RECORDER_FRAME_NAME.fullmatch(path.name)) and path.is_file():
+            # Compression can briefly leave both copies of the same segment.
+            files[int(match[1])] = path
+    return [files[number] for number in sorted(files)]
+
+
 def discover_capture_file(path: pathlib.Path) -> pathlib.Path:
     """Resolve a capture file or a sample root directory to one telemetry file."""
     path = path.resolve()
@@ -92,6 +131,10 @@ def discover_capture_file(path: pathlib.Path) -> pathlib.Path:
         return path
     if not path.is_dir():
         raise FileNotFoundError(str(path))
+
+    recorder_frames = _recorder_frame_files(path)
+    if recorder_frames:
+        return recorder_frames[0]
 
     preferred = sorted(path.glob("captures/*/processed_8112.jsonl"))
     if preferred:
@@ -118,25 +161,169 @@ def extract_payload(row: JsonDict) -> JsonDict | None:
 
 
 def load_frames(path: pathlib.Path) -> list[JsonDict]:
-    path = discover_capture_file(path)
-    rows = _load_jsonl(path) if ".jsonl" in path.name else _load_json(path)
-    frames = [payload for row in rows if (payload := extract_payload(row)) is not None]
+    source = discover_capture_file(path)
+    chunks = _recorder_frame_files(source.parent) if path.resolve() == source.parent else []
+    frames = []
+    for chunk in chunks or [source]:
+        rows = _iter_jsonl(chunk) if ".jsonl" in chunk.name else _load_json(chunk)
+        for row in rows:
+            payload = extract_payload(row)
+            if payload is None:
+                continue
+            observed_at = _num(row.get("ts")) if payload is row.get("data") else None
+            frames.append(CapturedFrame(payload, observed_at) if observed_at is not None and observed_at > 0 else payload)
     if not frames:
-        raise ValueError(f"no telemetry frames in {path}")
-    return frames
+        raise ValueError(f"no telemetry frames in {source}")
+    probe_failures = _probe_failure_times(source.parent) if any(_ground_sample(frame) for frame in frames) else ()
+    return RecordedFrames(frames, probe_failures) if probe_failures else frames
 
 
 def _num(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _probe_failure_times(directory: pathlib.Path) -> tuple[float, ...]:
+    for name in ("events.jsonl.gz", "events.jsonl"):
+        path = directory / name
+        if path.is_file():
+            break
+    else:
+        return ()
+    failures: set[float] = set()
+    try:
+        for event in _iter_jsonl(path, skip_invalid=True):
+            if event.get("_event") == "probe_failure_started":
+                timestamp = _num(event.get("ts"))
+                if timestamp is not None and timestamp > 0:
+                    failures.add(timestamp)
+    except (OSError, EOFError):
+        # An optional log may be incomplete while recording or being compressed.
+        pass
+    return tuple(sorted(failures))
 
 
 def _frame_timestamp(frame: JsonDict, fallback: float) -> float:
     return _num(frame.get("timestamp")) or fallback
+
+
+def _ground_sample(frame: JsonDict) -> JsonDict | None:
+    meta = frame.get("meta")
+    sample = meta.get("ground_indicators") if isinstance(meta, dict) else None
+    return sample if isinstance(sample, dict) else None
+
+
+def _is_ground_frame(frame: JsonDict) -> bool:
+    domain = frame.get("domain")
+    if domain:
+        return domain == "ground"
+    if frame.get("in_battle") is not True:
+        return False
+    indicators = frame.get("indicators")
+    return (isinstance(indicators, dict) and indicators.get("army") == "tank"
+            and indicators.get("valid") is True)
+
+
+def _observed_at(frame: JsonDict) -> float:
+    timestamp = _num(frame.get("timestamp")) or 0.0
+    if isinstance(frame, CapturedFrame):
+        # The wrapper uses millisecond precision and can round just below the source timestamp.
+        return max(frame.observed_at, timestamp)
+    if timestamp <= 0:
+        return 0.0
+    meta = frame.get("meta")
+    fast = meta.get("fast") if isinstance(meta, dict) else None
+    fast_age = _num(fast.get("age_sec")) if isinstance(fast, dict) else None
+    observed = timestamp + max(0.0, fast_age or 0.0)
+    sample = _ground_sample(frame)
+    if sample is not None:
+        sample_time = _num(sample.get("sample_timestamp"))
+        age = _num(sample.get("age_sec"))
+        if sample_time is not None and 0 < sample_time <= timestamp and age is not None and age >= 0:
+            observed = max(observed, sample_time + age)
+    return observed
+
+
+def _ground_observation_times(frames: list[JsonDict]) -> list[float]:
+    times = [_observed_at(frame) for frame in frames]
+    first_index = next((index for index, timestamp in enumerate(times) if timestamp > 0), 0)
+    if first_index:
+        first = times[first_index]
+        next_time = next((timestamp for timestamp in times[first_index + 1:] if timestamp > first), None)
+        # Initial offline polls can lack a clock entirely. Estimate only their spacing,
+        # using at most one second per row so a long gap cannot delay the recording start.
+        interval = _GROUND_FRAME_FALLBACK_INTERVAL
+        if next_time is not None:
+            interval = min(interval, next_time - first)
+        for index in range(first_index):
+            times[index] = first - (first_index - index) * interval
+    return times
+
+
+def _is_active_tank_frame(frame: JsonDict) -> bool:
+    indicators = frame.get("indicators")
+    return (_is_ground_frame(frame) and frame.get("state") == "in_battle"
+            and frame.get("in_battle") is True and not frame.get("dead") and not frame.get("replay")
+            and isinstance(indicators, dict) and indicators.get("valid") is True
+            and indicators.get("army") == "tank")
+
+
+def _legacy_ground_segments(frames: list[JsonDict]) -> list[tuple[int, bool] | None]:
+    """Record each continuous tank span and flag samples carried over from an earlier span."""
+    segments: list[tuple[int, bool] | None] = []
+    segment = -1
+    latest_sample = previous_segment_sample = 0.0
+    for frame in frames:
+        if frame.get("life_index") is None and _ground_sample(frame) is None and _is_active_tank_frame(frame):
+            if not segments or segments[-1] is None:
+                segment += 1
+                previous_segment_sample = latest_sample
+            timestamp = _frame_timestamp(frame, 0.0)
+            latest_sample = max(latest_sample, timestamp)
+            segments.append((segment, 0 < timestamp <= previous_segment_sample))
+        else:
+            segments.append(None)
+    return segments
+
+
+def _modern_ground_boundaries(
+    frames: list[JsonDict], probe_failures: tuple[float, ...],
+) -> list[tuple[int, int] | None]:
+    """Carry the latest recorded interruption and loss of instruments to the next ready frame."""
+    boundaries: list[tuple[int, int] | None] = []
+    interruption = unavailable = seen_probe_failures = 0
+    for position, frame in enumerate(frames, start=1):
+        sample = _ground_sample(frame)
+        status = None
+        if sample is not None and _is_active_tank_frame(frame):
+            battle, life, count = sample.get("battle_id"), sample.get("life_index"), sample.get("count")
+            timestamp, age = sample.get("sample_timestamp"), sample.get("age_sec")
+            if (isinstance(battle, str) and battle and battle == frame.get("battle_id")
+                    and type(life) is int and life > 0 and life == frame.get("life_index")
+                    and type(count) is int and count > 0
+                    and type(timestamp) in (int, float) and 0 < timestamp <= _frame_timestamp(frame, 0.0)
+                    and type(age) in (int, float) and 0 <= age < math.inf):
+                status = sample.get("status")
+                if status == "ready":
+                    # Recovery is logged after the successful request starts.
+                    # Compare failure starts with the original instrument clock.
+                    observed_failures = bisect.bisect_right(probe_failures, timestamp)
+                    if observed_failures > seen_probe_failures:
+                        interruption = position
+                        seen_probe_failures = observed_failures
+        if status == "ready":
+            boundaries.append((interruption, unavailable))
+        else:
+            interruption = position
+            if status != "held":
+                unavailable = position
+            boundaries.append(None)
+    return boundaries
 
 
 def _deep_merge(dst: JsonDict, patch: JsonDict) -> JsonDict:
@@ -212,7 +399,10 @@ class ReplayState:
             raise ValueError("end_mode must be 'hold' or 'offline'")
         self.frames = [copy.deepcopy(frame) for frame in frames]
         self.source = str(source)
-        self.speed = max(0.01, float(speed))
+        rate = float(speed)
+        if not math.isfinite(rate):
+            raise ValueError("speed must be finite")
+        self.speed = max(0.01, rate)
         self.loop = bool(loop)
         self.refresh_timestamps = bool(refresh_timestamps)
         self.identity_name = player_name.strip()
@@ -223,20 +413,41 @@ class ReplayState:
         self.clock = clock
         self._lock = threading.Lock()
         self._started_at = self.clock()
-        first_ts = _frame_timestamp(self.frames[0], 0.0)
-        self._offsets = [max(0.0, _frame_timestamp(frame, first_ts) - first_ts) for frame in self.frames]
-        self._duration = self._offsets[-1] if self._offsets else 0.0
+        self._ground_replay = any(_is_ground_frame(frame) for frame in self.frames)
+        self._ground_segments = _legacy_ground_segments(self.frames) if self._ground_replay else None
+        probe_failures = frames.probe_failures if isinstance(frames, RecordedFrames) else ()
+        self._ground_boundaries = _modern_ground_boundaries(self.frames, probe_failures) if self._ground_replay else None
+        if self._ground_replay:
+            recorded_times = _ground_observation_times(self.frames)
+        else:
+            first = _frame_timestamp(self.frames[0], 0.0)
+            recorded_times = [_frame_timestamp(frame, first) for frame in self.frames]
+        self._recorded_origin = recorded_times[0]
+        self._offsets: list[float] = []
+        offset = 0.0
+        for timestamp in recorded_times:
+            offset = max(offset, timestamp - self._recorded_origin)
+            self._offsets.append(offset)
+        self._duration = self._offsets[-1]
+        self._cycle_duration = self._duration
+        if self.loop and self._ground_replay and self._duration > 0:
+            # Let the last frame play for one recorded interval before the next pass starts.
+            previous_offset = self._offsets[bisect.bisect_left(self._offsets, self._duration) - 1]
+            self._cycle_duration += self._duration - previous_offset
         self._last_elapsed = 0.0
         self._last_index = 0
 
     def elapsed(self) -> float:
-        raw = max(0.0, (self.clock() - self._started_at) * self.speed)
-        if self.loop and self._duration > 0:
-            elapsed = raw % self._duration
-        else:
-            elapsed = raw
+        elapsed, _ = self._playback_position(self.clock())
         self._last_elapsed = elapsed
         return elapsed
+
+    def _playback_position(self, now: float) -> tuple[float, int]:
+        raw = max(0.0, (now - self._started_at) * self.speed)
+        if self.loop and self._cycle_duration > 0:
+            cycle, elapsed = divmod(raw, self._cycle_duration)
+            return elapsed, int(cycle)
+        return raw, 0
 
     def set_identity(self, name: str) -> JsonDict:
         with self._lock:
@@ -277,9 +488,10 @@ class ReplayState:
 
     def current_payload(self) -> JsonDict:
         with self._lock:
-            elapsed = self.elapsed()
+            now = self.clock()
+            elapsed, cycle = self._playback_position(now)
+            self._last_elapsed = elapsed
             if self.end_mode == "offline" and self._is_ended(elapsed):
-                now = self.clock()
                 self._last_index = len(self.frames) - 1
                 payload = self._offline_payload(now)
                 self._apply_identity(payload)
@@ -287,10 +499,23 @@ class ReplayState:
 
             index = self._index_for_elapsed(elapsed)
             self._last_index = index
-            payload = copy.deepcopy(self.frames[index])
-            now = self.clock()
+            payload = copy.deepcopy(dict(self.frames[index]))
             if self.refresh_timestamps:
-                self._refresh_payload_time(payload, now)
+                if self._ground_replay and (_is_ground_frame(payload) or payload.get("in_battle") is not True):
+                    self._rebase_ground_time(payload, now, cycle, self._offsets[index])
+                else:
+                    self._refresh_payload_time(payload, now)
+                if self._ground_replay and cycle > 0 and payload.get("in_battle") is True:
+                    self._mark_replay_cycle(payload, cycle)
+            if self._ground_segments is not None and (ground := self._ground_segments[index]) is not None:
+                segment, held = ground
+                meta = payload.get("meta")
+                if not isinstance(meta, dict):
+                    meta = payload["meta"] = {}
+                meta["replay_ground_segment"] = [cycle, segment]
+                meta["replay_ground_held"] = held
+            if self._ground_boundaries is not None and (boundary := self._ground_boundaries[index]) is not None:
+                payload["meta"]["replay_ground_boundaries"] = [cycle, *boundary]
             self._apply_scenario(payload, elapsed)
             self._apply_identity(payload)
             self._apply_ownership_inference(payload)
@@ -304,7 +529,11 @@ class ReplayState:
         return max(0, min(index, len(self.frames) - 1))
 
     def _is_ended(self, elapsed: float) -> bool:
-        return not self.loop and self._duration > 0 and elapsed > self._duration
+        end = self._duration
+        if self._ground_replay and self.end_mode == "offline":
+            # Leave the last sample observable even when capture frames play faster than HTTP polling.
+            end += _GROUND_OFFLINE_GRACE_SECONDS * self.speed
+        return not self.loop and end > 0 and elapsed > end
 
     def _offline_payload(self, now: float) -> JsonDict:
         timestamp = now if self.refresh_timestamps else _frame_timestamp(self.frames[-1], now)
@@ -332,6 +561,45 @@ class ReplayState:
             fast = meta.get("fast")
             if isinstance(fast, dict):
                 fast["age_sec"] = 0.0
+
+    def _rebase_ground_time(self, payload: JsonDict, now: float, cycle: int, offset: float) -> None:
+        cycle_start = self._started_at + cycle * self._cycle_duration / self.speed
+
+        def rebase(timestamp: float) -> float:
+            return cycle_start + (timestamp - self._recorded_origin) / self.speed
+
+        original_root = _num(payload.get("timestamp"))
+        # Legacy samples use the root timestamp as identity. A held row can share it with the ready row.
+        payload["timestamp"] = (rebase(original_root) if original_root is not None and original_root > 0
+                                else cycle_start + offset / self.speed)
+        meta = payload.get("meta")
+        if not isinstance(meta, dict):
+            meta = payload["meta"] = {}
+        fast = meta.get("fast")
+        if not isinstance(fast, dict):
+            fast = meta["fast"] = {}
+        fast["age_sec"] = max(0.0, now - payload["timestamp"])
+        sample = _ground_sample(payload)
+        if sample is None or sample.get("status") not in ("ready", "held"):
+            return
+        sample_time = _num(sample.get("sample_timestamp"))
+        sample_age = _num(sample.get("age_sec"))
+        if (sample_time is not None and original_root is not None and 0 < sample_time <= original_root
+                and sample_age is not None and sample_age >= 0):
+            sample["sample_timestamp"] = rebase(sample_time)
+            sample["age_sec"] = max(0.0, now - sample["sample_timestamp"])
+        else:
+            sample.update(status="unavailable", sample_timestamp=None, age_sec=None)
+
+    @staticmethod
+    def _mark_replay_cycle(payload: JsonDict, cycle: int) -> None:
+        # A repeated playback pass is a new session to consumers; keep recorded life/sample numbering.
+        battle = payload.get("battle_id")
+        replay_battle = f"{battle or 'ground'}:replay:{cycle}"
+        payload["battle_id"] = replay_battle
+        sample = _ground_sample(payload)
+        if sample is not None and sample.get("battle_id") == battle and battle:
+            sample["battle_id"] = replay_battle
 
     def _apply_identity(self, payload: JsonDict) -> None:
         if not self.identity_name:
@@ -543,7 +811,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     source = discover_capture_file(args.sample)
-    frames = load_frames(source)
+    frames = load_frames(args.sample)
     scenario = _load_scenario(args.scenario)
     state = ReplayState(
         frames,

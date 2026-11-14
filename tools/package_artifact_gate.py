@@ -20,6 +20,7 @@ REQUIRED_PLUGIN_FILES = (
     "adapters/dispatch_observer.py",
     "adapters/event_delivery.py",
     "ui/panel.tsx",
+    "data_layer/data_process/wt_http.py",
     "data_layer/data_process/wt_server.py",
     "data_layer/data_process/vehicle_profiles.json",
     "i18n/en.json",

@@ -82,6 +82,51 @@ def test_other_domains_do_not_show_naval_card(monkeypatch, domain):
     assert _facts(plugin) is None
 
 
+def test_naval_spawn_marker_enriches_unknown_domain_dashboard(monkeypatch):
+    service, client, moment = _service(monkeypatch)
+    service._indicators = type(service._indicators)(valid=False)
+    client.objects += [MapObject(type="respawn_base_destroyer", icon="respawn_base_destroyer")]
+    service._poll_map(service._battle_generation)
+    payload = service.get_snapshot()
+    payload["combat"] = {
+        "self": {"source": "manual", "name": "private-sentinel"},
+        "my": {"kills": 2, "deaths": 0, "name": "private-sentinel"},
+        "feed": [{"raw": "private-sentinel"}],
+    }
+    plugin = _plugin_for_action_tests()
+    plugin.state = parse_telemetry(payload)
+
+    dashboard = asyncio.run(plugin.dashboard_context())
+    assert dashboard["domain"] == "unknown"
+    assert dashboard["naval_status"] is None
+    assert dashboard["naval_detection"]["source_status"] == "unconfirmed_naval"
+    facts = dashboard["map_status"]
+    assert facts["battlefield"] == "naval"
+    assert facts["personal_combat"] == {"kills": 2, "deaths": 0}
+    assert facts["enemy_count"] == 2
+    assert "private-sentinel" not in json.dumps(facts)
+    assert plugin.pushed_messages == []
+
+    plugin.state.combat = {**plugin.state.combat, "self": {"source": "manual", "name": "changed"}}
+    assert "personal_combat" not in asyncio.run(plugin.dashboard_context())["map_status"]
+
+    moment[0] += 6
+    facts = asyncio.run(plugin.dashboard_context())["map_status"]
+    assert facts["status"] == "stale"
+    assert "battlefield" not in facts
+    assert "personal_combat" not in facts
+
+
+@pytest.mark.parametrize("obj_type, icon", [
+    ("ground_model", "Destroyer"), ("ground_model", "respawn_base_ship"),
+    ("respawn_base_ship", "none"), ("respawn_base_tank", "respawn_base_tank"),
+])
+def test_unconfirmed_map_card_needs_explicit_naval_spawn_marker(monkeypatch, obj_type, icon):
+    plugin, _ = _plugin(monkeypatch, domain="unknown")
+    plugin.state.raw["map_objects"] = [{"type": obj_type, "icon": icon}]
+    assert "battlefield" not in asyncio.run(plugin.dashboard_context())["map_status"]
+
+
 @pytest.mark.parametrize(("patch", "status"), [
     ({"dead": True}, "dead"), ({"replay": True}, "replay"),
     ({"in_battle": False}, "waiting"), ({"state": "offline"}, "offline"),

@@ -102,6 +102,14 @@ class ConditionDetector:
         self._level = "warning"
         self._last_emit_ts = 0.0
 
+    def reset_confirmation(self) -> None:
+        """Discard partial confirmation while retaining the last confirmed condition."""
+        if self._phase == _CONFIRMING_ENTER:
+            self._phase = _ARMED
+        elif self._phase == _CONFIRMING_EXIT:
+            self._phase = _ACTIVE
+        self._count = 0
+
     def mark_delivered(self) -> None:
         """Commit once-per-battle state only after the host accepted output."""
         if self.once_per_battle:

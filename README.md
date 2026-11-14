@@ -2,6 +2,8 @@
 
 2026-11-01：**v0.1.2 已发布**到 [GitHub Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/tag/v0.1.2) 与 N.E.K.O 插件市场，公开目录为 approved / stable / verification passed。源提交 cdc5063；正式下载包 hash、74 个提交源码文件和隔离安装 smoke 已核对。默认输出边界保持；本轮未安装或重启实际宿主，游戏/模型/TTS/Electron 验收缺口保留。详见[发布回执与已知限制](docs/release-v0.1.2.md)。
 
+[v0.1.3 候选版与真机验收](docs/release-v0.1.3.md)记录过热归因的离线复验及四域语音、原生 Electron 的现场验收进度。
+
 此前提示词优化轮（2026-11-01）：常驻场景、每事件要求、风格元数据与直出短句统一为不责怪、不嘲讽、不催战绩，紧急提醒保留必要动作。最新完整 **1571 passed**（新增41，定向142），Ruff、模式边界和发布默认值检查通过；模型语气/TTS尚未试听，真实输出边界不变。该轮同步与生效状态见[优化记录](docs/低压力陪伴提示词-20261101.md)，未 commit、push、发布或重建 RC。
 
 此前 2026-10-30 完成聊天活动读取兼容修复，当轮完整 1530 passed；公开 SDK 与隔离跨进程验证、文件同步及未验收范围保留在[历史修复记录](docs/聊天活动读取修复-20261030.md)。
@@ -17,12 +19,25 @@ A2 来源评审的显式 `/state` 油温只读切片已在本次实现，保持�
 
 War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:8112`，把连续遥测整理成 Battle Awareness 事件，再经 Scenario / Arbiter / Safety / Dispatcher 决定是否让猫娘开口。
 
+## 许可证
+
+0N.E.K 有权授权的原创插件代码和文档采用 [GPL-3.0-only](LICENSE)。再分发受许可覆盖的修改版须遵守 GPLv3，并让接收者能获得对应源码。内置数据层、游戏遥测和衍生资料的许可范围见[第三方声明](THIRD_PARTY_NOTICES.md)。
+
 ## 兼容性
 
 - 插件 SDK：`>=0.1.0,<0.3.0`，推荐 `>=0.1.0,<0.2.0`。
 - N.E.K.O 宿主：面板使用 Hosted TSX UI，需要 N.E.K.O `v0.8.0` 或更新版本。
 - 显示环境：支持浅色/深色主题、桌面窗口、窄窗口和低高度窗口；主内容独立滚动，底部播报控制不会覆盖内容。
 - 当前面板以简体中文为主要操作语言；插件名称与简介已提供 8 个宿主 locale，完整面板国际化不属于本轮范围。
+
+## 安装与首次使用
+
+1. 打开 N.E.K.O 的插件管理器，在插件市场搜索「战雷猫娘副驾驶」并安装。也可以从 [GitHub Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/latest) 下载 `.neko-plugin`，在插件管理器导入本地安装包。
+2. 安装后按宿主提示批准插件，在已安装列表启动它并打开面板。进入《战争雷霆》对局或试驾后，概览页会显示战况和遥测连接状态。
+3. 在「诊断」页点「测试开口」试听。这个按钮可以在进游戏前使用。
+4. 想在对局里听提醒时，在「概览」页点「开启战斗播报」。战斗播报默认只记录，重启插件后需要重新开启。陆战乘员和弹药提醒还需单独开启对应配置。
+
+公开版的离线检查、安装验证和待复验项见[版本验收记录](docs/release-v0.1.2.md)。历史实战语音见 [2026-06-23 真机报告](docs/真机测试结果-20260623.md)，最新实战语音结果按[现场验收清单](docs/真机验证-checklist.md#剩余验收矩阵)记录。
 
 ## 当前状态（2026-10-29）
 
@@ -61,15 +76,15 @@ War Thunder 猫娘副驾驶插件 v1。插件只消费本地数据层 HTTP `:811
 
 ## 验证入口
 
-从独立插件仓库 root 运行：
+从独立插件仓库运行联检。预检和发布准备各自保留独有的检查，两个阶段在同一次运行内共享全量 pytest 结果。
 
 ```powershell
-uv run python tools\preflight.py --run
-uv run python tools\release_readiness.py --run
-uv run python tools\build_release_candidate.py
+uv run python "tools/release_readiness.py" --run --with-preflight
 ```
 
-`build_release_candidate.py` 调用宿主官方 release check 构建包，再依次执行 `package_artifact_gate.py`、官方 payload hash verify 和隔离临时安装 smoke；只有全部通过才发布到 `dist`。它不替代源码侧 preflight，也不替代真机 smoke。已有同名文件时需显式加 `--force`，跳过重复 pytest 时需显式加 `--skip-tests`。
+也可分别运行 `tools/preflight.py --run` 或 `tools/release_readiness.py --run`。单独运行任一入口时，它会自行执行全量 pytest。
+
+`build_release_candidate.py` 调用宿主的 release check 构建候选包，校验内容和 payload hash，并执行隔离安装 smoke。刚完成联检且源码未变时，可用 `uv run python "tools/build_release_candidate.py" --skip-tests` 复用前面的测试结果。单独构建时省略 `--skip-tests`。候选包验证和现场语音验收分别记录。
 
 本地大样本汇总是可选慢检查，按需运行：
 

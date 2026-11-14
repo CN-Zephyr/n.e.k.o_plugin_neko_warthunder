@@ -66,7 +66,12 @@ from .core.contracts import (
 from .core.instructions import WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS
 from .core.safety_guard import SafetyGuard
 from .core.scenario import ScenarioResolver
-from .core.telemetry_freshness import naval_map_source
+from .core.telemetry_freshness import (
+    GROUND_SAMPLE_MAX_AGE_SECONDS,
+    ground_indicator_source,
+    legacy_ground_sample_age,
+    naval_map_source,
+)
 from .detectors._base import DetectorEngine
 from .detectors.condition.flight_safety import build_condition_detectors
 from .detectors.discrete.lifecycle import build_discrete_detectors
@@ -1067,33 +1072,40 @@ class NekoWarthunderPlugin(NekoPluginBase):
             return None
         return float(value)
 
-    def _vehicle_status_snapshot(self, s: BattleState) -> dict[str, Any]:
+    def _vehicle_status_snapshot(
+        self, s: BattleState, *, indicators: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Shared read-only availability and source age for vehicle status cards."""
         number = self._status_number
-        raw = s.raw if isinstance(s.raw, dict) else {}
-        meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
-        vehicle_meta = meta.get("vehicle") if isinstance(meta.get("vehicle"), dict) else {}
-        sample_age = number(vehicle_meta.get("age_sec"))
-        sample_age = sample_age if sample_age is not None and sample_age >= 0 else None
         fast_age = max(0.0, number(s.age_seconds) or 0.0)
         timestamp = number(s.timestamp) or 0.0
-        # meta 年龄是在收到快照时计算的；context 读取缓存 BattleState 时仍需继续计龄。
-        # timestamp 是 fast 成功/尝试时间，加 fast 年龄才是该 HTTP 快照的观察时间。
-        elapsed = max(0.0, time.time() - timestamp - fast_age) if timestamp > 0 else 0.0
-        if sample_age is not None:
-            sample_age = round(sample_age + elapsed, 3)
-        stale = max(elapsed, fast_age, sample_age or 0.0) > _VEHICLE_STATUS_MAX_AGE_SECONDS
+        now = time.time()
+        if indicators is not None:
+            sample_age = legacy_ground_sample_age(s, now)
+            valid = sample_age is not None
+            stale = sample_age is not None and sample_age >= GROUND_SAMPLE_MAX_AGE_SECONDS
+            sample_age = round(sample_age, 3) if sample_age is not None else None
+        else:
+            raw = s.raw if isinstance(s.raw, dict) else {}
+            meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+            vehicle_meta = meta.get("vehicle") if isinstance(meta.get("vehicle"), dict) else {}
+            sample_age = number(vehicle_meta.get("age_sec"))
+            # The source age is relative to the HTTP snapshot. Include time spent in the plugin cache.
+            elapsed = max(0.0, now - timestamp - fast_age) if timestamp > 0 else 0.0
+            sample_age = round(sample_age + elapsed, 3) if sample_age is not None and sample_age >= 0 else None
+            valid = s.vehicle_valid
+            stale = max(elapsed, fast_age, sample_age or 0.0) > _VEHICLE_STATUS_MAX_AGE_SECONDS
         if not s.connected or s.conn_state == "offline":
             status = "offline"
         elif s.replay:
             status = "replay"
-        elif not s.in_battle:
+        elif not s.in_battle or (indicators is not None and s.conn_state != "in_battle"):
             status = "waiting"
         elif s.dead:
             status = "dead"
         elif stale:
             status = "stale"
-        elif not s.vehicle_valid:
+        elif not valid:
             status = "unavailable"
         else:
             status = "ready"
@@ -1104,7 +1116,18 @@ class NekoWarthunderPlugin(NekoPluginBase):
         """Read-only, numeric ground facts; never turn missing or stale data into zero."""
         if (s.domain or "").lower() != "ground":
             return None
-        snapshot = self._vehicle_status_snapshot(s)
+        raw = s.raw if isinstance(s.raw, dict) else {}
+        indicators = raw.get("indicators")
+        indicators = indicators if isinstance(indicators, dict) else {}
+        snapshot = self._vehicle_status_snapshot(s, indicators=indicators)
+        source = ground_indicator_source(s, time.time())
+        if source is None:
+            snapshot["sample_timestamp"] = s.timestamp if snapshot["sample_age_seconds"] is not None else None
+        elif snapshot["status"] not in ("offline", "waiting", "dead", "replay"):
+            snapshot = {"status": source.status, "sample_age_seconds": source.age_seconds,
+                        "sample_timestamp": source.timestamp}
+        else:
+            snapshot["sample_timestamp"] = None
 
         def integer(value: Any, *, signed: bool = False) -> int | None:
             value = self._status_number(value)
@@ -1112,21 +1135,43 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 return None
             return int(value)
 
-        crew_current, crew_total = integer(s.crew_current), integer(s.crew_total)
+        # processed may contain cached facts when the separate /state request fails.
+        crew_current = integer(indicators.get("crew_current"))
+        crew_total = integer(indicators.get("crew_total"))
         if crew_total == 0 or (crew_current is not None and crew_total is not None and crew_current > crew_total):
             crew_current = crew_total = None
+        stabilizer = self._status_number(indicators.get("stabilizer"))
+        gear = self._status_number(indicators.get("gear"))
+        neutral = self._status_number(indicators.get("gear_neutral"))
+        gear_position = self._status_number(gear - neutral) if gear is not None and neutral is not None else None
+        rpm = self._status_number(indicators.get("rpm"))
+        indicator_raw = indicators.get("raw")
+        indicator_raw = indicator_raw if isinstance(indicator_raw, dict) else {}
+
+        def damage(key: str) -> bool | None:
+            value = indicator_raw.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value not in (0, 1):
+                return None
+            return value == 1
+
         facts = {
             "crew_current": crew_current,
             "crew_total": crew_total,
-            "ammo_first_stage": integer(s.ammo_first_stage),
-            "gun_stabilizer": s.gun_stabilizer if isinstance(s.gun_stabilizer, bool) else None,
-            "gear_position": integer(s.gear_position, signed=True),
-            "gunner_state": integer(s.gunner_state),
-            "driver_state": integer(s.driver_state),
-            "laser_warning_state": integer(s.laser_warning_state, signed=True),
+            "ammo_first_stage": integer(indicators.get("first_stage_ammo")),
+            "gun_stabilizer": stabilizer >= 0.5 if stabilizer is not None else None,
+            "gear_position": round(gear_position) if gear_position is not None else None,
+            "speed_kmh": self._status_number(indicators.get("speed")),
+            "engine_rpm": rpm if rpm is not None and rpm >= 0 else None,
+            "gunner_state": integer(indicators.get("gunner_state")),
+            "driver_state": integer(indicators.get("driver_state")),
+            "laser_warning_state": integer(indicators.get("lws"), signed=True),
+            "track_broken": damage("track_broken"),
+            "h_drive_dead": damage("h_drive_dead"),
+            "breach_dead": damage("breach_dead"),
+            "barrel_dead": damage("barrel_dead"),
         }
         return {**snapshot,
-                **{key: value if snapshot["status"] == "ready" else None for key, value in facts.items()}}
+                **{key: value if snapshot["status"] in ("ready", "held") else None for key, value in facts.items()}}
 
     def _helicopter_status_snapshot(self, s: BattleState) -> dict[str, Any] | None:
         """Project helicopter instruments only; no VRS, RPM thresholds or output policy."""
@@ -1205,8 +1250,32 @@ class NekoWarthunderPlugin(NekoPluginBase):
             "nearest_distance_m": distance if contact_known else None,
             "nearest_bearing_deg": bearing if contact_known and bearing is not None and 0 <= bearing < 360 else None,
         }
-        return {"status": status, "sample_age_seconds": sample_age,
-                **{key: value if status == "ready" else None for key, value in facts.items()}}
+        result = {"status": status, "sample_age_seconds": sample_age,
+                  **{key: value if status == "ready" else None for key, value in facts.items()}}
+        if status != "ready" or not s.battle_id:
+            return result
+
+        # 舰艇重生点只说明战场类型。自身载具域仍由独立的仪表数据决定。
+        objects = raw.get("map_objects")
+        naval_battlefield = isinstance(objects, list) and any(
+            isinstance(obj, dict) and obj.get("type") in ("respawn_base_ship", "respawn_base_destroyer")
+            and obj.get("icon") == obj["type"] for obj in objects
+        )
+        if naval_battlefield:
+            result["battlefield"] = "naval"
+        if naval_battlefield or s.domain == "naval":
+            # 昵称切换会先更新面板身份。等下一帧战绩与当前身份一致后再显示。
+            combat = raw.get("combat") if isinstance(raw.get("combat"), dict) else {}
+            identity = combat.get("self")
+            personal = combat.get("my")
+            if (isinstance(identity, dict) and identity.get("source") == "manual"
+                    and identity.get("name") and identity == s.combat.get("self")
+                    and isinstance(personal, dict)):
+                result["personal_combat"] = {
+                    key: personal[key] for key in ("kills", "deaths")
+                    if type(personal.get(key)) is int and personal[key] >= 0
+                }
+        return result
 
     def _naval_detection_snapshot(self, s: BattleState) -> dict[str, Any] | None:
         if s.domain != "naval" and not (s.domain == "unknown" and (s.in_battle or s.situation)):

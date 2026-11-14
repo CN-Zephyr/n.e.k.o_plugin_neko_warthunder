@@ -52,28 +52,23 @@
 from __future__ import annotations
 
 import argparse
-import ipaddress
-import json
 import math
 import os
-import socket
 import sys
 import threading
 import time
 import uuid
 from collections import deque
 from dataclasses import asdict
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
 
 # set_player_name 的“无请求”哨兵（None 是合法值=清除昵称，故需独立哨兵）
 _UNSET = object()
-_ACTION_HEADER = "X-Neko-Warthunder-Action"
 
 if __package__:
     from .wt_events import AwardTracker, KillTracker, NoticeTracker
     from .wt_geo import analyze_situation
+    from .wt_http import _Handler, create_http_server
     from .wt_processor import TelemetryProcessor
     from .wt_proximity import ProximityTracker, resolve_proximity_thresholds
     from .wt_recorder import SessionRecorder
@@ -93,6 +88,7 @@ if __package__:
 else:
     from wt_events import AwardTracker, KillTracker, NoticeTracker
     from wt_geo import analyze_situation
+    from wt_http import _Handler, create_http_server
     from wt_processor import TelemetryProcessor
     from wt_proximity import ProximityTracker, resolve_proximity_thresholds
     from wt_recorder import SessionRecorder
@@ -110,7 +106,6 @@ else:
         vehicle_class_from_indicators,
     )
 
-_CONTENT_TYPE_BY_EXT = {"jpg": "image/jpeg", "png": "image/png"}
 DEFAULT_BIND_HOST = "127.0.0.1"
 
 
@@ -212,6 +207,8 @@ class TelemetryService:
         self._vehicle_sample_ts = 0.0
         self._vehicle_sample_count = 0
         self._indicators = Indicators(valid=False)
+        self._ground_indicators_count = 0
+        self._ground_indicators_sample: dict[str, Any] | None = None
         # Successful naval /indicators samples, independent of fast attempts,
         # /state and map samples. Reuse the existing probe; no extra requests.
         self._naval_indicators_count = 0
@@ -387,6 +384,10 @@ class TelemetryService:
                     self._state is ConnectionState.IN_BATTLE
                     and now - self._probe_failure_since < _PROBE_FAILURE_GRACE_SEC
                 )
+                if keep_previous and self._ground_indicators_sample is not None:
+                    sample = self._ground_indicators_sample
+                    if sample["status"] == "ready":
+                        self._ground_indicators_sample = {**sample, "status": "held"}
             if probe_failure_started:
                 self.recorder.mark({"_event": "probe_failure_started"})
             if keep_previous:
@@ -496,6 +497,7 @@ class TelemetryService:
                 # 按 level 判断紧急程度的下游会读到被抑制掉的假警等级。
                 processed = {**processed, "alerts": [], "flags": {}, "level": "info"}
             self._processed = processed
+            self._update_ground_indicators_locked(ind, instrument_request_ts, now)
             self._update_naval_indicators_locked(probe_ok, ind, now, instrument_context,
                                                 previous_fast_ts, instrument_request_ts)
         # 录制（调试开关）：按记录间隔转存一帧快照；未开启录制时近乎零开销
@@ -504,6 +506,24 @@ class TelemetryService:
     def _naval_instrument_context_locked(self) -> tuple:
         return (self._battle_generation, self._battle_id, self._life_index,
                 self._dead, self._replay, self._indicators.army)
+
+    def _update_ground_indicators_locked(self, ind: Indicators, request_ts: float, now: float) -> None:
+        if self._state is not ConnectionState.IN_BATTLE:
+            return  # Battle exit clears the source in _reset_battle_cache_locked.
+        if ind.valid is not True or ind.army != "tank":
+            if self._ground_indicators_sample is not None:
+                self._ground_indicators_sample = {"status": "unavailable"}
+            return
+        if (self._dead or self._replay or not self._battle_id or not self._life_index
+                or not math.isfinite(request_ts) or not math.isfinite(now) or not 0 < request_ts <= now):
+            self._ground_indicators_sample = {"status": "unavailable"}
+            return
+        self._ground_indicators_count += 1
+        # The probe starts before /map_info and /state. Their latency cannot refresh this age.
+        self._ground_indicators_sample = {
+            "status": "ready", "sample_timestamp": request_ts,
+            "battle_id": self._battle_id, "life_index": self._life_index,
+        }
 
     def _update_naval_indicators_locked(self, probe_ok: bool, ind: Indicators,
                                        now: float, context_before: tuple, previous_ts: float,
@@ -858,6 +878,8 @@ class TelemetryService:
         self._map_sample_ts = 0.0
         self._map_sample_count = 0
         self._map_sample_life_index = None
+        self._ground_indicators_count = 0
+        self._ground_indicators_sample = None
         self._naval_indicators_count = 0
         self._naval_indicators_sample = {"status": "unavailable"}
         self._map_info = MapInfo(valid=False)
@@ -939,28 +961,36 @@ class TelemetryService:
                 hud_events=list(self._hud_events),
                 chat=list(self._chat),
             )
-            data = snap.to_dict()
-            data["replay"] = False
-            data["battle_id"] = self._battle_id
-            data["battle_started_at"] = self._battle_entry_ts
-            data["life_index"] = self._life_index
-            data["confirmed_respawns"] = max(0, (self._life_index or 1) - 1)
             # 阵亡待命态：玩家被击杀后→重生/观战窗口。告警已在 _poll_fast 抑制；这里再把
             # 依赖“自身位置”的态势/接近置空（观战时坐标漂到被观战者，数据失真）。战绩保留
             # （HUD 带全局名字戳，不会被污染，前端仍可展示最终 K/D / 谁击杀了你）。
-            data["dead"] = self._dead
-            data["dead_source"] = self._dead_source
-            data["processed"] = (self._processed if self._processed is not None
-                                 and self._processed.get("vehicle_class") == data["domain"] else None)
-            data["situation"] = None if self._dead else self._situation
-            data["combat"] = self._combat
-            data["hud_notices"] = self._notices
-            data["awards"] = self._awards
-            data["proximity"] = {
-                "thresholds_m": self._proximity_threshold,
-                "events": [] if self._dead or data["domain"] == "unknown" else list(self._proximity_events),
+            extra = {
+                "replay": False,
+                "battle_id": self._battle_id,
+                "battle_started_at": self._battle_entry_ts,
+                "life_index": self._life_index,
+                "confirmed_respawns": max(0, (self._life_index or 1) - 1),
+                "dead": self._dead,
+                "dead_source": self._dead_source,
+                "processed": self._processed,
+                "situation": None if self._dead else self._situation,
+                "combat": self._combat,
+                "hud_notices": self._notices,
+                "awards": self._awards,
+                "proximity": {
+                    "thresholds_m": self._proximity_threshold,
+                    "events": [] if self._dead else list(self._proximity_events),
+                },
+                "meta": self._meta_locked(),
             }
-            data["meta"] = self._meta_locked()
+        # 缓存对象整体替换，累积队列已在锁内复制。递归转换和兵种判断可在锁外完成。
+        data = snap.to_dict()
+        processed = extra["processed"]
+        if processed is not None and processed.get("vehicle_class") != data["domain"]:
+            extra["processed"] = None
+        if data["domain"] == "unknown":
+            extra["proximity"]["events"] = []
+        data.update(extra)
         return data
 
     def get_part(self, key: str) -> Any:
@@ -1041,6 +1071,13 @@ class TelemetryService:
             "age_sec": round(now - self._map_sample_ts, 3) if self._map_sample_ts else None,
             "life_index": self._map_sample_life_index,
         }
+        ground = self._ground_indicators_sample
+        if ground is not None:
+            sample_ts = ground.get("sample_timestamp")
+            out["ground_indicators"] = {
+                **ground, "count": self._ground_indicators_count,
+                "age_sec": round(now - sample_ts, 3) if sample_ts is not None else None,
+            }
         instrument = self._naval_indicators_sample
         sample_ts = instrument.get("sample_timestamp")
         out["naval_indicators"] = {
@@ -1070,232 +1107,8 @@ class TelemetryService:
 
 
 # ---------------------------------------------------------------------------
-# HTTP 请求处理
-# ---------------------------------------------------------------------------
-
-
-class _Handler(BaseHTTPRequestHandler):
-    server_version = "WTTelemetry/2.0"
-
-    @property
-    def service(self) -> TelemetryService:
-        return self.server.service  # type: ignore[attr-defined]
-
-    def _cors(self) -> None:
-        origin = str(self.headers.get("Origin") or "").strip()
-        server = getattr(self, "server", None)
-        allowed_origins = getattr(server, "cors_origins", frozenset()) if server else frozenset()
-        if origin and origin in allowed_origins:
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", _ACTION_HEADER)
-            self.send_header("Vary", "Origin")
-
-    def _host_allowed(self) -> bool:
-        bind_host = str(getattr(self.server, "bind_host", "")).strip().lower()
-        if not _is_loopback_host(bind_host):
-            return True
-        try:
-            request_host = urlparse(f"//{self.headers.get('Host', '')}").hostname or ""
-        except ValueError:
-            return False
-        return _is_loopback_host(request_host)
-
-    def _action_allowed(self) -> bool:
-        if self.headers.get(_ACTION_HEADER) == "1":
-            return True
-        self._send_json({"error": "action_header_required"}, 403)
-        return False
-
-    def _send_json(self, obj: Any, code: int = 200) -> None:
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self._cors()
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _send_bytes(self, data: bytes, content_type: str, code: int = 200) -> None:
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache")
-        self._cors()
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_OPTIONS(self) -> None:
-        if not self._host_allowed():
-            self._send_json({"error": "host_not_allowed"}, 403)
-            return
-        origin = str(self.headers.get("Origin") or "").strip()
-        allowed_origins = getattr(self.server, "cors_origins", frozenset())
-        if origin and origin not in allowed_origins:
-            self._send_json({"error": "origin_not_allowed"}, 403)
-            return
-        self.send_response(204)
-        self._cors()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-    def do_GET(self) -> None:
-        if not self._host_allowed():
-            self._send_json({"error": "host_not_allowed"}, 403)
-            return
-        path = urlparse(self.path).path.rstrip("/") or "/"
-
-        if path in ("/", "/health", "/api/health"):
-            self._send_json(self.service.get_health())
-            return
-
-        if path == "/api/telemetry":
-            self._send_json(self.service.get_snapshot())
-            return
-
-        if path == "/api/processed":
-            self._send_json(self.service.get_part("processed"))
-            return
-
-        if path == "/api/situation":
-            self._send_json(self.service.get_part("situation"))
-            return
-
-        if path in ("/api/kills", "/api/combat"):
-            self._send_json(self.service.get_part("combat"))
-            return
-
-        if path == "/api/identity":
-            # 查看/设置“自己是谁”。?name=昵称 设手动昵称(权威)；?clear=1 清除回退自动。
-            q = parse_qs(urlparse(self.path).query)
-            if ("clear" in q or q.get("name")) and not self._action_allowed():
-                return
-            requested: Any = "(unchanged)"
-            if "clear" in q:
-                self.service.set_player_name(None)
-                requested = None
-            elif q.get("name"):
-                requested = q["name"][0]
-                self.service.set_player_name(requested)
-            identity = self.service.get_identity()
-            self._send_json({
-                "requested": requested,
-                "note": "手动身份立即持久显示；战绩归属将在下一次 events 轮询（≤event-interval）后应用",
-                **identity,
-            })
-            return
-
-        if path == "/api/faction_colors":
-            # 查看/设置小地图敌我颜色。?ally=%23174DFF&enemy=%23FA0C00；颜色过近时 conflict=true。
-            q = parse_qs(urlparse(self.path).query)
-            ally = (q.get("ally") or [None])[0]
-            enemy = (q.get("enemy") or [None])[0]
-            if ally is None and enemy is None:
-                self._send_json(self.service.get_faction_colors())
-                return
-            if not self._action_allowed():
-                return
-            if (ally is not None and parse_hex_color(ally) is None) or (
-                enemy is not None and parse_hex_color(enemy) is None
-            ):
-                self._send_json({"error": "invalid_color", **self.service.get_faction_colors()}, 400)
-                return
-            self._send_json(self.service.set_faction_colors(ally, enemy))
-            return
-
-        if path == "/api/notices":
-            self._send_json(self.service.get_part("hud_notices"))
-            return
-
-        if path == "/api/awards":
-            # 战斗嘉奖（一血/双杀/三杀/连续无伤歼敌等）；?notable=1 仅返回高光子集
-            q = parse_qs(urlparse(self.path).query)
-            awards = self.service.get_part("awards") or {}
-            if q.get("notable"):
-                awards = {**awards, "feed": awards.get("notable", [])}
-            self._send_json(awards)
-            return
-
-        if path == "/api/record":
-            # 调试开关：?on=1 开始转存 / ?on=0 停止 / 无参=查状态
-            q = parse_qs(urlparse(self.path).query)
-            if "on" in q and not self._action_allowed():
-                return
-            rec = self.service.recorder
-            if "on" in q:
-                want = q["on"][0].strip().lower() in ("1", "true", "yes", "on")
-                status = rec.start() if want else rec.stop()
-            else:
-                status = rec.status()
-            self._send_json(status)
-            return
-
-        if path == "/api/proximity":
-            self._send_json(self.service.get_part("proximity"))
-            return
-
-        if path == "/api/alerts":
-            processed = self.service.get_part("processed")
-            alerts = processed.get("alerts", []) if isinstance(processed, dict) else []
-            level = processed.get("level") if isinstance(processed, dict) else None
-            self._send_json({"level": level, "alerts": alerts})
-            return
-
-        if path in ("/api/map.jpg", "/api/map"):
-            data, ext = self.service.get_map()
-            if not data:
-                self._send_json({"error": "no map available"}, 404)
-                return
-            ctype = _CONTENT_TYPE_BY_EXT.get(ext or "", "application/octet-stream")
-            self._send_bytes(data, ctype)
-            return
-
-        subset_keys = {
-            "/api/state": "vehicle",
-            "/api/indicators": "indicators",
-            "/api/map_objects": "map_objects",
-            "/api/map_info": "map_info",
-            "/api/hud": "hud_events",
-            "/api/chat": "chat",
-        }
-        if path in subset_keys:
-            self._send_json(self.service.get_part(subset_keys[path]))
-            return
-
-        self._send_json({"error": "not found", "path": path}, 404)
-
-    def log_message(self, *args: Any) -> None:
-        pass
-
-
-# ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
-
-
-def _is_loopback_host(host: str) -> bool:
-    value = str(host or "").strip().lower()
-    if value == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(value).is_loopback
-    except ValueError:
-        return False
-
-
-def create_http_server(host: str, port: int, *, cors_origins: list[str] | tuple[str, ...] = ()):
-    server_class = ThreadingHTTPServer
-    if ":" in host:
-        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
-            address_family = socket.AF_INET6
-
-        server_class = IPv6ThreadingHTTPServer
-    server = server_class((host, port), _Handler)
-    server.bind_host = host  # type: ignore[attr-defined]
-    server.cors_origins = frozenset(  # type: ignore[attr-defined]
-        str(origin).strip() for origin in cors_origins if str(origin).strip()
-    )
-    return server
 
 
 def main() -> None:

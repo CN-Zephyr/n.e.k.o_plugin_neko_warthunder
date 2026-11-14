@@ -522,6 +522,11 @@ class BattleEvent:
     level: str = "warning"                  # warning / critical（来自数据层 flag 档）
     # Local observation correlation only; excluded from payload, equality and delivery serialization.
     trace_id: str | None = field(default=None, repr=False, compare=False)
+    ground_sample: tuple[str, int, int] | None = field(default=None, repr=False, compare=False)
+    legacy_ground_life: tuple[str, int] | None = field(default=None, repr=False, compare=False)
+    legacy_ground_unidentified: bool = field(default=False, repr=False, compare=False)
+    legacy_ground_replay_segment: tuple[int, int] | None = field(default=None, repr=False, compare=False)
+    ground_replay_boundaries: tuple[int, int, int] | None = field(default=None, repr=False, compare=False)
 
     @property
     def naval_trace_id(self) -> str | None:

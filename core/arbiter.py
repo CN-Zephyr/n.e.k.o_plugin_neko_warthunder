@@ -24,7 +24,15 @@ from .contracts import (
     event_max_age_seconds,
 )
 from .safety_guard import SafetyGuard
-from .telemetry_freshness import helicopter_vrs_active, naval_contact_still_active
+from .telemetry_freshness import (
+    GROUND_SAMPLE_MAX_AGE_SECONDS,
+    ground_indicator_source,
+    helicopter_vrs_active,
+    legacy_ground_replay_segment,
+    legacy_ground_sample_age,
+    modern_ground_replay_boundaries,
+    naval_contact_still_active,
+)
 
 
 @dataclass(frozen=True)
@@ -64,17 +72,17 @@ class Arbiter:
     ) -> tuple[BattleEvent | None, list[dict[str, Any]]]:
         chain: list[dict[str, Any]] = []
 
-        if self.safety.stopped:
-            for c in candidates:
-                chain.append(_rec(c, "suppressed", self.safety.status()))
-            return None, chain
-
         # 条件可能在限流/投递重试期间变化；旧提醒不应占槽或补播。
         if self._window_best is not None:
             reason = _cleared_vehicle_condition(self._window_best, current_state, now)
             if reason:
                 chain.append(_rec(self._window_best, "dropped", reason))
                 self._window_best = None
+        if self.safety.stopped:
+            for c in candidates:
+                chain.append(_rec(c, "suppressed", self.safety.status()))
+            return None, chain
+
         current_candidates = []
         for candidate in candidates:
             reason = _cleared_vehicle_condition(candidate, current_state, now)
@@ -369,10 +377,35 @@ def _cleared_vehicle_condition(event: BattleEvent, state: BattleState | None, no
         "ground_ammo_low": "ammo_low", "ground_ammo_empty": "ammo_empty",
         "ground_laser_warning": "laser_warning",
     }.get(event.event_id)
+    if event.event_id == "ground_crew_loss":
+        flag = "crew_critical" if state is not None and state.flag("crew_critical") else "crew_loss"
     if state is None or flag is None:
         return None
+    source = ground_indicator_source(state, now)
+    is_ground = (state.domain or "").lower() == "ground"
+    legacy_age = legacy_ground_sample_age(state, now) if source is None and is_ground else None
+    legacy_stale = legacy_age is not None and legacy_age >= GROUND_SAMPLE_MAX_AGE_SECONDS
+    if (source is None and legacy_age is None and event.event_id == "ground_crew_loss"
+            and event.ground_sample is None and event.legacy_ground_life is None
+            and not event.legacy_ground_unidentified):
+        return None  # Keep compatibility for callers without verifiable crew sample provenance.
     active = bool(state.connected and state.conn_state == "in_battle" and state.is_alive()
-                  and not state.replay and (state.domain or "").lower() == "ground" and state.flag(flag))
+                  and not state.replay and is_ground and state.flag(flag))
+    if legacy_stale or (source is not None and (source.status != "ready" or source.key is None)):
+        active = False
+    if event.ground_sample is not None:
+        current = source.key if source is not None else None
+        origin = event.ground_sample
+        active = bool(active and current is not None and current[:2] == origin[:2] and current[2] >= origin[2]
+                      and modern_ground_replay_boundaries(state) == event.ground_replay_boundaries)
+    if event.legacy_ground_life is not None:
+        active = bool(active and state.life_key == event.legacy_ground_life
+                      and (source is not None or legacy_age is not None))
+    if event.legacy_ground_unidentified:
+        # Without a life key, a later sample cannot verify that the old event still applies.
+        active = bool(active and legacy_age is not None and state.life_key is None
+                      and state.timestamp == event.ts
+                      and legacy_ground_replay_segment(state) == event.legacy_ground_replay_segment)
     if event.event_id == "ground_ammo_low" and state.flag("ammo_empty"):
         active = False
     if event.event_id == "ground_laser_warning":
@@ -380,6 +413,8 @@ def _cleared_vehicle_condition(event: BattleEvent, state: BattleState | None, no
         if state.laser_warning_state is not None and state.laser_warning_state != 1:
             active = False
         return None if active else "ground_laser_condition_cleared"
+    if event.event_id == "ground_crew_loss":
+        return None if active else "ground_crew_condition_cleared"
     return None if active else "ground_ammo_condition_cleared"
 
 

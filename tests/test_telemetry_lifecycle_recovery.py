@@ -71,6 +71,78 @@ def test_state_only_outage_cannot_create_spawn_or_replay_persistent_feed(domain,
     assert candidates.count("you_killed") == 1
 
 
+def test_ground_indicator_sample_tracks_success_not_attempt_or_state(monkeypatch):
+    server = importlib.import_module("neko_warthunder.data_layer.data_process.wt_server")
+    moment = [1000.0]
+    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+
+    class Client:
+        probe_ok = True
+        in_battle = True
+        indicators_valid = True
+        state_ok = True
+        crew = 4
+
+        def get_indicators_with_status(self):
+            state = (server.ConnectionState.IN_BATTLE if self.in_battle else server.ConnectionState.NOT_IN_BATTLE)
+            moment[0] += 0.2  # /map_info returns later than /indicators.
+            indicators = server.Indicators(valid=self.indicators_valid, army="tank", speed=0,
+                                           crew_current=self.crew, crew_total=4)
+            return self.probe_ok, state, indicators, server.MapInfo(valid=self.in_battle)
+
+        def get_state_with_status(self):
+            moment[0] += 0.7
+            return self.state_ok, server.VehicleState(valid=False)
+
+    client = Client()
+    service = server.TelemetryService(client)
+    service._poll_fast()
+    first = service.get_snapshot()
+    assert first["domain"] == "ground" and first["vehicle"]["valid"] is False
+    source = first["meta"]["ground_indicators"]
+    assert source == {"status": "ready", "sample_timestamp": 1000.0, "age_sec": 0.9,
+                      "count": 1, "battle_id": first["battle_id"], "life_index": first["life_index"]}
+
+    client.probe_ok = False
+    service._poll_fast()
+    held = service.get_snapshot()
+    assert held["in_battle"] is True
+    assert held["timestamp"] == first["timestamp"]
+    assert held["meta"]["ground_indicators"] == {**source, "status": "held", "age_sec": 1.1}
+
+    client.probe_ok = True
+    client.state_ok = False
+    request_ts = moment[0]
+    service._poll_fast()
+    second = service.get_snapshot()
+    assert second["indicators"] == first["indicators"]
+    assert second["meta"]["ground_indicators"] == {**source, "count": 2, "sample_timestamp": request_ts}
+
+    client.indicators_valid = False
+    service._poll_fast()
+    assert service.get_snapshot()["meta"]["ground_indicators"] == {
+        "status": "unavailable", "count": 2, "age_sec": None,
+    }
+
+    client.indicators_valid = client.state_ok = True
+    client.crew = 1
+    service._poll_fast()
+    dead = service.get_snapshot()
+    assert dead["dead"] is True
+    assert dead["meta"]["ground_indicators"] == {"status": "unavailable", "count": 2, "age_sec": None}
+
+    client.crew = 4
+    service._poll_fast()
+    respawn = service.get_snapshot()
+    assert respawn["dead"] is False and respawn["life_index"] == 2
+    assert respawn["meta"]["ground_indicators"]["count"] == 3
+    assert respawn["meta"]["ground_indicators"]["life_index"] == 2
+
+    client.in_battle = False
+    service._poll_fast()
+    assert "ground_indicators" not in service.get_snapshot()["meta"]
+
+
 def test_confirmed_life_change_still_starts_spawn_grace():
     resolver = ScenarioResolver()
     first = BattleState(connected=True, conn_state="in_battle", in_battle=True, vehicle_valid=True,

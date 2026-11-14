@@ -52,7 +52,7 @@ def test_missing_processed_or_count_is_unknown(monkeypatch, processed):
 
 @pytest.mark.parametrize("patch", [
     {"dead": True}, {"replay": True}, {"state": "offline"}, {"in_battle": False},
-    {"vehicle": {"valid": False}}, {"meta": {"vehicle": {"age_sec": 8}}},
+    {"indicators": {"valid": False, "army": "tank"}}, {"meta": {"fast": {"age_sec": 8}}},
     {"meta": {}}, {"meta": {"fast": {"age_sec": -1}, "vehicle": {"age_sec": 0}}},
     {"timestamp": 1001},
 ])
@@ -74,6 +74,18 @@ def test_partial_p1a_still_allows_usable_ammo_but_fresh_response_does_not_refres
     assert _explanation(plugin)["status"] == "observed_count"
     moment[0] += 6
     assert _explanation(plugin)["status"] == "source_unavailable"
+
+
+def test_cached_ammo_marker_does_not_override_current_reading(monkeypatch):
+    plugin, _ = _plugin(
+        monkeypatch,
+        vehicle={"valid": False},
+        indicators={"valid": True, "army": "tank", "first_stage_ammo": 12},
+        processed={"ammo_first_stage": 0, "flags": {"ammo_empty": True}},
+    )
+    result = asyncio.run(plugin.dashboard_context())
+    assert result["ground_status"]["ammo_first_stage"] == 12
+    assert result["ground_ammo_explanation"]["status"] == "conflicting"
 
 
 @pytest.mark.parametrize(("dry_run", "enabled"), [(True, False), (True, True), (False, False), (False, True)])
@@ -101,6 +113,7 @@ def test_dashboard_reads_preserve_fsm_delivery_and_policy_through_resupply(monke
     # New life, with a cold zero and no marker, cannot inherit the old explanation.
     plugin.state = parse_telemetry({"state": "in_battle", "in_battle": True, "domain": "ground",
         "timestamp": 1004, "life_index": 2, "vehicle": {"valid": True},
+        "indicators": {"valid": True, "army": "tank", "first_stage_ammo": 0},
         "meta": {"fast": {"age_sec": 0}, "vehicle": {"age_sec": 0}},
         "processed": {"ammo_first_stage": 0, "flags": {}}})
     assert _explanation(plugin)["status"] == "zero_unconfirmed"

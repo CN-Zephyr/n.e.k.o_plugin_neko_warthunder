@@ -38,7 +38,6 @@ def test_release_readiness_plan_lists_offline_release_gates():
         names = [check.name for check in checks]
 
         assert names == [
-            "logic self-check",
             "pytest",
             "rc docs audit",
             "vehicle profile id audit",
@@ -60,26 +59,26 @@ def test_release_readiness_plan_lists_offline_release_gates():
             "plugin check",
             "final smoke packet",
         ]
-        assert checks[2].cmd == ["uv", "run", "python", "tools/rc_audit.py"]
-        assert checks[3].cmd == ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"]
-        assert checks[4].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
-        assert checks[5].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
-        assert checks[6].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
-        assert checks[6].cmd[-2] == "--host-root"
-        assert checks[7].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
-        assert checks[8].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
-        assert checks[9].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
-        assert checks[10].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
-        assert checks[11].cmd == ["uv", "run", "python", "tools/domain_boundary_gate.py"]
-        assert checks[12].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
-        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
-        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
-        assert checks[15].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
-        assert checks[16].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
-        assert checks[17].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
-        assert checks[18].cmd == ["uv", "run", "python", "tools/replay.py"]
-        assert checks[19].cwd == host.resolve()
-        assert checks[19].name == "plugin check"
+        assert checks[1].cmd == ["uv", "run", "python", "tools/rc_audit.py"]
+        assert checks[2].cmd == ["uv", "run", "python", "tools/vehicle_profile_id_audit.py"]
+        assert checks[3].cmd == ["uv", "run", "python", "tools/release_defaults_gate.py"]
+        assert checks[4].cmd == ["uv", "run", "python", "tools/output_freshness_gate.py"]
+        assert checks[5].cmd[:4] == ["uv", "run", "python", "tools/host_contract_gate.py"]
+        assert checks[5].cmd[-2] == "--host-root"
+        assert checks[6].cmd == ["uv", "run", "python", "tools/free_text_gate.py"]
+        assert checks[7].cmd == ["uv", "run", "python", "tools/replay_gate.py"]
+        assert checks[8].cmd == ["uv", "run", "python", "tools/ownership_replay_gate.py"]
+        assert checks[9].cmd == ["uv", "run", "python", "tools/deferred_hud_gate.py"]
+        assert checks[10].cmd == ["uv", "run", "python", "tools/domain_boundary_gate.py"]
+        assert checks[11].cmd == ["uv", "run", "python", "tools/proximity_gate.py"]
+        assert checks[12].cmd == ["uv", "run", "python", "tools/v2_readiness.py", "--no-sample"]
+        assert checks[13].cmd == ["uv", "run", "python", "tools/v2_release_matrix.py", "--no-sample"]
+        assert checks[14].cmd == ["uv", "run", "python", "tools/v2_output_policy_gate.py"]
+        assert checks[15].cmd == ["uv", "run", "python", "tools/v2_completion_gate.py", "--no-sample"]
+        assert checks[16].cmd == ["uv", "run", "python", "tools/rc_handoff_report.py", "--no-sample"]
+        assert checks[17].cmd == ["uv", "run", "python", "tools/replay.py"]
+        assert checks[18].cwd == host.resolve()
+        assert checks[18].name == "plugin check"
         assert checks[-1].cmd == ["uv", "run", "python", "tools/final_smoke_packet.py", "--offline-gates-passed"]
 
 
@@ -145,7 +144,6 @@ def test_release_readiness_plan_does_not_require_running_services():
         assert "live monitor" not in names
         assert "host War Thunder contract tests" not in names
         assert names == [
-            "logic self-check",
             "pytest",
             "rc docs audit",
             "vehicle profile id audit",
@@ -434,3 +432,76 @@ def test_release_readiness_run_json_is_single_parseable_payload():
     assert payload["release_scope"]["ship_status"] == "offline_gates_passed"
     assert payload["handoff"]["status"] == "ready_for_final_live_smoke"
     assert payload["handoff"]["v2"]["offline_gate_complete"] is True
+
+
+def test_combined_cli_reuses_full_pytest_and_keeps_unique_checks(tmp_path, monkeypatch, capsys):
+    from neko_warthunder.tools import preflight, release_readiness
+
+    calls = []
+
+    def fake_run(cmd, cwd, **kwargs):
+        calls.append((cwd, tuple(cmd)))
+        return types.SimpleNamespace(returncode=0, stdout="passed")
+
+    monkeypatch.setattr(release_readiness.subprocess, "run", fake_run)
+    rc = release_readiness.main([
+        "--plugin-root", str(tmp_path), "--host-root", str(tmp_path / "missing"),
+        "--run", "--with-preflight", "--json",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "pass"
+    assert calls.count((tmp_path.resolve(), preflight.FULL_PYTEST_COMMAND)) == 1
+    pytest_rows = [item for item in payload["checks"] if item["name"] == "pytest"]
+    assert [item["suite"] for item in pytest_rows] == ["preflight", "release_readiness"]
+    assert pytest_rows[0]["stdout"] == "passed"
+    assert pytest_rows[1]["reused_from"] == "preflight"
+    assert "stdout" not in pytest_rows[1]
+    assert "reused from preflight" in release_readiness.render_text(payload)
+    assert ("preflight", "runtime smoke") in [(item["suite"], item["name"]) for item in payload["checks"]]
+    assert ("release_readiness", "rc docs audit") in [(item["suite"], item["name"]) for item in payload["checks"]]
+
+
+def test_combined_checks_do_not_reuse_other_paths_or_commands(tmp_path, monkeypatch):
+    from neko_warthunder.tools import preflight, release_readiness
+
+    calls = []
+
+    def fake_run(cmd, cwd, **kwargs):
+        calls.append((cwd, cmd))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(release_readiness.subprocess, "run", fake_run)
+    full_pytest = list(preflight.FULL_PYTEST_COMMAND)
+    checks = [
+        release_readiness.Check("pytest", tmp_path, full_pytest, suite="preflight"),
+        release_readiness.Check("pytest", tmp_path / "other", full_pytest, suite="release_readiness"),
+        release_readiness.Check("pytest", tmp_path, full_pytest + ["--collect-only"], suite="release_readiness"),
+    ]
+    payload = release_readiness.run_checks(checks)
+    assert payload["status"] == "pass"
+    assert calls == [(check.cwd, check.cmd) for check in checks]
+    assert all("reused_from" not in item for item in payload["checks"])
+
+
+def test_combined_checks_stop_on_failed_preflight_pytest(tmp_path, monkeypatch):
+    from neko_warthunder.tools import preflight, release_readiness
+
+    calls = []
+
+    def fake_run(cmd, cwd, **kwargs):
+        calls.append((cwd, cmd))
+        return types.SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(release_readiness.subprocess, "run", fake_run)
+    full_pytest = list(preflight.FULL_PYTEST_COMMAND)
+    checks = [
+        release_readiness.Check("pytest", tmp_path, full_pytest, suite="preflight"),
+        release_readiness.Check("pytest", tmp_path, full_pytest, suite="release_readiness"),
+    ]
+    payload = release_readiness.run_checks(checks)
+    assert payload["status"] == "fail"
+    assert calls == [(tmp_path, full_pytest)]
+    assert [item["suite"] for item in payload["checks"]] == ["preflight"]
+    assert "reused_from" not in payload["checks"][0]

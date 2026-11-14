@@ -40,6 +40,93 @@ def test_load_frames_discovers_processed_8112_under_sample_root(tmp_path):
     assert replay_server.load_frames(tmp_path)[0]["timestamp"] == 10.0
 
 
+def test_ground_capture_rounding_keeps_first_sample_available(tmp_path):
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    path = tmp_path / "processed_8112.jsonl"
+    ground = {**_frame(10.0004), "domain": "ground"}
+    ground["meta"]["ground_indicators"] = {"status": "ready", "sample_timestamp": 10.0003, "age_sec": 0.0}
+    _write_jsonl(path, [{"ts": 10.0, "data": ground}])
+    state = replay_server.ReplayState(replay_server.load_frames(path), clock=lambda: 100.0)
+
+    payload = state.current_payload()
+    assert payload["timestamp"] == 100.0
+    assert payload["meta"]["fast"]["age_sec"] == 0.0
+    assert 99.999 < payload["meta"]["ground_indicators"]["sample_timestamp"] <= 100.0
+    assert "observed_at" not in payload
+
+
+def test_ground_replay_observes_last_frame_before_end_offline():
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    first = {**_frame(10.0), "domain": "ground", "life_index": 1}
+    last = {**_frame(11.0), "domain": "ground", "life_index": 2}
+    now = iter([1000.0, 1000.0, 1000.8, 1001.6])
+    state = replay_server.ReplayState([first, last], speed=2.0, end_mode="offline", clock=lambda: next(now))
+
+    assert state.current_payload()["life_index"] == 1
+    assert state.current_payload()["life_index"] == 2
+    assert state.health()["ended"] is False
+    assert state.current_payload()["state"] == "offline"
+    assert state.health()["ended"] is True
+
+
+def test_single_ground_frame_can_end_offline():
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    frame = {**_frame(10.0), "domain": "ground"}
+    now = iter([1000.0, 1000.8, 1001.2])
+    state = replay_server.ReplayState([frame], end_mode="offline", clock=lambda: next(now))
+
+    assert state.current_payload()["state"] == "in_battle"
+    assert state.current_payload()["state"] == "offline"
+
+
+def test_ground_replay_estimates_leading_untimestamped_observations():
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    offline = {"state": "offline", "in_battle": False, "timestamp": 0}
+    first = {**_frame(1_780_000_000.0), "domain": "ground", "life_index": 1}
+    last = {**_frame(1_780_000_000.5), "domain": "ground", "life_index": 2}
+    now = iter([1000.0, 1000.0, 1000.25, 1000.625, 1001.125])
+    state = replay_server.ReplayState([offline, first, last], clock=lambda: next(now))
+
+    assert state.health()["duration"] == 1.0
+    assert state.current_payload()["state"] == "offline"
+    assert state.current_payload()["state"] == "offline"
+    assert state.current_payload()["life_index"] == 1
+    assert state.current_payload()["life_index"] == 2
+
+
+def test_ground_replay_preserves_original_clocks_when_requested():
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    ground = {**_frame(10.0), "domain": "ground"}
+    ground["meta"]["ground_indicators"] = {"status": "held", "sample_timestamp": 9.75, "age_sec": 1.5}
+    now = iter([100.0, 101.0, 102.0])
+    state = replay_server.ReplayState([ground], refresh_timestamps=False, clock=lambda: next(now))
+
+    assert state.current_payload() == state.current_payload() == ground
+
+
+def test_air_frame_with_unavailable_ground_metadata_keeps_air_replay_timing():
+    from neko_warthunder.tools import replay_8112_server as replay_server
+
+    ground = {**_frame(10.0), "domain": "ground", "battle_id": "test-battle"}
+    air = {**_frame(12.0), "domain": "air", "battle_id": "test-battle"}
+    air["meta"]["ground_indicators"] = {"status": "unavailable", "count": 1, "age_sec": None}
+    now = iter([100.0, 102.25, 104.0, 106.25])
+    state = replay_server.ReplayState([ground, air], loop=True, clock=lambda: next(now))
+
+    payload = state.current_payload()
+    assert payload["domain"] == "air" and payload["timestamp"] == 102.25
+    assert payload["meta"]["fast"]["age_sec"] == 0.0
+    assert payload["battle_id"] == "test-battle"
+    next_ground, next_air = state.current_payload(), state.current_payload()
+    assert next_ground["domain"] == "ground" and next_air["domain"] == "air"
+    assert next_ground["battle_id"] == next_air["battle_id"] != "test-battle"
+
+
 def test_replay_state_refreshes_timestamp_and_injects_manual_identity():
     from neko_warthunder.tools import replay_8112_server as replay_server
 
