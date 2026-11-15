@@ -3,7 +3,7 @@
 `neko_warthunder` 是 N.E.K.O 的《战争雷霆》插件。它通过游戏的本地遥测接口显示仪表、地图和战果，并在用户开启战斗播报后，由当前角色提供简短提醒。插件仅读取游戏数据，无需注入游戏进程。
 
 - **安装公开版** · 在 N.E.K.O 插件市场搜索「战雷猫娘副驾驶」，或从 [GitHub Releases](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases) 下载 `.neko-plugin`。
-- **查看版本差异** · 下文描述 **v0.1.3**。 [最新公开版本](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/latest) · [v0.1.2 发布记录](docs/release-v0.1.2.md) · [v0.1.3 验收记录](docs/release-v0.1.3.md)
+- **查看版本差异** · 下文描述 **v0.1.4**。 [最新公开版本](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases/latest) · [v0.1.2 发布记录](docs/release-v0.1.2.md) · [本轮验收记录](docs/release-v0.1.3.md)
 
 ## 安装和使用
 

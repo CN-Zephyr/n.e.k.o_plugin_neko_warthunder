@@ -29,6 +29,10 @@ sys.modules["neko_warthunder"] = _pkg
 def _install_sdk_stubs() -> None:
     """Prevent the host SDK from initializing user configuration in logic tests."""
     plugin_pkg = types.ModuleType("plugin")
+    # The release CLI mounts this suite under plugin/plugins/neko_warthunder.
+    # Pytest may import the enclosing package there while collecting fixtures.
+    if _PLUGIN_DIR.parent.name == "plugins" and _PLUGIN_DIR.parent.parent.name == "plugin":
+        plugin_pkg.__path__ = [str(_PLUGIN_DIR.parent.parent)]  # type: ignore[attr-defined]
     sdk_pkg = types.ModuleType("plugin.sdk")
     sdk_plugin = types.ModuleType("plugin.sdk.plugin")
 
