@@ -1,4 +1,6 @@
 {
   "name": "War Thunder Catgirl Copilot",
-  "description": "A War Thunder catgirl copilot that reads telemetry and offers context-aware battle reminders and companionship."
+  "description": "A War Thunder catgirl copilot that reads telemetry and offers context-aware battle reminders and companionship.",
+  "broadcast.remember_choice": "Remember battle announcements setting",
+  "broadcast.remember_choice_hint": "Restore your current battle announcements setting when the plugin restarts."
 }

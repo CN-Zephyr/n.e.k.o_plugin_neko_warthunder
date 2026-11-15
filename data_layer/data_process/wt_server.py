@@ -40,8 +40,8 @@
     /api/awards        战斗嘉奖（一血/双杀/三杀/连续无伤歼敌等；含 is_mine/notable）
     /api/chat          累积的最近聊天
     /api/map.jpg       最新小地图底图（图片）
-    /api/faction_colors 小地图敌我颜色（?ally=/&enemy= 设置 #RRGGBB；颜色过近时 conflict=true）
-    /api/record        数据转存调试开关（?on=1 开 / ?on=0 关 / 无参查状态），见 wt_recorder.py
+    /api/faction_colors 小地图敌我颜色（POST JSON ally/enemy 设置 #RRGGBB；颜色过近时 conflict=true）
+    /api/record        数据转存调试开关（GET 查状态；POST JSON on 开关），见 wt_recorder.py
 
 运行：
     python wt_server.py
@@ -1137,14 +1137,14 @@ def main() -> None:
     parser.add_argument("--profiles", default=None, help="机型告警配置文件路径")
     parser.add_argument("--player-name", default=None,
                         help="玩家名(不含战队标签)的初始权威值；留空则自动识别，"
-                             "也可运行时用 GET /api/identity?name=xxx 设置，修改请求需携带 "
+                             "也可运行时用 POST /api/identity 设置，修改请求需携带 "
                              "X-Neko-Warthunder-Action: 1")
     parser.add_argument("--ally-color", default=None,
                         help="小地图队友颜色 #RRGGBB（默认 #174DFF；游戏里改过队友颜色时需同步）")
     parser.add_argument("--enemy-color", default=None,
                         help="小地图敌方颜色 #RRGGBB（默认 #FA0C00；游戏里改过敌人颜色时需同步）")
     parser.add_argument("--record", action="store_true",
-                        help="启动即开启数据转存（调试开关；也可运行时 GET /api/record?on=1 切换，"
+                        help="启动即开启数据转存（调试开关；也可运行时 POST /api/record 切换，"
                              "修改请求需携带 X-Neko-Warthunder-Action: 1）")
     parser.add_argument("--record-dir", default="records", help="转存数据根目录（默认 records）")
     parser.add_argument("--record-interval", type=float, default=1.0,
@@ -1192,12 +1192,12 @@ def main() -> None:
     print("  接口： /  /api/telemetry  /api/state  /api/map_objects  /api/map.jpg")
     print("        /api/processed  /api/alerts  （自定义告警）")
     print("        /api/situation （态势）  /api/kills （战绩，含自我识别/涉我标记）")
-    print("        /api/identity （查看/设置玩家昵称：?name=xxx / ?clear=1）")
-    print("        /api/faction_colors （小地图敌我颜色：?ally=%23RRGGBB&enemy=%23RRGGBB）")
+    print("        /api/identity （GET 查昵称；POST JSON name/clear 设置）")
+    print("        /api/faction_colors （GET 查颜色；POST JSON ally/enemy 设置）")
     print("        /api/notices （自机技术通知：油温/襟翼/过热）")
     print("        /api/awards （战斗嘉奖：一血/双杀/三杀/连续无伤歼敌；?notable=1 仅高光）")
     print("        /api/proximity （敌军接近告警，边沿触发）")
-    print("        /api/record （数据转存调试开关：?on=1 开 / ?on=0 关 / 无参查状态）")
+    print("        /api/record （GET 查状态；POST JSON on 开关转存）")
     if args.record:
         print(f"  数据转存：开启（间隔 {args.record_interval}s，目录 {args.record_dir}）")
     print("  Ctrl+C 退出\n")

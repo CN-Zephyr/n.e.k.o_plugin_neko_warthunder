@@ -6,6 +6,8 @@ import json
 import urllib.request
 from pathlib import Path
 
+from neko_warthunder.adapters.identity_client import set_identity
+
 
 def _frame(timestamp: float = 10.0) -> dict:
     return {
@@ -304,7 +306,7 @@ def test_http_server_serves_health_telemetry_and_identity():
         thread.start()
 
         health = _fetch_json(f"{base}/health")
-        identity = _fetch_json(f"{base}/api/identity?name=CN-Zephyr")
+        identity = set_identity(base, 2.0, name="CN-Zephyr")
         telemetry = _fetch_json(f"{base}/api/telemetry")
     finally:
         server.shutdown()

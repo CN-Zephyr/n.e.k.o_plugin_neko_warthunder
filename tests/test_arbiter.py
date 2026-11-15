@@ -10,9 +10,34 @@ from neko_warthunder.core.contracts import (
     IN_FLIGHT,
     SPAWNING,
     BattleEvent,
+    BattleState,
     WtConfig,
 )
 from neko_warthunder.core.safety_guard import SafetyGuard
+
+
+def test_overheat_groups_share_global_limit_but_not_group_cooldown():
+    arb = Arbiter(SafetyGuard(WtConfig(global_rate_limit_seconds=4.0)))
+    engine = BattleEvent("overheat", ts=1000, level="critical", payload={"temperature_group": "engine"})
+    oil = BattleEvent("overheat", ts=1001, level="critical",
+                      payload={"temperature_group": "oil", "temp_c": 85, "temp_source": "oil_temp_c"})
+    assert arb.decide([engine], IN_FLIGHT, 1000)[0] == engine
+    assert arb.decide([oil], IN_FLIGHT, 1001)[0] is None
+    assert arb.decide([], IN_FLIGHT, 1004)[0] == oil
+    assert arb.decide([oil], IN_FLIGHT, 1005)[1][0]["reason"] == "cooldown"
+
+
+def test_oil_overheat_buffer_clears_even_when_engine_remains_critical():
+    arb = Arbiter(SafetyGuard(WtConfig(global_rate_limit_seconds=4.0)))
+    hot = BattleState(flags={"engine_overheat_critical": True, "oil_overheat_critical": True})
+    cooler = BattleState(flags={"engine_overheat_critical": True, "oil_overheat": True})
+    engine = BattleEvent("overheat", ts=1000, level="critical", payload={"temperature_group": "engine"})
+    oil = BattleEvent("overheat", ts=1001, level="critical", payload={"temperature_group": "oil"})
+    assert arb.decide([engine], IN_FLIGHT, 1000, current_state=hot)[0] == engine
+    assert arb.decide([oil], IN_FLIGHT, 1001, current_state=hot)[0] is None
+    selected, chain = arb.decide([], IN_FLIGHT, 1004, current_state=cooler)
+    assert selected is None
+    assert [record["reason"] for record in chain] == ["overheat_condition_cleared"]
 
 
 def _arb() -> Arbiter:

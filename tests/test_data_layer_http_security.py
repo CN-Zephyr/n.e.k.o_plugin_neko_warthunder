@@ -69,9 +69,14 @@ def _running_server(*, cors_origins=()):
         thread.join(timeout=2.0)
 
 
-def _request(port, path, *, method="GET", headers=None):
+def _request(port, path, *, method="GET", headers=None, payload=None):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2.0)
-    connection.request(method, path, headers=headers or {})
+    headers = dict(headers or {})
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode()
+        headers.setdefault("Content-Type", "application/json")
+    connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
     body = response.read()
     result = response.status, dict(response.getheaders()), json.loads(body or b"{}")
@@ -112,21 +117,39 @@ def test_explicit_cors_origin_is_echoed_and_preflight_is_limited():
 def test_mutating_endpoints_require_action_header():
     action_header = {"X-Neko-Warthunder-Action": "1"}
     with _running_server() as (port, service):
-        identity_denied, _headers, _body = _request(port, "/api/identity?name=Pilot")
+        legacy, _headers, _body = _request(port, "/api/identity?name=Pilot", headers=action_header)
+        assert legacy == 405
+        assert service.player_name is None
+        identity_denied, _headers, _body = _request(
+            port, "/api/identity", method="POST", payload={"name": "Pilot"},
+        )
         identity_ok, _headers, _body = _request(
             port,
-            "/api/identity?name=Pilot",
+            "/api/identity",
+            method="POST",
+            payload={"name": "Pilot"},
             headers=action_header,
         )
-        record_denied, _headers, _body = _request(port, "/api/record?on=1")
+        spoofed, _headers, _body = _request(
+            port, "/api/identity", method="POST", payload={"clear": True},
+            headers={**action_header, "Origin": "https://example.invalid"},
+        )
+        wrong_type, _headers, _body = _request(
+            port, "/api/identity", method="POST", payload={"clear": 1}, headers=action_header,
+        )
+        record_denied, _headers, _body = _request(port, "/api/record", method="POST", payload={"on": True})
         record_ok, _headers, record_body = _request(
             port,
-            "/api/record?on=1",
+            "/api/record",
+            method="POST",
+            payload={"on": True},
             headers=action_header,
         )
 
     assert identity_denied == 403
     assert identity_ok == 200
+    assert spoofed == 403
+    assert wrong_type == 400
     assert service.player_name == "Pilot"
     assert record_denied == 403
     assert record_ok == 200

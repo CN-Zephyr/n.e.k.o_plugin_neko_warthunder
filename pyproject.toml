@@ -29,6 +29,8 @@ exclude_dirs = [
     "data_layer/data_process/maps",
 ]
 exclude_files = [
+    ".coverage",
+    "coverage.xml",
     ".gitignore",
     "README.md",
     "PROJECT_STATUS.md",

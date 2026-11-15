@@ -21,6 +21,12 @@ else:
 
 _ACTION_HEADER = "X-Neko-Warthunder-Action"
 _CONTENT_TYPE_BY_EXT = {"jpg": "image/jpeg", "png": "image/png"}
+_MUTATION_QUERY_KEYS = {
+    "/api/identity": {"name", "clear"},
+    "/api/faction_colors": {"ally", "enemy"},
+    "/api/record": {"on"},
+}
+_MAX_ACTION_BYTES = 4096
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -36,8 +42,8 @@ class _Handler(BaseHTTPRequestHandler):
         allowed_origins = getattr(server, "cors_origins", frozenset()) if server else frozenset()
         if origin and origin in allowed_origins:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", _ACTION_HEADER)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", f"{_ACTION_HEADER}, Content-Type")
             self.send_header("Vary", "Origin")
 
     def _host_allowed(self) -> bool:
@@ -92,7 +98,13 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._host_allowed():
             self._send_json({"error": "host_not_allowed"}, 403)
             return
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        if path in _MUTATION_QUERY_KEYS and _MUTATION_QUERY_KEYS[path].intersection(
+            parse_qs(parsed.query, keep_blank_values=True)
+        ):
+            self._send_json({"error": "use_post"}, 405)
+            return
 
         if path in ("/", "/health", "/api/health"):
             self._send_json(self.service.get_health())
@@ -115,41 +127,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/identity":
-            # 查看/设置“自己是谁”。?name=昵称 设手动昵称(权威)；?clear=1 清除回退自动。
-            q = parse_qs(urlparse(self.path).query)
-            if ("clear" in q or q.get("name")) and not self._action_allowed():
-                return
-            requested: Any = "(unchanged)"
-            if "clear" in q:
-                self.service.set_player_name(None)
-                requested = None
-            elif q.get("name"):
-                requested = q["name"][0]
-                self.service.set_player_name(requested)
-            identity = self.service.get_identity()
-            self._send_json({
-                "requested": requested,
-                "note": "手动身份立即持久显示；战绩归属将在下一次 events 轮询（≤event-interval）后应用",
-                **identity,
-            })
+            self._send_json({"requested": "(unchanged)", **self.service.get_identity()})
             return
 
         if path == "/api/faction_colors":
-            # 查看/设置小地图敌我颜色。?ally=%23174DFF&enemy=%23FA0C00；颜色过近时 conflict=true。
-            q = parse_qs(urlparse(self.path).query)
-            ally = (q.get("ally") or [None])[0]
-            enemy = (q.get("enemy") or [None])[0]
-            if ally is None and enemy is None:
-                self._send_json(self.service.get_faction_colors())
-                return
-            if not self._action_allowed():
-                return
-            if (ally is not None and parse_hex_color(ally) is None) or (
-                enemy is not None and parse_hex_color(enemy) is None
-            ):
-                self._send_json({"error": "invalid_color", **self.service.get_faction_colors()}, 400)
-                return
-            self._send_json(self.service.set_faction_colors(ally, enemy))
+            self._send_json(self.service.get_faction_colors())
             return
 
         if path == "/api/notices":
@@ -166,17 +148,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/record":
-            # 调试开关：?on=1 开始转存 / ?on=0 停止 / 无参=查状态
-            q = parse_qs(urlparse(self.path).query)
-            if "on" in q and not self._action_allowed():
-                return
-            rec = self.service.recorder
-            if "on" in q:
-                want = q["on"][0].strip().lower() in ("1", "true", "yes", "on")
-                status = rec.start() if want else rec.stop()
-            else:
-                status = rec.status()
-            self._send_json(status)
+            self._send_json(self.service.recorder.status())
             return
 
         if path == "/api/proximity":
@@ -212,6 +184,57 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json({"error": "not found", "path": path}, 404)
+
+    def do_POST(self) -> None:
+        if not self._host_allowed():
+            self._send_json({"error": "host_not_allowed"}, 403)
+            return
+        path = urlparse(self.path).path.rstrip("/")
+        if path not in _MUTATION_QUERY_KEYS:
+            self._send_json({"error": "not found"}, 404)
+            return
+        origin = self.headers.get("Origin")
+        if origin and origin not in self.server.cors_origins:
+            self._send_json({"error": "origin_not_allowed"}, 403)
+            return
+        if not self._action_allowed():
+            return
+        if self.headers.get_content_type() != "application/json":
+            self._send_json({"error": "json_required"}, 415)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= _MAX_ACTION_BYTES:
+                raise ValueError
+            self.connection.settimeout(2)
+            body = json.loads(self.rfile.read(length))
+        except (ValueError, OSError):
+            self._send_json({"error": "invalid_body"}, 400)
+            return
+        if not isinstance(body, dict) or not body or body.keys() - _MUTATION_QUERY_KEYS[path]:
+            self._send_json({"error": "invalid_body"}, 400)
+            return
+        if path == "/api/identity":
+            name = body.get("name")
+            if set(body) == {"clear"} and body["clear"] is True:
+                name = None
+            elif set(body) != {"name"} or not isinstance(name, str) or not name.strip() or "\x00" in name:
+                self._send_json({"error": "invalid_identity"}, 400)
+                return
+            self.service.set_player_name(name)
+            self._send_json({"requested": name, **self.service.get_identity()})
+        elif path == "/api/faction_colors":
+            if any(not isinstance(color, str) or parse_hex_color(color) is None for color in body.values()):
+                self._send_json({"error": "invalid_color", **self.service.get_faction_colors()}, 400)
+                return
+            self._send_json(self.service.set_faction_colors(body.get("ally"), body.get("enemy")))
+        else:
+            want = body["on"]
+            if type(want) is not bool:
+                self._send_json({"error": "invalid_record_state"}, 400)
+                return
+            rec = self.service.recorder
+            self._send_json(rec.start() if want else rec.stop())
 
     def log_message(self, *args: Any) -> None:
         pass

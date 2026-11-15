@@ -23,8 +23,10 @@ from ..core.contracts import (
     classify_battle_result,
     event_max_age_seconds,
 )
+from .battle_facts import format_battle_facts
 from .dispatch_observer import DispatchObserver
 from .event_delivery import EventDelivery
+from .host_role import current_host_role
 from .runtime_timeline import RuntimeTimeline
 from .text_safety import sanitize_event_payload
 
@@ -76,19 +78,6 @@ _OBSERVED_DELIVERY_METADATA_KEYS = (
     "event_max_age_seconds",
     "event_expires_at",
 )
-# 派发器需要读写宿主插件上的这几个活动状态字段。它们是跨对象的隐式契约：
-# 任一侧改名或拼错都不会报错，getattr 静默回落到默认值，效果是静默窗门控被
-# 无声关闭。独立插件仓 tests/test_dispatcher_safety.py 有契约测试守着这组名字；
-# 宿主仓 tests/unit/test_neko_warthunder_runtime_resilience.py 覆盖实际运行路径。
-PLUGIN_LAST_USER_CHAT_AT = "_last_user_chat_at"
-PLUGIN_LAST_USER_CHAT_MODE = "_last_user_chat_mode"
-PLUGIN_LAST_BATTLE_RESPOND_AT = "_last_battle_respond_at"
-PLUGIN_ACTIVITY_STATE_FIELDS = (
-    PLUGIN_LAST_USER_CHAT_AT,
-    PLUGIN_LAST_USER_CHAT_MODE,
-    PLUGIN_LAST_BATTLE_RESPOND_AT,
-)
-
 _PUSH_MESSAGE_REJECTION_REASONS = frozenset(
     {"backpressure", "transport_error", "transport_unavailable"}
 )
@@ -293,36 +282,25 @@ def _quiet_window_bypass(plugin: Any, event: BattleEvent) -> bool:
     return event.level == "critical" and event.event_id in URGENT_REPLACE_EVENTS
 
 
-def _quiet_window_suppression(plugin: Any, event: BattleEvent, now: float) -> tuple[str, float] | None:
+def _quiet_window_suppression(
+    plugin: Any, event: BattleEvent, now: float, user_chat_at: float, battle_response_at: float,
+) -> tuple[str, float] | None:
     if _quiet_window_bypass(plugin, event):
         return None
 
     user_window = _user_chat_quiet_window_seconds(plugin)
-    try:
-        last_user_chat_at = float(getattr(plugin, PLUGIN_LAST_USER_CHAT_AT, 0.0) or 0.0)
-    except (TypeError, ValueError):
-        last_user_chat_at = 0.0
-    if user_window > 0 and last_user_chat_at > 0:
-        remaining = user_window - (now - last_user_chat_at)
+    if user_window > 0 and user_chat_at > 0:
+        remaining = user_window - (now - user_chat_at)
         if remaining > 0:
             return "user_chat_quiet_window", round(remaining, 3)
 
     battle_window = _battle_output_quiet_window_seconds(plugin)
-    try:
-        last_battle_respond_at = float(getattr(plugin, PLUGIN_LAST_BATTLE_RESPOND_AT, 0.0) or 0.0)
-    except (TypeError, ValueError):
-        last_battle_respond_at = 0.0
-    if battle_window > 0 and last_battle_respond_at > 0:
-        remaining = battle_window - (now - last_battle_respond_at)
+    if battle_window > 0 and battle_response_at > 0:
+        remaining = battle_window - (now - battle_response_at)
         if remaining > 0:
             return "battle_output_quiet_window", round(remaining, 3)
 
     return None
-
-
-def _last_user_chat_mode(plugin: Any) -> str:
-    mode = str(getattr(plugin, PLUGIN_LAST_USER_CHAT_MODE, "unknown") or "unknown").strip().lower()
-    return mode if mode in {"text", "voice"} else "unknown"
 
 
 def _passive_context_instruction() -> str:
@@ -374,19 +352,7 @@ def _resolve_target_lanlan(plugin: Any, event: BattleEvent | None = None) -> str
         if target:
             return target
 
-    try:
-        from utils.config_manager import get_config_manager
-
-        character_data = get_config_manager().get_character_data()
-        if isinstance(character_data, tuple) and len(character_data) >= 2:
-            target = _clean_target_lanlan(character_data[1])
-            if target:
-                return target
-    except Exception:
-        # Character lookup is optional; fall through to the empty target.
-        pass
-
-    return ""
+    return _clean_target_lanlan(current_host_role())
 
 
 def _event_freshness_metadata(event: BattleEvent, now: float, plugin: Any) -> dict[str, float]:
@@ -741,216 +707,6 @@ def _host_callback_contract(
     return contract
 
 
-def _fact_line(event: BattleEvent) -> str:
-    p, _ = sanitize_event_payload(event.event_id, event.payload)
-    bits: list[str] = []
-    kill_fact = _kill_fact(event.event_id, p)
-    death_fact = _death_fact(event.event_id, p)
-    proximity_fact = _proximity_fact(event.event_id, p)
-    objective_fact = _objective_fact(event.event_id, p)
-    ground_fact = _ground_vehicle_fact(event.event_id, p)
-    free_text_fact = _free_text_fact(event.event_id, p)
-    radio_fact = _radio_command_fact(event.event_id, p)
-    has_radio_altitude = p.get("radio_altitude_m") is not None
-    order = [
-        ("ias_kmh", "IAS {:.0f}km/h"),
-        ("aoa_deg", "迎角 {:.0f}°"),
-        ("altitude_m", "高度 {:.0f}m"),
-        ("climb_ms", "垂速 {:+.0f}m/s"),
-        ("mach", "M {:.2f}"),
-        ("fuel_fraction", "余油 {:.0%}"),
-        ("temp_c", "温度 {:.0f}℃"),
-        ("kill_count", "连杀 {}"),
-        ("result", "战果 {}"),
-    ]
-    if kill_fact:
-        bits.append(kill_fact)
-    if event.event_id == "you_killed" and p.get("trade_death"):
-        bits.append("同归于尽/换掉一个")
-    if death_fact:
-        bits.append(death_fact)
-    if proximity_fact:
-        bits.append(proximity_fact)
-    if objective_fact:
-        bits.append(objective_fact)
-    if ground_fact:
-        bits.append(ground_fact)
-    if free_text_fact:
-        bits.append(free_text_fact)
-    if radio_fact:
-        bits.append(radio_fact)
-    if has_radio_altitude:
-        try:
-            bits.append("AGL {:.0f}m".format(p["radio_altitude_m"]))
-        except (ValueError, TypeError):
-            # Ignore malformed optional telemetry and keep the remaining facts.
-            pass
-    for key, fmt in order:
-        if key == "altitude_m" and has_radio_altitude:
-            continue
-        if key in p and p[key] is not None:
-            try:
-                bits.append(fmt.format(p[key]))
-            except (ValueError, TypeError):
-                # Ignore malformed optional telemetry and keep the remaining facts.
-                pass
-    return "、".join(bits)
-
-
-def _kill_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id != "you_killed":
-        return ""
-    domain = str(payload.get("domain") or "").lower()
-    if domain in {"air", "heli"}:
-        return "击落敌方空中目标"
-    if domain == "ground":
-        return "击毁敌方地面目标"
-    if domain == "naval":
-        return "击毁敌方舰艇"
-    return "击毁敌方目标"
-
-
-def _death_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id != "you_died":
-        return ""
-    cause = str(payload.get("cause") or "").lower()
-    domain = str(payload.get("domain") or "").lower()
-    if cause == "crashed":
-        return "己方载具坠毁"
-    if cause in {"destroyed", "wrecked"}:
-        if domain == "naval":
-            return "己方舰艇被摧毁"
-        return "己方载具被摧毁"
-    if cause == "shot_down":
-        if domain in {"air", "heli"}:
-            return "己方空中载具被击落"
-        return "己方载具被击毁"
-    return "己方载具损失"
-
-
-def _proximity_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id not in {"enemy_nearby", "air_threat_nearby", "enemy_on_six", "tailing_risk"}:
-        return ""
-    if event_id == "tailing_risk":
-        base = "后方威胁持续接近"
-    elif event_id == "enemy_on_six":
-        base = "后方威胁接近"
-    elif event_id == "air_threat_nearby":
-        base = "空中威胁接近"
-    else:
-        base = "敌方目标接近"
-
-    detail: list[str] = []
-    clock = payload.get("clock")
-    if isinstance(clock, int) and 1 <= clock <= 12:
-        detail.append(f"{clock}点钟")
-    elif payload.get("compass"):
-        detail.append(f"{payload['compass']}方向")
-
-    distance = payload.get("distance_m")
-    try:
-        if distance is not None:
-            detail.append("距离{:.0f}m".format(float(distance)))
-    except (TypeError, ValueError):
-        # Invalid optional distance does not invalidate the proximity event.
-        pass
-
-    return base if not detail else f"{base}（{'，'.join(detail)}）"
-
-
-def _objective_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id != "ground_target_nearby":
-        return ""
-
-    detail: list[str] = []
-    grid = payload.get("grid")
-    if isinstance(grid, str) and grid:
-        detail.append(f"{grid}网格")
-
-    distance = payload.get("distance_m")
-    try:
-        if distance is not None:
-            detail.append("距离{:.0f}m".format(float(distance)))
-    except (TypeError, ValueError):
-        # Invalid optional distance does not invalidate the objective event.
-        pass
-
-    return "任务目标点接近" if not detail else f"任务目标点接近（{'，'.join(detail)}）"
-
-
-def _ground_vehicle_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id == "ground_laser_warning":
-        return "陆战激光告警"
-    if event_id == "ground_crew_loss":
-        return "陆战车组受损"
-    if event_id == "ground_gunner_disabled":
-        return "陆战炮手失能"
-    if event_id == "ground_driver_disabled":
-        return "陆战驾驶员失能"
-    if event_id == "ground_ammo_empty":
-        return "一级弹药打空"
-    if event_id == "ground_ammo_low":
-        return "一级待发弹偏少（不代表全车余弹不足）"
-    return ""
-
-
-def _free_text_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id != "free_text_activity":
-        return ""
-    source_labels = {
-        "awards": "奖励/战绩通知",
-        "combat_feed": "战斗记录",
-        "hud_notices": "HUD通知",
-        "hud_events": "HUD事件",
-        "hudmsg": "战场提示",
-    }
-    source = str(payload.get("source") or "")
-    label = source_labels.get(source, "战场文字来源")
-    detail: list[str] = []
-    try:
-        count = int(payload.get("count") or 0)
-    except (TypeError, ValueError):
-        count = 0
-    if count > 0:
-        detail.append(f"{count}条")
-    code = payload.get("latest_code")
-    if isinstance(code, str) and code:
-        detail.append(code)
-    return label if not detail else f"{label}（{'，'.join(detail)}）"
-
-
-def _radio_point(payload: dict[str, Any]) -> str:
-    point = str(payload.get("point") or "").strip().upper()
-    return point if point in {"A", "B", "C", "D"} else ""
-
-
-def _radio_command_label(payload: dict[str, Any]) -> str:
-    command = str(payload.get("command") or "")
-    point = _radio_point(payload)
-    if command == "attack_point":
-        return f"进攻{point}点" if point else "进攻目标点"
-    if command == "defend_point":
-        return f"防守{point}点" if point else "防守目标点"
-    labels = {
-        "cover_me": "掩护我",
-        "need_help": "需要支援",
-        "return_to_base": "返回基地",
-        "repairing": "正在维修",
-        "follow_me": "跟着我",
-        "thanks": "感谢",
-        "affirmative": "肯定",
-        "negative": "否定",
-        "well_done": "干得好",
-    }
-    return labels.get(command, "无线电口令")
-
-
-def _radio_command_fact(event_id: str, payload: dict[str, Any]) -> str:
-    if event_id != "player_radio_command":
-        return ""
-    return f"玩家无线电：{_radio_command_label(payload)}"
-
-
 class NekoDispatcher:
     def __init__(
         self,
@@ -965,12 +721,13 @@ class NekoDispatcher:
         self.logger = getattr(plugin, "logger", None)
         self._clock = clock or time.time
         self._last_push_at: float | None = None
+        self._last_battle_response_at = 0.0
         self._last_push_priority = -1
         self._last_event_push: dict[str, tuple[float, str, str]] = {}
 
     def build_prompt(self, event: BattleEvent) -> str:
         intent = _event_intent(event)
-        fact = _fact_line(event)
+        fact = format_battle_facts(event)
         recommended_reply = _recommended_reply_line(event)
         domain_contract = _domain_prompt_contract(event)
         lines = []
@@ -1106,17 +863,15 @@ class NekoDispatcher:
                 **freshness,
             )
         target_lanlan = _resolve_target_lanlan(self.plugin, event)
+        user_chat_at, user_chat_mode = 0.0, "unknown"
         if not _quiet_window_bypass(self.plugin, event):
-            refresh_user_activity = getattr(self.plugin, "_refresh_user_chat_activity", None)
-            if callable(refresh_user_activity):
-                try:
-                    refresh_user_activity(target_lanlan=target_lanlan)
-                except Exception:
-                    # Activity mode is an optional hint. Output safety must not
-                    # depend on the host user-context bus being available.
-                    pass
+            activity = getattr(self.plugin, "broadcast_chat_activity", None)
+            if callable(activity):
+                user_chat_at, user_chat_mode = activity(target_lanlan)
         plugin_owned_output = _should_use_plugin_owned_output(self.plugin, event, recommended_reply)
-        quiet_suppression = _quiet_window_suppression(self.plugin, event, now)
+        quiet_suppression = _quiet_window_suppression(
+            self.plugin, event, now, user_chat_at, self._last_battle_response_at,
+        )
         passive_context = False
         quiet_window_remaining: float | None = None
         if quiet_suppression is not None:
@@ -1124,7 +879,7 @@ class NekoDispatcher:
             passive_context = bool(
                 reason == "user_chat_quiet_window"
                 and event.event_id == "you_killed"
-                and _last_user_chat_mode(self.plugin) == "text"
+                and user_chat_mode == "text"
                 and not plugin_owned_output
                 and target_lanlan
             )
@@ -1177,8 +932,8 @@ class NekoDispatcher:
                 event.level,
                 self._repeat_signature(event, recommended_reply),
             )
-            if delivery.ai_behavior == "respond" and self.plugin is not None:
-                setattr(self.plugin, PLUGIN_LAST_BATTLE_RESPOND_AT, now)
+            if delivery.ai_behavior == "respond":
+                self._last_battle_response_at = now
             observed = {
                 key: delivery.metadata[key]
                 for key in _OBSERVED_DELIVERY_METADATA_KEYS

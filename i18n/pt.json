@@ -1,4 +1,6 @@
 {
   "name": "Copilota Catgirl do War Thunder",
-  "description": "Uma copilota catgirl para War Thunder que lê a telemetria e oferece alertas e companhia conforme a situação da batalha."
+  "description": "Uma copilota catgirl para War Thunder que lê a telemetria e oferece alertas e companhia conforme a situação da batalha.",
+  "broadcast.remember_choice": "Lembrar a configuração de avisos de batalha",
+  "broadcast.remember_choice_hint": "Restaura a configuração atual de avisos de batalha ao reiniciar o plugin."
 }

@@ -11,6 +11,54 @@ permissions:
   contents: read
 
 jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Run tests with coverage
+        run: uv run --locked --with pytest-cov==7.1.0 pytest -c tests/pytest.ini tests -q --cov=adapters --cov=core --cov=data_layer --cov=detectors --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+  windows-hosted-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: plugin-repo
+      - uses: actions/checkout@v4
+        with:
+          repository: Project-N-E-K-O/N.E.K.O
+          ref: main
+          path: N.E.K.O
+      - uses: astral-sh/setup-uv@v6
+      - name: Build and verify the candidate package
+        working-directory: plugin-repo
+        run: |
+          $report = uv run --locked python tools/build_release_candidate.py --skip-tests --json --output ../candidate.neko-plugin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $evidence = $report | ConvertFrom-Json -AsHashtable
+          $evidence["source_commit"] = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $evidence["host_commit"] = git -C "../N.E.K.O" rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $evidence | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 "../candidate.json"
+      - name: Start the installed plugin and check first-load actions
+        working-directory: N.E.K.O
+        run: uv run --locked python ../plugin-repo/tools/smoke_hosted_actions.py ../candidate.neko-plugin
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-candidate
+          path: |
+            candidate.json
+            candidate.neko-plugin
+          if-no-files-found: ignore
   verify:
     uses: Project-N-E-K-O/N.E.K.O/.github/workflows/plugin-market-verify.yml@main
     with:

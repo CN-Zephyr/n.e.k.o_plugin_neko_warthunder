@@ -1,16 +1,54 @@
 # v0.1.3 候选版与真机验收
 
-**v0.1.3 候选版整体验收通过（2026-11-14，操作者确认）。** 各场次的遥测、语音确认和待补证据见下文。公开版本以 [GitHub Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases) 和插件市场为准。
+**2026-11-14 操作者确认完成当轮候选版验收。** 四域听感和遥测的实际覆盖范围见现场记录。11 月 15 日的候选包按哈希记录验证结果。公开版本以 [GitHub Release](https://github.com/CN-Zephyr/n.e.k.o_plugin_neko_warthunder/releases) 和插件市场为准。
+
+## 2026-11-15 面板拆分候选包
+
+- 包名为 `neko_warthunder-0.1.3-20261115-dashboard-rc.neko-plugin`，从 `3c9330e` 加本地改动构建。SHA-256 为 `f546fd24973841b1f5787e3635149986a1cb31095544673e5794ada3fa3d843e`，payload hash 为 `7e35865c7baf80bda1a0982e5b564c0cf03306fa4cb8031845e5071e728d39bb`。
+- 按空战、陆战、直升机和海战拆分遥测快照。概览、活动、诊断和设置各有独立组件。角色读取集中到一个只读适配器，通过宿主接口能力判断兼容性。车型表保持现有加载方式。
+- 面板等宿主同时返回动作和注册入口后才启用试听和播报开关，并在启动阶段短间隔重查。全量 pytest 1670 项通过，Hosted TSX 检查、包哈希和临时安装通过。Windows 首启动作清单及播报开关使用带动作查询修正的本地宿主验证。
+- Edge 在 390 px 和 1280 px 复核了未注册时禁用、自动刷新后启用、提交试听、切换播报、活动筛选和设置弹窗。
+- Steam 正式版原生面板首启及实际试听仍待验收。
+
+## 2026-11-15 候选包
+
+| 项目 | 证据 |
+| --- | --- |
+| 候选包 | `neko_warthunder-0.1.3-20261115-overheat-hosted-rc.neko-plugin`，插件源码基于 `3c9330e` 及工作区改动。 |
+| SHA-256 | `419a45a895f414dc900e70108fa1fabfd7fc7eb7aab35d3d85f91b7929eeaa19` |
+| 宿主 payload hash | `33d0004088de8c05b2b3eca844f0cf820f3c32948b82b99016dfd8f3d47c6d75` |
+| Windows SDK 首启 | 临时安装后，真实 worker 首次返回试听、播报及急停/恢复动作。验证开关能切到播报模式并退回仅记录。使用本地 N.E.K.O `bb7c547`，其中已有宿主动作查询修正。 |
+| 过热回归 | 缸头 244.6°C 保持严重告警时，油温升至 85°C 连续三帧会独立确认。油温降级后撤销限流等待中的原严重候选。播报事实行注明「油温 85℃」。 |
+| Steam Electron | 此包仍待原生面板首启和实际听感验证。验证时记录首次打开、试听、停止播报和重启，至少为一条过热事件关联触发帧、宿主接收及实际音频起点。 |
+
+Windows CI 冒烟通过临时安装启动真实 SDK worker，检查首屏动作。构建产物随附源提交、宿主提交及包哈希。Steam 原生面板与音频单独验收。
 
 ## 已有证据
 
 - 过热提醒在工作区已修正温度通道归因。外部 WTRTI 飞行日志离线回放中，Ta 152 H-1 触发油温警告时为 100°C，同帧水温 112°C。J2M4 在油温 95°C 触发警告，100°C 升级为严重告警。源日志提供温度读数，提醒由插件离线检测产生。原始 CSV 来源见 [WTRTI 日志固定版本](https://github.com/Alpakinator/wt-aircraft-performance-calculator/tree/034f47033c24753f0eb68b1b071d86002a013efe/ingame_power_log_files)。
 - 2026-11-13 构建 `neko_warthunder-0.1.3-20261113-offline-rc.neko-plugin`，源码基于 `db363cc` 和本地未提交修改。包 SHA-256 为 `be2c8ba74e986eea6de7f05c888f3f7bc2b10d6bd73de87f9d6fccd9f815aa15`，宿主 payload hash 为 `6b02fcb05a794108ef260d9c7bed8403509e23456a6c3166fdcbc800e5bcac80`。
 - 全量 pytest 1660 项通过。包结构、ZIP CRC、payload hash、隔离安装及隔离 SDK worker 启动和重启通过，Hosted UI 接口能读取状态并操作会话开关，重启回到 dry-run。开发宿主中的旧副本使实际宿主联检停在同步检查。
-- 候选包内含 [GPL-3.0-only 正文](../LICENSE) 和 [第三方来源与许可范围](../THIRD_PARTY_NOTICES.md)。数据层和 Datamine 衍生资料的再分发授权仍待权利人确认。
+- 候选包内含 [GPL-3.0-only 正文](../LICENSE) 和 [第三方来源与许可范围](../THIRD_PARTY_NOTICES.md)。项目维护者确认本插件已获授权使用并内置 8111 数据层。车型配置和舰艇静态资料整理自《战争雷霆》游戏配置，Datamine 是所用配置的提取来源。
 - HTTP 路由和访问校验已移入 `wt_http.py`。`get_snapshot` 在锁内捕获同一次快照的状态，在锁外完成递归转换。回归覆盖转换期间切换战局时仍能读到同一局的字段。
 - Windows Steam 版 N.E.K.O. 0.9.1.0 已通过官方安装流程把战雷插件从 `0.1.1` 升级到本候选版。宿主校验 payload hash 通过，78 个包内文件与安装目录逐字节一致，3 个持久配置与状态文件的哈希一致。启动后数据层健康，原生 Electron 已打开概览、活动、诊断和设置。
 - 首次启动后的 Hosted UI 动作列表为空，点击「测试开口」返回动作未注册。单独重载战雷插件后恢复 13 个动作。2026-11-13 17:21（UTC+8）在 Electron 面板重试，请求已交给猫娘，主宿主记录 TTS 响应已发送，现场操作者确认实际听见测试开口。战雷 2.61.0.14 由现场操作者接手对局验收。
+
+## 外部评审跟进
+
+以下改动已在本地候选包验证。四域现场记录对应此前安装到实际 Steam 宿主的候选包，本次更新后的面板仍待原生 Electron 复验。
+
+| 评审项 | 当前处理 |
+| --- | --- |
+| 第三方来源与许可 | 维护者已确认内置 8111 数据层的使用授权。车型与舰艇资料注明游戏配置来源。详见[第三方声明](../THIRD_PARTY_NOTICES.md)。 |
+| `embedded` 回退边界 | README 写明回退在同一进程启动 HTTP 服务，业务仍通过 `:8112` 读取。 |
+| GET 修改状态 | 身份、阵营颜色和录制开关改用 JSON POST，继续检查动作请求头。旧 GET 修改参数返回 405。独立数据层需同步升级。 |
+| 大文件职责 | 抽出面板样式、海战卡片、仪表与地图投影、运行偏好存储和播报事实格式化。 |
+| Dispatcher 私有属性耦合 | 通过 `broadcast_chat_activity` 读取聊天活动，Dispatcher 自己维护本次运行的播报时间。 |
+| README 可移植性 | 移除本机绝对路径，安装、试听和播报位于文档开头。遥测摘要已移入面板诊断的高级详情。 |
+| 记住播报选择 | 首次运行仅检测和记录。勾选「记住战斗播报选择」后才会跨重启保存，取消勾选会清除保存值。 |
+| CI 覆盖率 | 验证工作流增加 pytest 覆盖率与 XML 报告。相同测试命令在本地通过 1666 项，`adapters`、`core`、`data_layer` 和 `detectors` 的合计行覆盖率为 86.54%。 |
+
+本地还通过了 CI 同版 Ruff、TypeScript 和 Hosted UI 编译、390 px 与 1280 px 的 Edge 面板检查。候选包 `neko_warthunder-0.1.3-review-fixes.neko-plugin` 已通过包内容、payload 哈希和临时目录安装检查。该包 SHA-256 为 `6a913acb531dd3221c1acd71ffbf6ca7721361ad5ce2d36067bf29e7b24346ef`。远程验证和发行状态以 GitHub 为准。
 
 ## 四域现场记录
 

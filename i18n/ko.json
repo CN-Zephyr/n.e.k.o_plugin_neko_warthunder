@@ -1,4 +1,6 @@
 {
   "name": "War Thunder 고양이 소녀 부조종사",
-  "description": "War Thunder 텔레메트리를 읽고 전투 상황에 맞는 알림과 동행을 제공하는 고양이 소녀 부조종사입니다."
+  "description": "War Thunder 텔레메트리를 읽고 전투 상황에 맞는 알림과 동행을 제공하는 고양이 소녀 부조종사입니다.",
+  "broadcast.remember_choice": "전투 알림 설정 기억하기",
+  "broadcast.remember_choice_hint": "플러그인을 다시 시작할 때 현재 전투 알림 설정을 복원합니다."
 }

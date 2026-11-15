@@ -4,34 +4,27 @@ import json
 
 from neko_warthunder.adapters import identity_client as module
 from neko_warthunder.adapters.identity_client import (
-    build_identity_url,
     identity_summary_from_combat,
     set_identity,
 )
 
 
-def test_build_identity_url_encodes_manual_name():
-    assert (
-        build_identity_url("http://127.0.0.1:8112/", name="Pilot A/一号")
-        == "http://127.0.0.1:8112/api/identity?name=Pilot+A%2F%E4%B8%80%E5%8F%B7"
-    )
-
-
-def test_build_identity_url_uses_clear_for_empty_name():
-    assert build_identity_url("http://127.0.0.1:8112", name="  ") == "http://127.0.0.1:8112/api/identity?clear=1"
-    assert build_identity_url("http://127.0.0.1:8112", clear=True) == "http://127.0.0.1:8112/api/identity?clear=1"
+def test_set_identity_uses_clear_for_empty_name():
+    calls = []
+    set_identity("http://127.0.0.1:8112/", 1.25, name="  ", fetcher=lambda *args: calls.append(args))
+    assert calls == [("http://127.0.0.1:8112/api/identity", 1.25, {"clear": True})]
 
 
 def test_set_identity_uses_fetcher_and_returns_identity_response():
     calls: list[tuple[str, float]] = []
 
-    def fetcher(url: str, timeout: float):
-        calls.append((url, timeout))
+    def fetcher(url: str, timeout: float, payload: dict):
+        calls.append((url, timeout, payload))
         return {"requested": "Pilot", "self": {"name": "Pilot", "source": "manual"}, "player_name": "Pilot"}
 
     result = set_identity("http://127.0.0.1:8112", 1.25, name="Pilot", fetcher=fetcher)
 
-    assert calls == [("http://127.0.0.1:8112/api/identity?name=Pilot", 1.25)]
+    assert calls == [("http://127.0.0.1:8112/api/identity", 1.25, {"name": "Pilot"})]
     assert result["player_name"] == "Pilot"
     assert result["self"]["source"] == "manual"
 
@@ -51,13 +44,15 @@ def test_fetch_identity_sends_action_header():
 
     def fake_urlopen(request, timeout):
         captured["headers"] = dict(request.header_items())
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data)
         captured["timeout"] = timeout
         return Response()
 
     original_urlopen = module.urllib.request.urlopen
     module.urllib.request.urlopen = fake_urlopen
     try:
-        result = module.fetch_identity("http://127.0.0.1:8112/api/identity?name=Pilot", 1.25)
+        result = module.post_action("http://127.0.0.1:8112/api/identity", 1.25, {"name": "Pilot A/一号"})
     finally:
         module.urllib.request.urlopen = original_urlopen
 
@@ -65,6 +60,8 @@ def test_fetch_identity_sends_action_header():
     headers = {key.lower(): value for key, value in captured["headers"].items()}
     assert headers[module.ACTION_HEADER.lower()] == "1"
     assert captured["timeout"] == 1.25
+    assert captured["method"] == "POST"
+    assert captured["body"] == {"name": "Pilot A/一号"}
 
 
 def test_identity_summary_from_combat_uses_metadata_only():

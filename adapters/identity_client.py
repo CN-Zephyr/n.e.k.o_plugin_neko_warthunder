@@ -8,30 +8,23 @@ from __future__ import annotations
 
 import json
 import urllib.error
-import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
 from .text_safety import sanitize_display_name
 
-IdentityFetcher = Callable[[str, float], dict[str, Any] | None]
+ActionRequester = Callable[[str, float, dict[str, Any]], dict[str, Any] | None]
 ACTION_HEADER = "X-Neko-Warthunder-Action"
 
 
-def build_identity_url(base_url: str, *, name: str | None = None, clear: bool = False) -> str:
-    root = base_url.rstrip("/")
-    if clear or not (name or "").strip():
-        return f"{root}/api/identity?clear=1"
-    query = urllib.parse.urlencode({"name": str(name).strip()})
-    return f"{root}/api/identity?{query}"
-
-
-def fetch_identity(url: str, timeout: float) -> dict[str, Any] | None:
+def post_action(url: str, timeout: float, payload: dict[str, Any]) -> dict[str, Any] | None:
     try:
         req = urllib.request.Request(
             url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Accept": "application/json",
+                "Content-Type": "application/json",
                 ACTION_HEADER: "1",
             },
         )
@@ -48,11 +41,12 @@ def set_identity(
     *,
     name: str | None = None,
     clear: bool = False,
-    fetcher: IdentityFetcher = fetch_identity,
+    fetcher: ActionRequester = post_action,
 ) -> dict[str, Any]:
-    url = build_identity_url(base_url, name=name, clear=clear)
-    data = fetcher(url, timeout)
-    if not isinstance(data, dict):
+    name = (name or "").strip()
+    payload = {"clear": True} if clear or not name else {"name": name}
+    data = fetcher(f"{base_url.rstrip('/')}/api/identity", timeout, payload)
+    if not isinstance(data, dict) or data.get("error"):
         return {"ok": False, "error": "identity request failed"}
     result = dict(data)
     result.setdefault("ok", True)

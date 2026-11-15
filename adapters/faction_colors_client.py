@@ -7,15 +7,9 @@ forwards them to the data layer, which classifies map objects by them.
 
 from __future__ import annotations
 
-import urllib.parse
 from typing import Any
 
-from .identity_client import IdentityFetcher, fetch_identity
-
-
-def build_faction_colors_url(base_url: str, *, ally: str, enemy: str) -> str:
-    query = urllib.parse.urlencode({"ally": ally, "enemy": enemy})
-    return f"{base_url.rstrip('/')}/api/faction_colors?{query}"
+from .identity_client import ActionRequester, post_action
 
 
 def set_faction_colors(
@@ -24,9 +18,9 @@ def set_faction_colors(
     *,
     ally: str,
     enemy: str,
-    fetcher: IdentityFetcher = fetch_identity,
+    fetcher: ActionRequester = post_action,
 ) -> dict[str, Any]:
-    data = fetcher(build_faction_colors_url(base_url, ally=ally, enemy=enemy), timeout)
+    data = fetcher(f"{base_url.rstrip('/')}/api/faction_colors", timeout, {"ally": ally, "enemy": enemy})
     if not isinstance(data, dict) or data.get("error"):
         return {"ok": False, "error": "faction colors request failed"}
     result = dict(data)

@@ -9,10 +9,11 @@ import threading
 import types
 
 import pytest
+from neko_warthunder.adapters.host_role import current_host_role
+from neko_warthunder.adapters.neko_dispatcher import _resolve_target_lanlan
 from neko_warthunder.adapters.on_demand_explanation import (
     MAX_RESULT_BYTES,
     OnDemandExplanation,
-    current_host_role,
     render_explanation,
 )
 from test_trusted_facts import make_plugin, summary
@@ -43,6 +44,21 @@ def test_host_selection_is_read_fresh_without_repair_or_cached_caller(monkeypatc
     assert current_host_role() == ""
     path.unlink()
     assert current_host_role() == ""
+
+
+def test_dispatcher_role_fallback_reads_configuration_without_migration(monkeypatch, tmp_path):
+    path = tmp_path / "characters.json"
+    path.write_text('{"当前猫娘":"Pilot","猫娘":{"Pilot":{}}}', encoding="utf-8")
+
+    def get_manager(*, migrate):
+        assert migrate is False
+        return types.SimpleNamespace(get_runtime_config_path=lambda _: path)
+
+    for key in ("NEKO_WARTHUNDER_TARGET_LANLAN", "NEKO_TARGET_LANLAN", "NEKO_LANLAN_NAME", "NEKO_HER_NAME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(sys.modules, "utils.config_manager", types.SimpleNamespace(get_config_manager=get_manager))
+    assert _resolve_target_lanlan(types.SimpleNamespace()) == "Pilot"
+    assert _resolve_target_lanlan(types.SimpleNamespace(ctx=types.SimpleNamespace(_current_lanlan="Explicit"))) == "Explicit"
 
 
 def setup(monkeypatch, domain="ground"):

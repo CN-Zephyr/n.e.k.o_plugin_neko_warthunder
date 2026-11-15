@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from .contracts import NAVAL_DRY_RUN_ONLY_EVENTS, BattleEvent, BattleState
 
-
 GROUND_SAMPLE_MAX_AGE_SECONDS = 5.0
 
 

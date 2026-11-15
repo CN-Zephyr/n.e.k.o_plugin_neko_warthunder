@@ -3,6 +3,8 @@ __pycache__/
 *.pyo
 *.egg-info/
 .pytest_cache/
+.coverage
+coverage.xml
 store.db
 .runtime_state.json
 .runtime_state.json.tmp

@@ -16,6 +16,9 @@ class FakePlugin:
         )
         self.calls: list[dict] = []
 
+    def broadcast_chat_activity(self, _target):
+        return getattr(self, "_last_user_chat_at", 0.0), getattr(self, "_last_user_chat_mode", "unknown")
+
     def push_message(self, **kwargs) -> None:
         self.calls.append(kwargs)
 

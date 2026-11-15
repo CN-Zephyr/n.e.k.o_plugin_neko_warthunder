@@ -10,7 +10,6 @@ M2 接入 Scenario(D-B1) / Detector(D-B3) / Arbiter(D-B4) 后才真正产出事�
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 import threading
 import time
@@ -29,12 +28,18 @@ from plugin.sdk.plugin import (
     ui,
 )
 
+from .adapters.dashboard_telemetry import vehicle_status_snapshot
 from .adapters.data_layer_process import DataLayerProcessManager
 from .adapters.faction_colors_client import set_faction_colors as request_set_faction_colors
+from .adapters.flight_dashboard import flight_status_snapshot
 from .adapters.flight_diagnostics import snapshot_flight_diagnostics
 from .adapters.ground_ammo_explanation import snapshot_ground_ammo_explanation
+from .adapters.ground_dashboard import ground_status_snapshot
+from .adapters.helicopter_dashboard import helicopter_status_snapshot
+from .adapters.host_role import current_host_role
 from .adapters.identity_client import identity_summary_from_combat
 from .adapters.identity_client import set_identity as request_set_identity
+from .adapters.naval_dashboard import map_status_snapshot
 from .adapters.naval_instrument_fields import snapshot_naval_instrument_fields
 from .adapters.naval_static_reference import snapshot_naval_static_reference
 from .adapters.neko_dispatcher import (
@@ -43,7 +48,8 @@ from .adapters.neko_dispatcher import (
     PushMessageSubmissionRejected,
     ensure_push_message_submitted,
 )
-from .adapters.on_demand_explanation import OnDemandExplanation, current_host_role
+from .adapters.on_demand_explanation import OnDemandExplanation
+from .adapters.runtime_state import load_runtime_state, save_runtime_state
 from .adapters.runtime_timeline import RuntimeTimeline, arbiter_chain_to_observe_records
 from .adapters.telemetry_client import TelemetryClient
 from .adapters.trusted_facts import snapshot_trusted_facts
@@ -66,12 +72,7 @@ from .core.contracts import (
 from .core.instructions import WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS
 from .core.safety_guard import SafetyGuard
 from .core.scenario import ScenarioResolver
-from .core.telemetry_freshness import (
-    GROUND_SAMPLE_MAX_AGE_SECONDS,
-    ground_indicator_source,
-    legacy_ground_sample_age,
-    naval_map_source,
-)
+from .core.telemetry_freshness import naval_map_source
 from .detectors._base import DetectorEngine
 from .detectors.condition.flight_safety import build_condition_detectors
 from .detectors.discrete.lifecycle import build_discrete_detectors
@@ -92,11 +93,6 @@ _DIALOGUE_INTRUSION_ALIASES = {
     "immediate": "allow_interrupt",
 }
 _DEFERRED_HUD_NOTICE_CODES = frozenset({"powertrain_failure"})
-# 运行态文件读-改-写的互斥锁。放模块级：测试常用 object.__new__ 构造部分实例，
-# 实例属性不保证存在；且同路径多实例写入也应互斥。
-_RUNTIME_STATE_LOCK = threading.Lock()
-# 仅用于面板显示降级，对齐数据层载具缓存的 5 秒有效窗口；不改变检测或播报。
-_VEHICLE_STATUS_MAX_AGE_SECONDS = 5.0
 _BLOCKED_FREE_TEXT_SOURCES = {
     "awards": ("free_text_awards", ("awards", "feed")),
     "combat_feed": ("free_text_combat_feed", ("combat", "feed")),
@@ -147,13 +143,11 @@ class NekoWarthunderPlugin(NekoPluginBase):
         self._last_user_chat_at = 0.0
         self._last_user_chat_mode = "unknown"
         self._last_user_context_seen_at = 0.0
-        self._last_battle_respond_at = 0.0
         self._pending_dispatch_event: BattleEvent | None = None
         self._startup_completed = False
         self._faction_colors_sync_pending = False
         self._faction_colors_retry_at = 0.0
-        # 会话内 dry_run 覆盖：set_dry_run 动作写入，_apply_config 重建 cfg 后重放，
-        # 防止无关 config_change 把它静默回滚。刻意不落盘——重启回到安全默认。
+        # 会话选择优先于配置刷新。只有明确勾选记住选择才恢复已保存的值。
         self._session_dry_run_override: bool | None = None
         self._on_demand = OnDemandExplanation(self, self._on_demand_facts, current_host_role)
 
@@ -187,6 +181,9 @@ class NekoWarthunderPlugin(NekoPluginBase):
             data["broadcast_frequency"] = normalize_broadcast_frequency(runtime_state.get("broadcast_frequency"))
         if "broadcast_categories" in runtime_state:
             data["broadcast_categories"] = normalize_broadcast_categories(runtime_state.get("broadcast_categories"))
+        saved_dry_run = runtime_state.get("saved_dry_run")
+        if type(saved_dry_run) is bool:
+            data["dry_run"] = saved_dry_run
         self._apply_config(WtConfig.from_mapping(data))
 
     async def _migrate_urgent_output_tts_default(
@@ -368,6 +365,15 @@ class NekoWarthunderPlugin(NekoPluginBase):
             )
         return Ok({"status": "observed"})
 
+    def broadcast_chat_activity(self, target_lanlan: str) -> tuple[float, str]:
+        """Return the latest chat timing and mode used by broadcast policy."""
+        try:
+            self._refresh_user_chat_activity(target_lanlan=target_lanlan)
+        except Exception:
+            # SDK activity is optional. Keep the last known local activity.
+            pass
+        return self._last_user_chat_at, self._last_user_chat_mode
+
     def _refresh_user_chat_activity(self, *, target_lanlan: str) -> str:
         """Refresh safe chat timing/mode metadata without retaining user text.
 
@@ -490,31 +496,14 @@ class NekoWarthunderPlugin(NekoPluginBase):
         return text.partition(":")[0][:120]
 
     def _load_runtime_state(self) -> dict[str, Any]:
-        primary = Path(
-            getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME)
-        )
-        legacy = Path(getattr(self, "_legacy_runtime_state_path", primary))
-        for path in dict.fromkeys((primary, legacy)):
-            try:
-                if not path.exists():
-                    continue
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as exc:  # noqa: BLE001
-                self.logger.warning(f"runtime state load failed: {type(exc).__name__}")
-                return {}
-            return data if isinstance(data, dict) else {}
-        return {}
+        path = Path(getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME))
+        legacy = Path(getattr(self, "_legacy_runtime_state_path", path))
+        logger = getattr(self, "logger", None)
+        return load_runtime_state(path, legacy, logger.warning if logger is not None else None)
 
     def _save_runtime_state(self, patch: dict[str, Any]) -> None:
-        path = getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME)
-        # 读-改-写整体加锁：并发 UI 动作各自 patch 不同键时，后写者不能丢掉前写者。
-        with _RUNTIME_STATE_LOCK:
-            current = self._load_runtime_state()
-            current.update(patch)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-            tmp.replace(path)
+        path = Path(getattr(self, "_runtime_state_path", Path(__file__).resolve().parent / _RUNTIME_STATE_FILENAME))
+        save_runtime_state(path, self._load_runtime_state, patch)
 
     @staticmethod
     def _normalize_dialogue_intrusion_mode(value: Any) -> str:
@@ -1053,230 +1042,6 @@ class NekoWarthunderPlugin(NekoPluginBase):
         except Exception:  # noqa: BLE001
             self._last_status_report_at = now
 
-    def _telemetry_snapshot(self, s: BattleState) -> dict[str, Any]:
-        return {
-            "age_seconds": s.age_seconds,
-            "ias_kmh": s.ias_kmh,
-            "mach": s.mach,
-            "altitude_m": s.altitude_m,
-            "radio_altitude_m": s.radio_altitude_m,
-            "climb_ms": s.climb_ms,
-            "fuel_fraction": s.fuel_fraction,
-            "level": s.level,
-            "flags": dict(sorted((s.flags or {}).items())),
-        }
-
-    @staticmethod
-    def _status_number(value: Any) -> float | None:
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            return None
-        return float(value)
-
-    def _vehicle_status_snapshot(
-        self, s: BattleState, *, indicators: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Shared read-only availability and source age for vehicle status cards."""
-        number = self._status_number
-        fast_age = max(0.0, number(s.age_seconds) or 0.0)
-        timestamp = number(s.timestamp) or 0.0
-        now = time.time()
-        if indicators is not None:
-            sample_age = legacy_ground_sample_age(s, now)
-            valid = sample_age is not None
-            stale = sample_age is not None and sample_age >= GROUND_SAMPLE_MAX_AGE_SECONDS
-            sample_age = round(sample_age, 3) if sample_age is not None else None
-        else:
-            raw = s.raw if isinstance(s.raw, dict) else {}
-            meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
-            vehicle_meta = meta.get("vehicle") if isinstance(meta.get("vehicle"), dict) else {}
-            sample_age = number(vehicle_meta.get("age_sec"))
-            # The source age is relative to the HTTP snapshot. Include time spent in the plugin cache.
-            elapsed = max(0.0, now - timestamp - fast_age) if timestamp > 0 else 0.0
-            sample_age = round(sample_age + elapsed, 3) if sample_age is not None and sample_age >= 0 else None
-            valid = s.vehicle_valid
-            stale = max(elapsed, fast_age, sample_age or 0.0) > _VEHICLE_STATUS_MAX_AGE_SECONDS
-        if not s.connected or s.conn_state == "offline":
-            status = "offline"
-        elif s.replay:
-            status = "replay"
-        elif not s.in_battle or (indicators is not None and s.conn_state != "in_battle"):
-            status = "waiting"
-        elif s.dead:
-            status = "dead"
-        elif stale:
-            status = "stale"
-        elif not valid:
-            status = "unavailable"
-        else:
-            status = "ready"
-
-        return {"status": status, "sample_age_seconds": sample_age}
-
-    def _ground_status_snapshot(self, s: BattleState) -> dict[str, Any] | None:
-        """Read-only, numeric ground facts; never turn missing or stale data into zero."""
-        if (s.domain or "").lower() != "ground":
-            return None
-        raw = s.raw if isinstance(s.raw, dict) else {}
-        indicators = raw.get("indicators")
-        indicators = indicators if isinstance(indicators, dict) else {}
-        snapshot = self._vehicle_status_snapshot(s, indicators=indicators)
-        source = ground_indicator_source(s, time.time())
-        if source is None:
-            snapshot["sample_timestamp"] = s.timestamp if snapshot["sample_age_seconds"] is not None else None
-        elif snapshot["status"] not in ("offline", "waiting", "dead", "replay"):
-            snapshot = {"status": source.status, "sample_age_seconds": source.age_seconds,
-                        "sample_timestamp": source.timestamp}
-        else:
-            snapshot["sample_timestamp"] = None
-
-        def integer(value: Any, *, signed: bool = False) -> int | None:
-            value = self._status_number(value)
-            if value is None or not value.is_integer() or (not signed and value < 0):
-                return None
-            return int(value)
-
-        # processed may contain cached facts when the separate /state request fails.
-        crew_current = integer(indicators.get("crew_current"))
-        crew_total = integer(indicators.get("crew_total"))
-        if crew_total == 0 or (crew_current is not None and crew_total is not None and crew_current > crew_total):
-            crew_current = crew_total = None
-        stabilizer = self._status_number(indicators.get("stabilizer"))
-        gear = self._status_number(indicators.get("gear"))
-        neutral = self._status_number(indicators.get("gear_neutral"))
-        gear_position = self._status_number(gear - neutral) if gear is not None and neutral is not None else None
-        rpm = self._status_number(indicators.get("rpm"))
-        indicator_raw = indicators.get("raw")
-        indicator_raw = indicator_raw if isinstance(indicator_raw, dict) else {}
-
-        def damage(key: str) -> bool | None:
-            value = indicator_raw.get(key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value not in (0, 1):
-                return None
-            return value == 1
-
-        facts = {
-            "crew_current": crew_current,
-            "crew_total": crew_total,
-            "ammo_first_stage": integer(indicators.get("first_stage_ammo")),
-            "gun_stabilizer": stabilizer >= 0.5 if stabilizer is not None else None,
-            "gear_position": round(gear_position) if gear_position is not None else None,
-            "speed_kmh": self._status_number(indicators.get("speed")),
-            "engine_rpm": rpm if rpm is not None and rpm >= 0 else None,
-            "gunner_state": integer(indicators.get("gunner_state")),
-            "driver_state": integer(indicators.get("driver_state")),
-            "laser_warning_state": integer(indicators.get("lws"), signed=True),
-            "track_broken": damage("track_broken"),
-            "h_drive_dead": damage("h_drive_dead"),
-            "breach_dead": damage("breach_dead"),
-            "barrel_dead": damage("barrel_dead"),
-        }
-        return {**snapshot,
-                **{key: value if snapshot["status"] in ("ready", "held") else None for key, value in facts.items()}}
-
-    def _helicopter_status_snapshot(self, s: BattleState) -> dict[str, Any] | None:
-        """Project helicopter instruments only; no VRS, RPM thresholds or output policy."""
-        if (s.domain or "").lower() != "heli":
-            return None
-        snapshot = self._vehicle_status_snapshot(s)
-        facts = {key: self._status_number(getattr(s, key))
-                 for key in ("rotor_rpm", "radio_altitude_m", "vario_ms")}
-        for key in ("rotor_rpm", "radio_altitude_m"):
-            if facts[key] is not None and facts[key] < 0:
-                facts[key] = None
-        return {**snapshot,
-                **{key: value if snapshot["status"] == "ready" else None for key, value in facts.items()}}
-
-    def _map_status_snapshot(self, s: BattleState) -> dict[str, Any]:
-        """Whitelist map facts, independently aged and bound to the sampled life."""
-        number = self._status_number
-        raw = s.raw if isinstance(s.raw, dict) else {}
-        meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
-        sample = meta.get("map_objects") if isinstance(meta.get("map_objects"), dict) else {}
-        age, fast_age, timestamp = number(sample.get("age_sec")), number(s.age_seconds), number(s.timestamp)
-        known_age = (age is not None and age >= 0 and fast_age is not None and fast_age >= 0
-                     and timestamp is not None and timestamp > 0)
-        elapsed = max(0.0, time.time() - timestamp - fast_age) if known_age else 0.0
-        sample_age = round(age + elapsed, 3) if known_age else None
-        life = number(sample.get("life_index"))
-        same_life = life is not None and life.is_integer() and life >= 1 and life == s.life_index
-        situation = s.situation if isinstance(s.situation, dict) else {}
-        player = situation.get("player") if isinstance(situation.get("player"), dict) else {}
-        has_position = situation.get("has_player") is True and all(
-            (value := number(player.get(key))) is not None and 0 <= value <= 1 for key in ("x", "y")
-        )
-        if not s.connected or s.conn_state == "offline":
-            status = "offline"
-        elif s.replay:
-            status = "replay"
-        elif not s.in_battle:
-            status = "waiting"
-        elif s.dead:
-            status = "dead"
-        elif known_age and max(age + elapsed, fast_age, elapsed) > _VEHICLE_STATUS_MAX_AGE_SECONDS:
-            status = "stale"
-        elif not known_age or not same_life:
-            status = "unavailable"
-        elif not has_position:
-            status = "no_player"
-        else:
-            status = "ready"
-
-        def count(key: str) -> int | None:
-            value = number(situation.get(key))
-            return int(value) if value is not None and value >= 0 and value.is_integer() else None
-
-        enemy, ally, air = count("enemy_count"), count("ally_count"), count("air_threat_count")
-        if enemy is None or (air is not None and air > enemy):
-            air = None
-        nearest = situation.get("nearest_enemy")
-        nearest = nearest if isinstance(nearest, dict) else {}
-        distance, bearing = number(nearest.get("distance_m")), number(nearest.get("bearing_deg"))
-        map_info = raw.get("map_info") if isinstance(raw.get("map_info"), dict) else {}
-        # wt_geo can fall back to grid_size, which is not the full map scale.
-        # Do not call the first unsortable contact "nearest" without a known world span.
-        bounds = [map_info.get(key) for key in ("map_min", "map_max")]
-        scale_known = map_info.get("valid") is True and all(
-            isinstance(bound, (list, tuple)) and len(bound) == 2
-            and all(number(value) is not None for value in bound) for bound in bounds
-        )
-        if scale_known:
-            scale_known = all(bounds[1][i] > bounds[0][i] for i in (0, 1))
-        contact_known = (scale_known and enemy is not None and enemy > 0
-                         and distance is not None and distance >= 0
-                         and nearest.get("type") in {"aircraft", "ground_model"})
-        facts = {
-            "enemy_count": enemy, "ally_count": ally, "air_contact_count": air,
-            "nearest_type": nearest.get("type") if contact_known else None,
-            "nearest_distance_m": distance if contact_known else None,
-            "nearest_bearing_deg": bearing if contact_known and bearing is not None and 0 <= bearing < 360 else None,
-        }
-        result = {"status": status, "sample_age_seconds": sample_age,
-                  **{key: value if status == "ready" else None for key, value in facts.items()}}
-        if status != "ready" or not s.battle_id:
-            return result
-
-        # 舰艇重生点只说明战场类型。自身载具域仍由独立的仪表数据决定。
-        objects = raw.get("map_objects")
-        naval_battlefield = isinstance(objects, list) and any(
-            isinstance(obj, dict) and obj.get("type") in ("respawn_base_ship", "respawn_base_destroyer")
-            and obj.get("icon") == obj["type"] for obj in objects
-        )
-        if naval_battlefield:
-            result["battlefield"] = "naval"
-        if naval_battlefield or s.domain == "naval":
-            # 昵称切换会先更新面板身份。等下一帧战绩与当前身份一致后再显示。
-            combat = raw.get("combat") if isinstance(raw.get("combat"), dict) else {}
-            identity = combat.get("self")
-            personal = combat.get("my")
-            if (isinstance(identity, dict) and identity.get("source") == "manual"
-                    and identity.get("name") and identity == s.combat.get("self")
-                    and isinstance(personal, dict)):
-                result["personal_combat"] = {
-                    key: personal[key] for key in ("kills", "deaths")
-                    if type(personal.get(key)) is int and personal[key] >= 0
-                }
-        return result
-
     def _naval_detection_snapshot(self, s: BattleState) -> dict[str, Any] | None:
         if s.domain != "naval" and not (s.domain == "unknown" and (s.in_battle or s.situation)):
             return None
@@ -1362,6 +1127,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         payload = {
             "enabled": self.cfg.enabled,
             "dry_run": self.cfg.dry_run,
+            "remember_broadcast_choice": type(runtime_state.get("saved_dry_run")) is bool,
             "connected": s.connected,
             "conn_state": s.conn_state,
             "in_battle": s.in_battle,
@@ -1389,11 +1155,11 @@ class NekoWarthunderPlugin(NekoPluginBase):
                 "default_enemy_color": DEFAULT_ENEMY_COLOR,
             },
             "data_layer": self.data_layer_manager.snapshot(),
-            "telemetry": self._telemetry_snapshot(s),
-            "ground_status": self._ground_status_snapshot(s),
-            "helicopter_status": self._helicopter_status_snapshot(s),
-            "naval_status": self._map_status_snapshot(s) if s.domain == "naval" else None,
-            "map_status": (self._map_status_snapshot(s) if s.domain == "unknown" and (s.in_battle or s.situation) else None),
+            "telemetry": flight_status_snapshot(s),
+            "ground_status": ground_status_snapshot(s),
+            "helicopter_status": helicopter_status_snapshot(s),
+            "naval_status": map_status_snapshot(s) if s.domain == "naval" else None,
+            "map_status": (map_status_snapshot(s) if s.domain == "unknown" and (s.in_battle or s.situation) else None),
             "naval_detection": self._naval_detection_snapshot(s),
             "naval_instrument_fields": naval_inventory,
             "naval_static_reference": snapshot_naval_static_reference(s, naval_inventory),
@@ -1421,7 +1187,7 @@ class NekoWarthunderPlugin(NekoPluginBase):
         # Reuse the same domain cards; the summary never feeds detectors or dispatches.
         # The extra source is internal input, not another public telemetry payload.
         payload["trusted_facts"] = snapshot_trusted_facts(
-            s, {**payload, "vehicle_source": self._vehicle_status_snapshot(s)}, time.time())
+            s, {**payload, "vehicle_source": vehicle_status_snapshot(s)}, time.time())
         payload["ground_ammo_explanation"] = snapshot_ground_ammo_explanation(s, payload["trusted_facts"])
         payload["flight_diagnostics"] = snapshot_flight_diagnostics(s, payload["trusted_facts"], time.time())
         return payload
@@ -1462,21 +1228,29 @@ class NekoWarthunderPlugin(NekoPluginBase):
         id="set_dry_run",
         name="设置 dry_run",
         description="开/关 dry_run（开=只跑链路不真投给猫娘）。",
-        input_schema={"type": "object", "properties": {"value": {"type": "boolean", "default": True}}},
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "boolean"}, "remember": {"type": "boolean"}},
+        },
     )
-    async def set_dry_run(self, value: bool = True, **_):
+    async def set_dry_run(self, value: bool | None = None, remember: bool | None = None, **_):
+        if ((value is not None and type(value) is not bool)
+                or (remember is not None and type(remember) is not bool)):
+            return Err("invalid_broadcast_choice")
         prev_dry_run = bool(self.cfg.dry_run)
-        self.cfg.dry_run = bool(value)
+        dry_run = (True if remember is None else prev_dry_run) if value is None else value
+        saved = type(self._load_runtime_state().get("saved_dry_run")) is bool
+        remember = saved if remember is None else remember
+        if remember or saved:
+            try:
+                self._save_runtime_state({"saved_dry_run": dry_run if remember else None})
+            except OSError:
+                return Err("broadcast_choice_save_failed")
+        self.cfg.dry_run = dry_run
         self._session_dry_run_override = self.cfg.dry_run
         if prev_dry_run and not self.cfg.dry_run:
             self._rearm_uncommitted_once_per_battle_events()
-        # session_only 是产品决定，不是遗漏，不要"修"成持久化：
-        # 开启战斗播报被当作每次启动插件时的一次显式启用动作（面板底栏"开启战斗播报"），
-        # 所以它只在本次会话内稳定（不被无关 config_change 回滚），重启后回到 dry_run=true。
-        # 同组的插话策略 / 播报频率 / 播报类别 / 昵称都会落 runtime_state，唯独这一项不落，
-        # 是有意为之。若将来要改成"记住用户选择"，需同时调整 release_defaults_gate
-        # 对默认值的断言语义（从"永远默认关"变为"首次运行默认关"）。
-        return Ok({"dry_run": self.cfg.dry_run, "session_only": True})
+        return Ok({"dry_run": self.cfg.dry_run, "session_only": not remember})
 
     @ui.action(id="set_dialogue_intrusion_mode", label="设置插话策略", tone="primary", group="runtime", order=15, refresh_context=True)
     @plugin_entry(

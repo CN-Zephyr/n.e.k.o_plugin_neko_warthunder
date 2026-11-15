@@ -23,6 +23,7 @@ from .contracts import (
     category_allowed,
     event_max_age_seconds,
 )
+from .flag_codes import CONDITION_FLAG_GROUPS
 from .safety_guard import SafetyGuard
 from .telemetry_freshness import (
     GROUND_SAMPLE_MAX_AGE_SECONDS,
@@ -169,7 +170,7 @@ class Arbiter:
             cd = c.spec.cooldown_seconds
             if cd > 0 and c.level != "critical":
                 cd *= broadcast_frequency_multiplier(self.safety.config.broadcast_frequency)
-            last_at, last_level = self._last_fired.get(c.event_id, (-1e9, ""))
+            last_at, last_level = self._last_fired.get(_cooldown_key(c), (-1e9, ""))
             critical_upgrade = c.level == "critical" and last_level != "critical"
             coalesced_kill = c.event_id == "you_killed" and kill_coalesce_window > 0
             if cd > 0 and (now - last_at) < cd and not critical_upgrade and not coalesced_kill:
@@ -310,7 +311,9 @@ class Arbiter:
         return (now + max(0.0, rate_remaining)) - event.ts > max_age
 
     def _fire(self, event: BattleEvent, now: float, *, critical: bool) -> None:
-        self._last_fired[event.event_id] = (now, event.level)
+        self._last_fired[_cooldown_key(event)] = (now, event.level)
+        if event.event_id == "overheat":
+            self._last_fired[event.event_id] = (now, event.level)
         self.safety.mark_output(critical=critical, now=now)
 
     def _buffer_kill(self, event: BattleEvent, now: float) -> None:
@@ -361,11 +364,32 @@ class Arbiter:
         self._kill_window_dead_since = 0.0
 
 
-def _rank(e: BattleEvent) -> tuple[int, int, float]:
-    return (e.priority, e.severity, e.ts)
+def _overheat_flags(event: BattleEvent) -> tuple[str, str] | None:
+    if event.event_id != "overheat":
+        return None
+    group = event.payload.get("temperature_group")
+    if group == "engine":
+        return CONDITION_FLAG_GROUPS["overheat"][0]
+    if group == "oil":
+        return CONDITION_FLAG_GROUPS["overheat"][1]
+    return None
+
+
+def _cooldown_key(event: BattleEvent) -> str:
+    flags = _overheat_flags(event)
+    return flags[0] if flags is not None else event.event_id
+
+
+def _rank(e: BattleEvent) -> tuple[int, int, float, bool]:
+    return (e.priority, e.severity, e.ts, e.event_id == "overheat" and e.payload.get("temp_c") is not None)
 
 
 def _cleared_vehicle_condition(event: BattleEvent, state: BattleState | None, now: float) -> str | None:
+    overheat_flags = _overheat_flags(event)
+    if state is not None and overheat_flags is not None:
+        warning, critical = overheat_flags
+        if not (state.flag(critical) or (event.level != "critical" and state.flag(warning))):
+            return "overheat_condition_cleared"
     if event.event_id in NAVAL_DRY_RUN_ONLY_EVENTS:
         return None if naval_contact_still_active(event, state, now) else "naval_contact_cleared"
     if event.event_id in HELICOPTER_DRY_RUN_ONLY_EVENTS:

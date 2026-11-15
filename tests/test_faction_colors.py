@@ -6,12 +6,10 @@ import asyncio
 import sys
 import tomllib
 import types
-import urllib.parse
 from pathlib import Path
 
 import pytest
 from neko_warthunder.adapters.faction_colors_client import (
-    build_faction_colors_url,
     set_faction_colors,
 )
 from neko_warthunder.core.contracts import (
@@ -190,9 +188,9 @@ def test_http_get_faction_colors_is_read_only(color_server):
 
 def test_http_set_faction_colors_requires_action_header(color_server):
     port, service = color_server
-    query = "/api/faction_colors?" + urllib.parse.urlencode({"ally": "#00C800"})
-    denied, _headers, _body = _request(port, query)
-    ok, _headers, body = _request(port, query, headers=_ACTION_HEADER)
+    data = {"ally": "#00C800"}
+    denied, _headers, _body = _request(port, "/api/faction_colors", method="POST", payload=data)
+    ok, _headers, body = _request(port, "/api/faction_colors", method="POST", payload=data, headers=_ACTION_HEADER)
     assert denied == 403
     assert ok == 200
     assert body["ally_color"] == "#00C800"
@@ -201,8 +199,10 @@ def test_http_set_faction_colors_requires_action_header(color_server):
 
 def test_http_set_faction_colors_rejects_invalid_color(color_server):
     port, service = color_server
-    query = "/api/faction_colors?" + urllib.parse.urlencode({"ally": "#00C800", "enemy": "bad"})
-    status, _headers, body = _request(port, query, headers=_ACTION_HEADER)
+    status, _headers, body = _request(
+        port, "/api/faction_colors", method="POST", payload={"ally": "#00C800", "enemy": "bad"},
+        headers=_ACTION_HEADER,
+    )
     assert status == 400
     assert body["error"] == "invalid_color"
     assert service.set_calls == []
@@ -225,21 +225,16 @@ def test_wt_config_defaults_and_normalizes_colors():
 
 
 # ------------------------------------------------------------------ 插件 → 数据层客户端
-def test_build_faction_colors_url_encodes_hash():
-    url = build_faction_colors_url("http://127.0.0.1:8112/", ally="#00C800", enemy="#FA0C00")
-    assert url == "http://127.0.0.1:8112/api/faction_colors?ally=%2300C800&enemy=%23FA0C00"
-
-
 def test_set_faction_colors_client_reports_failure():
     calls = []
 
-    def ok_fetcher(url, timeout):
-        calls.append((url, timeout))
+    def ok_fetcher(url, timeout, payload):
+        calls.append((url, timeout, payload))
         return {"ally_color": "#00C800", "enemy_color": "#FA0C00", "conflict": False}
 
     result = set_faction_colors("http://h", 1.5, ally="#00C800", enemy="#FA0C00", fetcher=ok_fetcher)
     assert result["ok"] is True
-    assert calls[0][1] == 1.5
+    assert calls == [("http://h/api/faction_colors", 1.5, {"ally": "#00C800", "enemy": "#FA0C00"})]
     assert set_faction_colors("http://h", 1.0, ally="#1", enemy="#2", fetcher=lambda *_: None)["ok"] is False
     assert set_faction_colors(
         "http://h", 1.0, ally="#1", enemy="#2", fetcher=lambda *_: {"error": "invalid_color"}
@@ -414,6 +409,6 @@ def test_failed_color_apply_retries_after_backoff_without_repeating_each_tick(mo
 def test_dashboard_exposes_faction_colors_and_panel_wires_action():
     panel = (_ROOT / "ui" / "panel.tsx").read_text(encoding="utf-8")
     assert '"set_faction_colors"' in panel
-    assert 'type="color"' in panel
+    assert 'type="color"' in (_ROOT / "ui" / "settings-dialog.tsx").read_text(encoding="utf-8")
     source = (_ROOT / "__init__.py").read_text(encoding="utf-8")
     assert '"faction_colors": {' in source

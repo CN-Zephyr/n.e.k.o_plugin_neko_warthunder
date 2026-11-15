@@ -587,12 +587,10 @@ def test_replay_telemetry_suppresses_detector_events():
 @pytest.mark.parametrize(("thresholds", "legacy", "expected", "level"), [
     ({"oil_temp_warn_c": 100}, False, {"temp_source": "oil_temp_c", "temp_c": 150}, "warning"),
     ({"oil_temp_warn_c": 100}, True, {"temp_source": "oil_temp_c", "temp_c": 150}, "warning"),
-    ({"turbine_temp_critical_c": 600, "oil_temp_warn_c": 100}, False,
-     {"temp_source": "turbine_temp_c", "temp_c": 700}, "critical"),
+    ({"turbine_temp_critical_c": 600}, False, {"temp_source": "turbine_temp_c", "temp_c": 700}, "critical"),
     ({"head_temp_warn_c": 60}, False, {"temp_source": "head_temp_c", "temp_c": 80}, "warning"),
     ({"head_temp_warn_c": 60}, True, {}, "warning"),
     ({"water_temp_warn_c": 60, "head_temp_warn_c": 60}, False, {}, "warning"),
-    ({"water_temp_warn_c": 60, "oil_temp_warn_c": 100}, False, {}, "warning"),
 ])
 def test_overheat_payload_uses_triggering_temperature(thresholds, legacy, expected, level):
     processed = ProcessedData()
@@ -616,7 +614,31 @@ def test_overheat_payload_uses_triggering_temperature(thresholds, legacy, expect
 
     event, = events
     assert (event.event_id, event.level) == ("overheat", level)
-    assert event.payload == {"domain": "air", **expected}
+    group = "oil" if "oil_temp_warn_c" in thresholds else "engine"
+    assert event.payload == {"domain": "air", "temperature_group": group, **expected}
+
+
+def test_oil_overheat_confirms_and_rearms_separately_from_engine():
+    engine = DetectorEngine(build_condition_detectors())
+    previous = C.BattleState()
+    events = []
+    for timestamp, oil in enumerate([84] * 3 + [85] * 3 + [84] * 4 + [86] * 3, start=1000):
+        processed = ProcessedData()
+        TelemetryProcessor()._process_engine_temp(
+            Indicators(head_temperature=244.6, oil_temperature=oil),
+            {"head_temp_critical_c": 240, "oil_temp_critical_c": 85},
+            processed,
+        )
+        current = parse_telemetry({"domain": "air", "state": "in_battle", "in_battle": True,
+                                   "timestamp": timestamp, "processed": processed.to_dict()})
+        events.extend(engine.feed(previous, current))
+        previous = current
+
+    assert [(event.ts, event.level, event.payload["temp_source"], event.payload["temp_c"]) for event in events] == [
+        (1002, "critical", "head_temp_c", 244.6),
+        (1005, "critical", "oil_temp_c", 85),
+        (1012, "critical", "oil_temp_c", 86),
+    ]
 
 
 def test_hud_notice_overheat_emits_safe_overheat_event_once():

@@ -3,9 +3,15 @@
 from types import SimpleNamespace
 
 import pytest
+from neko_warthunder.adapters.battle_facts import format_battle_facts
 from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.core.contracts import BattleEvent, WtConfig
 from neko_warthunder.core.instructions import WT_CONTEXT_INSTRUCTIONS, WT_RESTORE_INSTRUCTIONS
+
+
+def test_overheat_spoken_fact_keeps_temperature_channel():
+    event = BattleEvent("overheat", payload={"temp_source": "oil_temp_c", "temp_c": 85})
+    assert format_battle_facts(event) == "油温 85℃"
 
 
 class RecordingPlugin:
@@ -13,6 +19,9 @@ class RecordingPlugin:
         self.cfg = WtConfig()
         self.cfg.dialogue_intrusion_mode = "allow_interrupt"
         self.calls = []
+
+    def broadcast_chat_activity(self, _target):
+        return getattr(self, "_last_user_chat_at", 0.0), getattr(self, "_last_user_chat_mode", "unknown")
 
     def push_message(self, **kwargs):
         self.calls.append(kwargs)

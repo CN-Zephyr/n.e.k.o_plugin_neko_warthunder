@@ -1141,6 +1141,29 @@ def test_enabling_real_output_rearms_uncommitted_once_per_battle_event():
     assert rearmed == [True]
 
 
+def test_remembered_broadcast_choice_survives_restart_and_can_be_forgotten(tmp_path):
+    state_path = tmp_path / "runtime.json"
+
+    def start_plugin():
+        plugin = _plugin_for_action_tests()
+        plugin._runtime_state_path = state_path
+        asyncio.run(plugin._reload_config())
+        return plugin
+
+    plugin = start_plugin()
+    assert plugin.cfg.dry_run is True
+    asyncio.run(plugin.set_dry_run(False))
+    assert start_plugin().cfg.dry_run is True
+    asyncio.run(plugin.set_dry_run(remember=True))
+    restarted = start_plugin()
+    assert restarted.cfg.dry_run is False
+    asyncio.run(restarted.set_dry_run(True))
+    assert start_plugin().cfg.dry_run is True
+    asyncio.run(restarted.set_dry_run(False, remember=False))
+    assert restarted.cfg.dry_run is False
+    assert start_plugin().cfg.dry_run is True
+
+
 def test_failed_dispatch_restores_arbiter_and_retries_selected_edge():
     plugin = _plugin_for_action_tests()
     plugin.cfg = WtConfig(dry_run=False, global_rate_limit_seconds=12.0)

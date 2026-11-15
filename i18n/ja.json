@@ -1,4 +1,6 @@
 {
   "name": "War Thunder 猫娘副操縦士",
-  "description": "War Thunder のテレメトリを読み取り、戦況に応じた注意喚起とサポートを行う猫娘副操縦士です。"
+  "description": "War Thunder のテレメトリを読み取り、戦況に応じた注意喚起とサポートを行う猫娘副操縦士です。",
+  "broadcast.remember_choice": "戦闘アナウンスの設定を記憶",
+  "broadcast.remember_choice_hint": "プラグインの再起動時に現在の戦闘アナウンス設定を復元します。"
 }

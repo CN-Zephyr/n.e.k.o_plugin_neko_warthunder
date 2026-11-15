@@ -158,17 +158,11 @@ def _pl_over_g(s: BattleState) -> dict[str, Any]:
     return _drop_none({"domain": s.domain, "g_now": s.g_now, "ias_kmh": s.ias_kmh, "aoa_deg": s.aoa_deg})
 
 
-def _pl_overheat(s: BattleState) -> dict[str, Any]:
-    payload = _drop_none({"domain": s.domain})
-    groups = CONDITION_FLAG_GROUPS["overheat"]
-    codes = [critical for _, critical in groups if s.flag(critical)]
-    if not codes:
-        codes = [warning for warning, _ in groups if s.flag(warning)]
-    if len(codes) != 1:
-        return payload
-
-    code = codes[0]
-    fields = ("oil_temp_c",) if code.startswith("oil_") else ("water_temp_c", "head_temp_c", "turbine_temp_c")
+def _pl_overheat(s: BattleState, warning: str, critical: str) -> dict[str, Any]:
+    group = "oil" if warning == "oil_overheat" else "engine"
+    payload = _drop_none({"domain": s.domain, "temperature_group": group})
+    code = critical if s.flag(critical) else warning
+    fields = ("oil_temp_c",) if group == "oil" else ("water_temp_c", "head_temp_c", "turbine_temp_c")
     temperatures = {field: value for field in fields if (value := getattr(s, field)) is not None
                     and math.isfinite(value)}
     processed = s.raw.get("processed") if isinstance(s.raw, dict) else None
@@ -188,6 +182,14 @@ def _pl_overheat(s: BattleState) -> dict[str, Any]:
         source, temperature = next(iter(temperatures.items()))
         payload.update(temp_c=temperature, temp_source=source)
     return payload
+
+
+def _pl_engine_overheat(s: BattleState) -> dict[str, Any]:
+    return _pl_overheat(s, *CONDITION_FLAG_GROUPS["overheat"][0])
+
+
+def _pl_oil_overheat(s: BattleState) -> dict[str, Any]:
+    return _pl_overheat(s, *CONDITION_FLAG_GROUPS["overheat"][1])
 
 
 def _pl_low_fuel(s: BattleState) -> dict[str, Any]:
@@ -298,7 +300,12 @@ def build_condition_detectors(
             predicate=_is_fixed_wing_air,
             critical_heartbeat_seconds=heartbeat,
         ),
-        ConditionDetector("overheat", g["overheat"], confirm_enter=3, confirm_exit=4, payload_fn=_pl_overheat),
+        ConditionDetector(
+            "overheat", [g["overheat"][0]], confirm_enter=3, confirm_exit=4, payload_fn=_pl_engine_overheat,
+        ),
+        ConditionDetector(
+            "overheat", [g["overheat"][1]], confirm_enter=3, confirm_exit=4, payload_fn=_pl_oil_overheat,
+        ),
         ConditionDetector(
             "low_fuel",
             g["low_fuel"],

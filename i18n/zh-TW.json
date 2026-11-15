@@ -1,4 +1,6 @@
 {
   "name": "戰雷貓娘副駕駛",
-  "description": "War Thunder 貓娘副駕駛：唯讀 8111 遙測，依戰場狀態提供提醒與陪伴。"
+  "description": "War Thunder 貓娘副駕駛：唯讀 8111 遙測，依戰場狀態提供提醒與陪伴。",
+  "broadcast.remember_choice": "記住戰鬥播報選擇",
+  "broadcast.remember_choice_hint": "外掛重新啟動後恢復目前的戰鬥播報設定。"
 }

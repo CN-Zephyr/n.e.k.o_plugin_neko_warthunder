@@ -740,7 +740,10 @@ class ReplayRequestHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/telemetry":
                 self._send_json(self.replay_state.current_payload())
             elif parsed.path == "/api/identity":
-                self._handle_identity(parsed.query)
+                if urllib.parse.parse_qs(parsed.query, keep_blank_values=True).keys() & {"name", "clear"}:
+                    self._send_json({"error": "use_post"}, status=405)
+                else:
+                    self._send_json(self.replay_state.identity_response())
             elif parsed.path == "/api/replay/status":
                 self._send_json(self.replay_state.health())
             else:
@@ -759,12 +762,32 @@ class ReplayRequestHandler(BaseHTTPRequestHandler):
         # Keep the tool quiet and avoid accidental raw telemetry logging.
         return
 
-    def _handle_identity(self, query: str) -> None:
-        params = urllib.parse.parse_qs(query, keep_blank_values=True)
-        if params.get("clear", [""])[0] in {"1", "true", "yes"}:
+    def do_POST(self) -> None:
+        if urllib.parse.urlparse(self.path).path != "/api/identity":
+            self._send_json({"error": "not_found"}, status=404)
+            return
+        if self.headers.get("X-Neko-Warthunder-Action") != "1" or self.headers.get("Origin"):
+            self._send_json({"error": "action_not_allowed"}, status=403)
+            return
+        if self.headers.get_content_type() != "application/json":
+            self._send_json({"error": "json_required"}, status=415)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096:
+                raise ValueError
+            self.connection.settimeout(2)
+            payload = json.loads(self.rfile.read(length))
+        except (ValueError, OSError):
+            self._send_json({"error": "invalid_body"}, status=400)
+            return
+        if isinstance(payload, dict) and set(payload) == {"clear"} and payload["clear"] is True:
             self._send_json(self.replay_state.clear_identity())
             return
-        name = params.get("name", [""])[0]
+        name = payload.get("name") if isinstance(payload, dict) and set(payload) == {"name"} else None
+        if not isinstance(name, str) or not name.strip() or "\x00" in name:
+            self._send_json({"error": "invalid_identity"}, status=400)
+            return
         self._send_json(self.replay_state.set_identity(name))
 
     def _send_json(self, data: JsonDict, *, status: int = 200) -> None:

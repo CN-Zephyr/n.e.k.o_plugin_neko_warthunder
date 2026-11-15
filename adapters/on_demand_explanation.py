@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
 TOOL_PREFIX = "warthunder_get_current_facts_"
@@ -27,30 +26,6 @@ MAX_ARGUMENT_BYTES = 128
 MAX_RESULT_BYTES = 1200
 COOLDOWN_SECONDS = 5.0
 TIMEOUT_SECONDS = 2.0
-
-
-def current_host_role() -> str:
-    """Read the authoritative selection, never the last invocation's cached recipient.
-
-    Avoid get_character_data/load_characters: those helpers may repair and save
-    malformed configuration. Missing/invalid configuration must fail closed here.
-    """
-    try:
-        from utils.config_manager import get_config_manager
-
-        path = Path(get_config_manager(migrate=False).get_runtime_config_path("characters.json"))
-        with path.open("rb") as stream:
-            raw = stream.read(2 * 1024 * 1024 + 1)
-        if len(raw) > 2 * 1024 * 1024:
-            return ""
-        data = json.loads(raw)
-        role = data.get("当前猫娘")
-        roles = data.get("猫娘")
-        if isinstance(role, str) and isinstance(roles, dict) and role in roles:
-            return role
-    except Exception:
-        pass
-    return ""
 
 
 def _json(value: Any) -> str:
