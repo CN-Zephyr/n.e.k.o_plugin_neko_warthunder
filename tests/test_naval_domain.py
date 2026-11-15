@@ -14,8 +14,16 @@ from neko_warthunder.core.contracts import BattleState
 from neko_warthunder.core.scenario import ScenarioResolver
 from test_naval_dashboard import _plugin, _service
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_runtime_clock
 from wt_processor import TelemetryProcessor
-from wt_telemetry import ConnectionState, Indicators, MapObject, Telemetry, VehicleState, resolve_domain
+from wt_telemetry import (
+    ConnectionState,
+    Indicators,
+    MapObject,
+    Telemetry,
+    VehicleState,
+    resolve_domain,
+)
 
 
 @pytest.mark.parametrize(("army", "helicopter", "expected"), [
@@ -102,7 +110,7 @@ def test_legacy_or_contradictory_naval_claim_is_unknown_with_generic_map(monkeyp
 
 
 def test_data_layer_unknown_map_stays_read_only_and_provenance_is_not_raw(monkeypatch):
-    service, _, _ = _service(monkeypatch)
+    service, _, moment = _service(monkeypatch)
     service._indicators = type(service._indicators)(valid=False)
     service._poll_map(0)
     snapshot = service.get_snapshot()
@@ -110,6 +118,7 @@ def test_data_layer_unknown_map_stays_read_only_and_provenance_is_not_raw(monkey
     assert snapshot["domain_source"] == "map_ground_ambiguous"
     assert snapshot["proximity"]["events"] == []
     plugin = _plugin_for_action_tests()
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     plugin.state = parse_telemetry(snapshot)
     dashboard = asyncio.run(plugin.dashboard_context())
     assert dashboard["naval_status"] is None
@@ -180,7 +189,7 @@ def test_indicator_loss_recovery_and_new_life_through_full_evaluator(monkeypatch
     plugin.engine = plugin._build_engine()
     plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=100)
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline)
-    monkeypatch.setattr(sys.modules[type(plugin).__module__].time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     previous = BattleState()
     for now, available in [(1000, True), (1001, False), (1007, False), (1008, True)]:
         moment[0], valid[0] = now, available

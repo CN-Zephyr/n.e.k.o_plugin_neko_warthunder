@@ -7,7 +7,10 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from neko_warthunder.adapters.neko_dispatcher import GROUND_STATUS_GATED_EVENTS, NekoDispatcher
+from neko_warthunder.adapters.neko_dispatcher import (
+    GROUND_STATUS_GATED_EVENTS,
+    NekoDispatcher,
+)
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.core import contracts as C
 from neko_warthunder.core.arbiter import Arbiter
@@ -17,6 +20,7 @@ from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_runtime_clock
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -173,7 +177,7 @@ def test_disabled_ground_status_cannot_displace_live_proximity_warning(event_id,
     plugin.engine = plugin._build_engine()
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline, clock=lambda: 100.4)
     module = sys.modules[type(plugin).__module__]
-    monkeypatch.setattr(module.time, "time", lambda: 100.4)
+    patch_runtime_clock(monkeypatch, module, lambda: 100.4)
     flag = {"ground_crew_loss": "crew_loss", "ground_ammo_empty": "ammo_empty", "ground_ammo_low": "ammo_low"}[event_id]
     ammo = 3 if event_id == "ground_ammo_low" else 0
     first = _ground({flag: True}, connected=True, conn_state="in_battle", timestamp=100.0, ammo_first_stage=ammo)

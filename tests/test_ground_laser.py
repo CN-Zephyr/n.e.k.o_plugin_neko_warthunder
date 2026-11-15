@@ -15,6 +15,7 @@ from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from test_ground_ammo_low import _runtime
 from test_ground_dashboard import _plugin
+from warthunder_test_clock import patch_module_clock
 from wt_processor import TelemetryProcessor
 from wt_telemetry import Indicators, VehicleState
 
@@ -172,6 +173,7 @@ def test_older_flag_only_data_layer_remains_compatible():
 def test_service_outage_clears_pending_laser_and_recovery_cannot_replay_it(monkeypatch):
     server = importlib.import_module("wt_server")
     plugin, moment = _runtime(monkeypatch, enabled=False)
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
 
     class Client:
         lws = 0

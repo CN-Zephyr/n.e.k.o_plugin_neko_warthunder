@@ -11,6 +11,7 @@ from dataclasses import asdict
 import pytest
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_runtime_clock
 from wt_processor import TelemetryProcessor
 from wt_telemetry import Indicators, VehicleState, WarThunderClient
 
@@ -43,7 +44,7 @@ def _plugin(monkeypatch, **patch):
     plugin.state = parse_telemetry(payload)
     module = sys.modules[type(plugin).__module__]
     moment = [1000.2]
-    monkeypatch.setattr(module.time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, module, lambda: moment[0])
     return plugin, moment
 
 

@@ -14,6 +14,7 @@ from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_runtime_clock
 from wt_processor import TelemetryProcessor
 from wt_telemetry import Indicators, VehicleState
 
@@ -52,7 +53,7 @@ def _runtime(monkeypatch, dry_run=True):
     plugin.engine = plugin._build_engine()
     moment = [1000.0]
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline, clock=lambda: moment[0])
-    monkeypatch.setattr(sys.modules[type(plugin).__module__].time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     return plugin, moment
 
 

@@ -6,9 +6,12 @@ import importlib
 import json
 
 import pytest
-from neko_warthunder.adapters.naval_instrument_fields import snapshot_naval_instrument_fields
+from neko_warthunder.adapters.naval_instrument_fields import (
+    snapshot_naval_instrument_fields,
+)
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from test_naval_events import _state
+from warthunder_test_clock import patch_module_clock
 
 
 def _polling_service(monkeypatch):
@@ -33,7 +36,7 @@ def _polling_service(monkeypatch):
 
     client = Client()
     service = server.TelemetryService(client)
-    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
     return service, client, moment
 
 
@@ -228,7 +231,7 @@ def test_actual_client_probes_advance_indicators_when_state_and_map_objects_fail
             return not fail_map_info[0], {"valid": True}
         return False, None
     monkeypatch.setattr(client, "_fetch", fetch)
-    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
     service = server.TelemetryService(client)
     for _ in range(2):
         service._poll_fast()

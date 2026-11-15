@@ -18,6 +18,7 @@ from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from neko_warthunder.tools.replay_8112_server import ReplayState
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_module_clock, patch_runtime_clock
 from wt_processor import TelemetryProcessor
 from wt_telemetry import Indicators, VehicleState
 
@@ -53,7 +54,7 @@ def _runtime(monkeypatch, *, enabled=True, dry_run=False):
     plugin.engine = plugin._build_engine()
     moment = [1000.0]
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline, clock=lambda: moment[0])
-    monkeypatch.setattr(sys.modules[type(plugin).__module__].time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     return plugin, moment
 
 
@@ -402,6 +403,7 @@ def test_full_pipeline_cancels_buffer_after_resupply(monkeypatch):
 def test_indicators_probe_grace_does_not_confirm_cached_ammo(monkeypatch):
     server = importlib.import_module("wt_server")
     plugin, moment = _runtime(monkeypatch)
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
 
     class Client:
         ammo = 12
@@ -443,6 +445,7 @@ def test_indicators_probe_grace_does_not_confirm_cached_ammo(monkeypatch):
 def test_service_outage_and_same_vehicle_respawn_cannot_reuse_old_ammo_baseline(monkeypatch):
     server = importlib.import_module("wt_server")
     plugin, moment = _runtime(monkeypatch)
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
 
     class Client:
         ammo = 12

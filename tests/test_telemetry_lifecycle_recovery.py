@@ -10,10 +10,16 @@ from neko_warthunder.adapters.neko_dispatcher import NekoDispatcher
 from neko_warthunder.adapters.runtime_timeline import RuntimeTimeline
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core.arbiter import Arbiter
-from neko_warthunder.core.contracts import COMBAT_STRESS, IN_FLIGHT, SPAWNING, BattleState
+from neko_warthunder.core.contracts import (
+    COMBAT_STRESS,
+    IN_FLIGHT,
+    SPAWNING,
+    BattleState,
+)
 from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors.discrete.lifecycle import SpawnDetector
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_module_clock, patch_runtime_clock
 
 
 @pytest.mark.parametrize("domain", ["air", "ground"])
@@ -48,8 +54,8 @@ def test_state_only_outage_cannot_create_spawn_or_replay_persistent_feed(domain,
     plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=100)
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline)
     module = sys.modules[type(plugin).__module__]
-    monkeypatch.setattr(module.time, "time", lambda: moment[0])
-    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, module, lambda: moment[0])
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
     previous = BattleState()
     scenarios = []
     for now, healthy in [(1000, True), (1007, True), (1067, False), (1068, True)]:
@@ -74,7 +80,7 @@ def test_state_only_outage_cannot_create_spawn_or_replay_persistent_feed(domain,
 def test_ground_indicator_sample_tracks_success_not_attempt_or_state(monkeypatch):
     server = importlib.import_module("neko_warthunder.data_layer.data_process.wt_server")
     moment = [1000.0]
-    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
 
     class Client:
         probe_ok = True

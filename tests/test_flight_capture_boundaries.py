@@ -16,6 +16,7 @@ from neko_warthunder.core.scenario import ScenarioResolver
 from neko_warthunder.detectors.discrete.lifecycle import SpawnDetector
 from test_data_layer_proximity import _indicators, _vehicle
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_runtime_clock
 from wt_processor import TelemetryProcessor
 
 
@@ -41,7 +42,7 @@ def _plugin(monkeypatch):
     plugin.timeline = RuntimeTimeline(observability_enabled=True, max_events=100)
     plugin.dispatcher = NekoDispatcher(plugin, timeline=plugin.timeline)
     moment = [1000.0]
-    monkeypatch.setattr(sys.modules[type(plugin).__module__].time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     return plugin, moment
 
 

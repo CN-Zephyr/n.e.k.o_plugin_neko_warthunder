@@ -20,6 +20,7 @@ from neko_warthunder.core.contracts import (
 )
 from test_data_layer_http_security import _request, _Service
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_module_clock
 from wt_server import TelemetryService
 from wt_telemetry import (
     DEFAULT_FACTION_COLORS,
@@ -386,7 +387,7 @@ def test_failed_color_apply_retries_after_backoff_without_repeating_each_tick(mo
     plugin._runtime_state_path = tmp_path / "state.json"
     module = sys.modules[type(plugin).__module__]
     moment = [100.0]
-    monkeypatch.setattr(module.time, "monotonic", lambda: moment[0])
+    patch_module_clock(monkeypatch, module, monotonic=lambda: moment[0])
     sent = _patch_request(monkeypatch, plugin, {"ok": False})
     plugin.state = BattleState(connected=True)
     plugin.client = types.SimpleNamespace(poll=lambda: BattleState(connected=True))

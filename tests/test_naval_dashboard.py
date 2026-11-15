@@ -10,6 +10,7 @@ import sys
 import pytest
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from test_status_reporting import _plugin_for_action_tests
+from warthunder_test_clock import patch_module_clock, patch_runtime_clock
 from wt_telemetry import MapObject
 
 
@@ -37,7 +38,7 @@ def _service(monkeypatch):
     service._battle_id = "synthetic-battle"
     service._life_index = 1
     service._map_info = server.MapInfo(valid=True, map_min=(0, 0), map_max=(10000, 10000))
-    monkeypatch.setattr(server.time, "time", lambda: moment[0])
+    patch_module_clock(monkeypatch, server, time=lambda: moment[0])
     return service, client, moment
 
 
@@ -49,7 +50,7 @@ def _plugin(monkeypatch, **patch):
     payload.update(patch)
     plugin = _plugin_for_action_tests()
     plugin.state = parse_telemetry(payload)
-    monkeypatch.setattr(sys.modules[type(plugin).__module__].time, "time", lambda: moment[0])
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     return plugin, moment
 
 
@@ -94,6 +95,7 @@ def test_naval_spawn_marker_enriches_unknown_domain_dashboard(monkeypatch):
         "feed": [{"raw": "private-sentinel"}],
     }
     plugin = _plugin_for_action_tests()
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     plugin.state = parse_telemetry(payload)
 
     dashboard = asyncio.run(plugin.dashboard_context())
@@ -187,10 +189,11 @@ def test_unknown_map_scale_hides_nearest_order_and_distance(monkeypatch, map_inf
 
 
 def test_empty_success_is_zero_not_unknown(monkeypatch):
-    service, client, _ = _service(monkeypatch)
+    service, client, moment = _service(monkeypatch)
     client.objects = client.objects[:1]
     service._poll_map(service._battle_generation)
     plugin = _plugin_for_action_tests()
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     plugin.state = parse_telemetry(service.get_snapshot())
     facts = _facts(plugin)
     assert facts["status"] == "ready"
@@ -202,6 +205,7 @@ def test_failed_map_polls_never_refresh_success_age_or_erase_counts(monkeypatch)
     service, client, moment = _service(monkeypatch)
     service._poll_map(0)
     plugin = _plugin_for_action_tests()
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     client.ok = False
     for now in (1001, 1006):
         moment[0] = now
@@ -224,13 +228,14 @@ def test_failed_map_polls_never_refresh_success_age_or_erase_counts(monkeypatch)
 
 
 def test_respawn_needs_new_map_and_late_old_life_result_is_rejected(monkeypatch):
-    service, client, _ = _service(monkeypatch)
+    service, client, moment = _service(monkeypatch)
     service._poll_map(0)
     service._dead = True
     service._poll_map(0)  # spectator map belongs to the old life
     service._dead = False
     service._life_index = 2
     plugin = _plugin_for_action_tests()
+    patch_runtime_clock(monkeypatch, sys.modules[type(plugin).__module__], lambda: moment[0])
     plugin.state = parse_telemetry(service.get_snapshot())
     assert _facts(plugin)["status"] == "unavailable"
     service._poll_map(0)

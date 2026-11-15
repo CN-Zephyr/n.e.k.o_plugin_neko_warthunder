@@ -11,13 +11,14 @@ import pytest
 from neko_warthunder.adapters.telemetry_client import parse_telemetry
 from neko_warthunder.core.contracts import BattleState
 from neko_warthunder.core.telemetry_freshness import ground_indicator_source
-from neko_warthunder.data_layer.data_process import wt_server
+from neko_warthunder.data_layer.data_process import wt_recorder, wt_server
 from neko_warthunder.detectors._base import DetectorEngine
 from neko_warthunder.detectors.condition.flight_safety import build_condition_detectors
 from neko_warthunder.detectors.discrete.lifecycle import SpawnDetector
 from neko_warthunder.tools.replay_8112_server import ReplayState, load_frames
 from test_ground_ammo_low import _runtime
 from test_ground_dashboard import _plugin
+from warthunder_test_clock import patch_module_clock
 
 
 def _legacy_frame(timestamp, ammo):
@@ -63,6 +64,8 @@ def _modern_outage(status, flag, previous_count=1, timestamp=10):
 def test_modern_recorder_probe_log_splits_confirmation_without_an_outage_frame(tmp_path, monkeypatch):
     plugin, clock = _runtime(monkeypatch)
     plugin.cfg.broadcast_categories = {"lifecycle": False}
+    patch_module_clock(monkeypatch, wt_server, time=lambda: clock[0])
+    patch_module_clock(monkeypatch, wt_recorder, time=lambda: clock[0])
 
     class GroundClient:
         probe_ok = True
@@ -517,6 +520,7 @@ def test_legacy_last_frame_expires_even_on_first_read(monkeypatch, elapsed, stat
 @pytest.mark.parametrize("skip_held", [False, True])
 def test_modern_ground_capture_replays_held_and_respawn_without_renewing_the_source(tmp_path, monkeypatch, skip_held):
     plugin, clock = _plugin(monkeypatch)
+    patch_module_clock(monkeypatch, wt_server, time=lambda: clock[0])
 
     class GroundClient:
         probe_ok = True
